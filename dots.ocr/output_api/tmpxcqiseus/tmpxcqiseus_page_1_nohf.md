@@ -1,0 +1,27 @@
+高雄醫學大學 108 學年度行事曆 第二學期
+
+<table><tr><td>108.04.03 107 學年度第 4 次教務會議通過</td><td>108.05.09 107 學年度第 10 次行政會議通過</td></tr><tr><td>108.08.08 108 學年度第 1 次行政會議通過</td><td>108.10.25 108 學年度第 1 次教務會議通過</td></tr><tr><td>109.02.05 108 學年度第 3 次教務會議通過</td><td>109.02.18 108 學年度第 2 次臨時教務會議通過</td></tr><tr><td>109.02.20 108 學年度第 7 次行政會議通過</td><td></td></tr></table>
+
+<table><thead><tr><th colspan="8">109 年 02 月</th></tr><tr><th>週次</th><th>日</th><th>一</th><th>二</th><th>三</th><th>四</th><th>五</th><th>六</th></tr></thead><tbody><tr><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>1</td></tr><tr><td></td><td>2</td><td>3</td><td>4</td><td>5</td><td>6</td><td>7</td><td>8</td></tr><tr><td></td><td>9</td><td>10</td><td>11</td><td>12</td><td>13</td><td>14</td><td>15</td></tr><tr><td></td><td>16</td><td>17</td><td>18</td><td>19</td><td>20</td><td>21</td><td>22</td></tr><tr><td>1</td><td>23</td><td>24</td><td>25</td><td>26</td><td>27</td><td>28</td><td>29</td></tr></tbody></table><p>1 日：第二學期開始<br>10 日：第一階段加退選開始<br>14 日：第一階段加退選結束(12:00)、第二階段加退選開始(20:00)<br>15 日：補行上班(1/23 除夕前一日放假)<br>19 日：學生各類學雜費減免登錄截止<br>21 日：本學期註冊繳費截止、學生就學貸款銀行對保及學校緩繳手續截止、學生向銀行繳交學雜費截止、養成計畫公費生及醫學系公費生辦理學雜費緩繳截止<br>24 日：寒假結束。復學申請截止、研究生博士學位候選人資格考核申請開始、研究生學位論文考試申請開始、學生英文畢業門檻相關文件開始收件<br>25 日：開學日、本學期上課開始(2 月 24 日另行補課)<br>28 日：和平紀念日(放假一日)</p>
+
+<table><thead><tr><th colspan="8">109 年 03 月</th></tr><tr><th>週次</th><th>日</th><th>一</th><th>二</th><th>三</th><th>四</th><th>五</th><th>六</th></tr></thead><tbody><tr><td>2</td><td>1</td><td>2</td><td>3</td><td>4</td><td>5</td><td>6</td><td>7</td></tr><tr><td>3</td><td>8</td><td>9</td><td>10</td><td>11</td><td>12</td><td>13</td><td>14</td></tr><tr><td>4</td><td>15</td><td>16</td><td>17</td><td>18</td><td>19</td><td>20</td><td>21</td></tr><tr><td>5</td><td>22</td><td>23</td><td>24</td><td>25</td><td>26</td><td>27</td><td>28</td></tr><tr><td>6</td><td>29</td><td>30</td><td>31</td><td></td><td></td><td></td><td></td></tr></tbody></table><p>1 日：碩一生上網維護指導教授名單開始<br>2 日：第二階段加退選結束(24:00)<br>10 日：研究生博士學位候選人資格考核申請截止<br>27 日：公布暑修開班工作日程表、大同醫院土週年慶<br>31 日：碩一生上網維護指導教授名單截止</p>
+
+<table><thead><tr><th colspan="8">109 年 04 月</th></tr><tr><th>週次</th><th>日</th><th>一</th><th>二</th><th>三</th><th>四</th><th>五</th><th>六</th></tr></thead><tbody><tr><td>6</td><td></td><td></td><td></td><td>1</td><td>2</td><td>3</td><td>4</td></tr><tr><td>7</td><td>5</td><td>6</td><td>7</td><td>8</td><td>9</td><td>10</td><td>11</td></tr><tr><td>8</td><td>12</td><td>13</td><td>14</td><td>15</td><td>16</td><td>17</td><td>18</td></tr><tr><td>9</td><td>19</td><td>20</td><td>21</td><td>22</td><td>23</td><td>24</td><td>25</td></tr><tr><td>10</td><td>26</td><td>27</td><td>28</td><td>29</td><td>30</td><td></td><td></td></tr></tbody></table><p>1 日：畢業班四育獎申請開始<br>2 日：兒童節適逢週六補假一日<br>3 日：民族掃墓節適逢週六補假一日、本學期上課達該學期三分之一<br>4 日：兒童節暨民族掃墓節<br>10 日：應屆畢業研究生上網登錄研討會論文發表書面收件截止<br>17 日：研究生學位論文考試申請截止<br>20 日：畢業班四育獎申請截止、轉系相關訊息公告(以簡章公告為準)<br>20~24 日：本學期第九週(含期中考週)</p>
+
+<table><thead><tr><th colspan="8">109 年 05 月</th></tr><tr><th>週次</th><th>日</th><th>一</th><th>二</th><th>三</th><th>四</th><th>五</th><th>六</th></tr></thead><tbody><tr><td>10</td><td></td><td></td><td></td><td></td><td></td><td>1</td><td>2</td></tr><tr><td>11</td><td>3</td><td>4</td><td>5</td><td>6</td><td>7</td><td>8</td><td>9</td></tr><tr><td>12</td><td>10</td><td>11</td><td>12</td><td>13</td><td>14</td><td>15</td><td>16</td></tr><tr><td>13</td><td>17</td><td>18</td><td>19</td><td>20</td><td>21</td><td>22</td><td>23</td></tr><tr><td>14</td><td>24</td><td>25</td><td>26</td><td>27</td><td>28</td><td>29</td><td>30</td></tr><tr><td>15</td><td>31</td><td></td><td></td><td></td><td></td><td></td><td></td></tr></tbody></table><p>15 日：應屆畢(結)業生上課最後一日、本學期上課達該學期三分之二<br>19~22 日：應屆畢(結)業生期末考試週<br>23 日：應屆結業班家長座談會</p>
+
+<table><thead><tr><th colspan="8">109 年 06 月</th></tr><tr><th>週次</th><th>日</th><th>一</th><th>二</th><th>三</th><th>四</th><th>五</th><th>六</th></tr></thead><tbody><tr><td>15</td><td></td><td>1</td><td>2</td><td>3</td><td>4</td><td>5</td><td>6</td></tr><tr><td>16</td><td>7</td><td>8</td><td>9</td><td>10</td><td>11</td><td>12</td><td>13</td></tr><tr><td>17</td><td>14</td><td>15</td><td>16</td><td>17</td><td>18</td><td>19</td><td>20</td></tr><tr><td>18</td><td>21</td><td>22</td><td>23</td><td>24</td><td>25</td><td>26</td><td>27</td></tr><tr><td></td><td>28</td><td>29</td><td>30</td><td></td><td></td><td></td><td></td></tr></tbody></table><p>6 日：畢業典禮<br>16 日：附設醫院六十三週年慶<br>19 日：第二學期休學申請截止、學生英文畢業門檻相關文件收件截止<br>20 日：補行上班上課(6/26 彈性放假)<br>20、22~24 日：期末考試<br>22~26 日：第二學期最後一週<br>25 日：端午節(放假一日)<br>26 日：彈性放假一日(6/20 補行上班上課)<br>29 日：暑假開始</p>
+
+<table><thead><tr><th colspan="8">109 年 07 月</th></tr><tr><th>週次</th><th>日</th><th>一</th><th>二</th><th>三</th><th>四</th><th>五</th><th>六</th></tr></thead><tbody><tr><td></td><td></td><td></td><td></td><td>1</td><td>2</td><td>3</td><td>4</td></tr><tr><td></td><td>5</td><td>6</td><td>7</td><td>8</td><td>9</td><td>10</td><td>11</td></tr><tr><td></td><td>12</td><td>13</td><td>14</td><td>15</td><td>16</td><td>17</td><td>18</td></tr><tr><td></td><td>19</td><td>20</td><td>21</td><td>22</td><td>23</td><td>24</td><td>25</td></tr><tr><td></td><td>26</td><td>27</td><td>28</td><td>29</td><td>30</td><td>31</td><td></td></tr></tbody></table><p>20 日：學生各類學雜費減免登錄申請開始、學生就學貸款登錄申請開始。<br>31 日：第二學期結束、研究生學位論文考試結束、博士學位候選人資格考核結束。</p>
+
+備註：每月定期舉行會議名稱
+
+1、第一個星期一中午十二時三十分採購委員會會議
+
+2、第一、三個星期四下午三時三十分財物及勞務 50~400 萬、工程 50~800 萬採購小組會議
+
+3、第二個星期四下午二時行政會議
+
+4、政府公布之國定假日與本行事曆不一致時，依政府公告為準。
+
+5、附屬醫療機構教學、服務，以醫院行事曆為準。

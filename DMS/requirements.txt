@@ -1,0 +1,31 @@
+please add a function panel at the left side of main page. There are below functions:
+
+1. Workspace Management
+2. System Administration
+3. Document Management
+4. System Auditing
+5. Reports
+
+There are 4 different roles:
+1. System administrator
+2. User administrator
+3. Document administrator
+4. Document Viewer
+
+System administrator can use all functions
+User administrator can use function 3,4,5
+Document Administrator and Document Viewer can use function 3
+
+There are "Delete", "Write" and "Read" permissions of each document.
+The user has "Delete" permission can permanently delete a document.
+The user has "Write" permission can edit a document's metadata or "Check-in" a new version of a document.
+The user has "Read" permission can only view a document's metadata and content.
+ 
+System administrator can manage groups and users in function 2
+System administrator can config layout of function 3
+System administrator has Delete, write and Read permission of documents
+User administrator has Delete, write and Read permission of documents
+Document administrator has write and Read permission of documents
+Document Viewer has Read permission of documents
+
+

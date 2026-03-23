@@ -1,0 +1,23 @@
+Metadata-Version: 2.4
+Name: dots_ocr
+Version: 1.0
+Summary: dots.ocr: Multilingual Document Layout Parsing in one Vision-Language Model
+Home-page: https://github.com/rednote-hilab/dots.ocr
+Requires-Python: >=3.10
+License-File: LICENSE
+License-File: NOTICE
+Requires-Dist: gradio
+Requires-Dist: gradio_image_annotation
+Requires-Dist: PyMuPDF
+Requires-Dist: openai
+Requires-Dist: qwen_vl_utils
+Requires-Dist: transformers==4.56.1
+Requires-Dist: huggingface_hub
+Requires-Dist: modelscope
+Requires-Dist: accelerate
+Requires-Dist: cairosvg
+Dynamic: home-page
+Dynamic: license-file
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary

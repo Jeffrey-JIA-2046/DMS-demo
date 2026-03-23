@@ -1,0 +1,201 @@
+package com.dms.document.model;
+
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import com.fasterxml.jackson.annotation.JsonProperty;
+
+public class Document {
+
+    private String id;
+    private String title;
+    private String description;
+    private String owner;
+    private String category;
+    private DocumentStatus status = DocumentStatus.DRAFT;
+
+    @JsonProperty("folder_id")
+    private String folderId;
+
+    @JsonProperty("approver_id")
+    private String approverId;
+
+    private DocumentFolder folder;
+    private com.dms.user.model.AppUser approver;
+
+    private Set<String> tags = new HashSet<>();
+    private List<DocumentVersion> versions = new ArrayList<>();
+    private Map<String, String> metadataValues = new LinkedHashMap<>();
+
+    @JsonProperty("approval_requested_at")
+    private Instant approvalRequestedAt;
+
+    @JsonProperty("approval_decided_at")
+    private Instant approvalDecidedAt;
+
+    private List<DocumentApprovalNote> approvalNotes = new ArrayList<>();
+
+    @JsonProperty("created_at")
+    private Instant createdAt;
+
+    @JsonProperty("updated_at")
+    private Instant updatedAt;
+
+    public String getId() {
+        return id;
+    }
+
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public String getTitle() {
+        return title;
+    }
+
+    public void setTitle(String title) {
+        this.title = title;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
+    }
+
+    public String getOwner() {
+        return owner;
+    }
+
+    public void setOwner(String owner) {
+        this.owner = owner;
+    }
+
+    public String getCategory() {
+        return category;
+    }
+
+    public void setCategory(String category) {
+        this.category = category;
+    }
+
+    public DocumentStatus getStatus() {
+        return status;
+    }
+
+    public void setStatus(DocumentStatus status) {
+        this.status = status;
+    }
+
+    public Set<String> getTags() {
+        return tags;
+    }
+
+    public void setTags(Set<String> tags) {
+        this.tags = tags;
+    }
+
+    public List<DocumentVersion> getVersions() {
+        return versions;
+    }
+
+    public String getFolderId() {
+        return folderId;
+    }
+
+    public void setFolderId(String folderId) {
+        this.folderId = folderId;
+    }
+
+    public String getApproverId() {
+        return approverId;
+    }
+
+    public void setApproverId(String approverId) {
+        this.approverId = approverId;
+    }
+
+    public Instant getCreatedAt() {
+        return createdAt;
+    }
+
+    public Instant getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public Instant getApprovalRequestedAt() {
+        return approvalRequestedAt;
+    }
+
+    public void setApprovalRequestedAt(Instant approvalRequestedAt) {
+        this.approvalRequestedAt = approvalRequestedAt;
+    }
+
+    public Instant getApprovalDecidedAt() {
+        return approvalDecidedAt;
+    }
+
+    public void setApprovalDecidedAt(Instant approvalDecidedAt) {
+        this.approvalDecidedAt = approvalDecidedAt;
+    }
+
+    public void addVersion(DocumentVersion version) {
+        version.setDocumentId(this.id);
+        this.versions.add(0, version);
+    }
+
+    public void setCreatedAt(Instant createdAt) {
+        this.createdAt = createdAt;
+    }
+
+    public void setUpdatedAt(Instant updatedAt) {
+        this.updatedAt = updatedAt;
+    }
+
+    public Map<String, String> getMetadataValues() {
+        return metadataValues;
+    }
+
+    public void setMetadataValues(Map<String, String> metadataValues) {
+        this.metadataValues = metadataValues != null ? new LinkedHashMap<>(metadataValues) : new LinkedHashMap<>();
+    }
+
+    public List<DocumentApprovalNote> getApprovalNotes() {
+        return approvalNotes;
+    }
+
+    public void setApprovalNotes(List<DocumentApprovalNote> approvalNotes) {
+        this.approvalNotes = approvalNotes;
+    }
+
+    public void addApprovalNote(DocumentApprovalNote note) {
+        if (note == null) {
+            return;
+        }
+        note.setDocumentId(this.id);
+        this.approvalNotes.add(note);
+    }
+
+    public DocumentFolder getFolder() {
+        return folder;
+    }
+
+    public void setFolder(DocumentFolder folder) {
+        this.folder = folder;
+    }
+
+    public com.dms.user.model.AppUser getApprover() {
+        return approver;
+    }
+
+    public void setApprover(com.dms.user.model.AppUser approver) {
+        this.approver = approver;
+    }
+}
