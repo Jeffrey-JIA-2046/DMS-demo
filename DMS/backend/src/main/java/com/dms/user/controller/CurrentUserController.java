@@ -27,10 +27,10 @@ public class CurrentUserController {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Not authenticated");
         }
         try {
-            AppUser user = appUserRepository.findByUsernameIgnoreCase(authentication.getName())
+            AppUser user = appUserRepository.findByUsernameIgnoreCaseWithFallback(authentication.getName())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "User not found"));
             return new CurrentUserResponse(user.getUsername(), user.getDisplayName(), user.getRole());
-        } catch (java.io.IOException ex) {
+        } catch (Exception ex) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to load current user", ex);
         }
     }

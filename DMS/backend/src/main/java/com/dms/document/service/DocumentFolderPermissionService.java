@@ -190,12 +190,8 @@ public class DocumentFolderPermissionService {
         if (!StringUtils.hasText(username)) {
             throw new AccessDeniedException("Authentication required");
         }
-        try {
-            return appUserRepository.findByUsernameIgnoreCase(username)
-                .orElseThrow(() -> new AccessDeniedException("User not found"));
-        } catch (java.io.IOException ex) {
-            throw new RuntimeException("Failed to load user", ex);
-        }
+        return appUserRepository.findByUsernameIgnoreCaseWithFallback(username)
+            .orElseThrow(() -> new AccessDeniedException("User not found"));
     }
 
     private String resolvePermissionGroupId(DocumentFolderPermission permission) {

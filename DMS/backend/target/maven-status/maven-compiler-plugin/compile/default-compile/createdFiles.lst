@@ -12,6 +12,7 @@ com\dms\document\model\FolderMetadataField.class
 com\dms\task\dto\TaskItemResponse.class
 com\dms\config\OpenSearchConfig$1.class
 com\dms\chatbot\dto\ChatSearchRequest.class
+com\dms\config\MysqlToOpenSearchDocumentMigration$3.class
 com\dms\document\repository\DocumentRepository.class
 com\dms\knowledge\model\KnowledgeTopicStar.class
 com\dms\exception\ResourceNotFoundException.class
@@ -23,6 +24,7 @@ com\dms\chatbot\dto\DocumentAnswerResponse.class
 com\dms\document\dto\DocumentUploadRequest.class
 com\dms\document\dto\FolderSelfPermissionResponse.class
 com\dms\task\service\UserDashboardService.class
+com\dms\tools\UserFetcher.class
 com\dms\user\dto\UserResponse.class
 com\dms\audit\model\AuditLog.class
 com\dms\document\dto\DocumentVersionResponse.class
@@ -41,7 +43,9 @@ com\dms\repository\BaseOpenSearchRepository.class
 com\dms\chatbot\client\DeepSeekClient$ChatMessage.class
 com\dms\chatbot\client\DeepSeekClient$ChatResponse.class
 com\dms\task\repository\UserTaskRepository.class
+com\dms\config\MysqlToOpenSearchDocumentMigration$1.class
 com\dms\exception\InvalidDocumentException.class
+com\dms\config\MysqlToOpenSearchDocumentMigration.class
 com\dms\DocumentManagementApplication.class
 com\dms\document\dto\FolderPermissionsResponse.class
 com\dms\knowledge\dto\KnowledgeTopicUpdateRequest.class
@@ -54,6 +58,7 @@ com\dms\chatbot\service\ChatbotService.class
 com\dms\config\OpenSearchConfig.class
 com\dms\task\controller\UserDashboardController.class
 com\dms\chatbot\dto\ChatSearchResponse.class
+com\dms\tools\DBInspector.class
 com\dms\user\controller\CurrentUserController.class
 com\dms\user\repository\AppUserRepository.class
 com\dms\document\dto\ApproverOptionResponse.class
@@ -74,6 +79,7 @@ com\dms\knowledge\model\KnowledgeTopicDocumentLink.class
 com\dms\chatbot\controller\ChatbotController.class
 com\dms\exception\GlobalExceptionHandler.class
 com\dms\user\model\UserGroup.class
+com\dms\config\OpenSearchIndexInitializer.class
 com\dms\knowledge\dto\KnowledgeShareResponse.class
 com\dms\ocr\client\DotsOcrClient.class
 com\dms\audit\controller\AuditController.class
@@ -92,6 +98,7 @@ com\dms\task\model\UserTask.class
 com\dms\ocr\service\DocumentOcrResultService$1.class
 com\dms\security\Role.class
 com\dms\user\dto\GroupResponse.class
+com\dms\config\MysqlToOpenSearchDocumentMigration$2.class
 com\dms\config\WebConfig.class
 com\dms\document\model\DocumentFolder.class
 com\dms\chatbot\client\DeepSeekClient$ChatRequest.class
@@ -129,6 +136,7 @@ com\dms\document\dto\DocumentDetailsResponse.class
 com\dms\document\model\DocumentApprovalNote.class
 com\dms\document\dto\DocumentUpdateRequest.class
 com\dms\document\controller\DocumentController.class
+com\dms\config\MysqlToOpenSearchDocumentMigration$4.class
 com\dms\document\service\DocumentFolderPermissionService.class
 com\dms\knowledge\model\KnowledgeTopicShare.class
 com\dms\chatbot\client\DeepSeekClient.class

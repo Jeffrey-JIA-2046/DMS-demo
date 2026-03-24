@@ -42,18 +42,51 @@ public class SecurityConfig {
     }
 
     @Bean
-    public UserDetailsService userDetailsService(AppUserRepository repository) {
+    public UserDetailsService userDetailsService(AppUserRepository repository, javax.sql.DataSource dataSource) {
         return username -> {
             try {
-                return repository.findByUsernameIgnoreCase(username)
-                    .map(user -> User.withUsername(user.getUsername())
+                java.util.Optional<com.dms.user.model.AppUser> maybe = repository.findByUsernameIgnoreCase(username);
+                if (maybe.isPresent()) {
+                    com.dms.user.model.AppUser user = maybe.get();
+                    return User.withUsername(user.getUsername())
                         .password(resolveStoredPassword(user))
                         .roles(user.getRole().name())
-                        .build())
-                    .orElseThrow(() -> new UsernameNotFoundException("User not found"));
+                        .build();
+                }
             } catch (java.io.IOException ex) {
-                throw new UsernameNotFoundException("User lookup failed", ex);
+                // fallthrough to try JDBC
             }
+
+            // Fallback: query MySQL `app_users` table directly if OpenSearch lookup fails or is unavailable
+            try (java.sql.Connection conn = dataSource.getConnection()) {
+                try (java.sql.PreparedStatement ps = conn.prepareStatement("SELECT username, user_password, password, role FROM app_users WHERE username = ? LIMIT 1")) {
+                    ps.setString(1, username);
+                    try (java.sql.ResultSet rs = ps.executeQuery()) {
+                        if (rs.next()) {
+                            com.dms.user.model.AppUser user = new com.dms.user.model.AppUser();
+                            user.setUsername(rs.getString("username"));
+                            user.setUserPassword(rs.getString("user_password"));
+                            user.setPassword(rs.getString("password"));
+                            String roleStr = rs.getString("role");
+                            if (roleStr != null) {
+                                try {
+                                    user.setRole(com.dms.security.Role.valueOf(roleStr));
+                                } catch (IllegalArgumentException e) {
+                                    user.setRole(com.dms.security.Role.DOC_VIEWER);
+                                }
+                            }
+                            return User.withUsername(user.getUsername())
+                                .password(resolveStoredPassword(user))
+                                .roles(user.getRole().name())
+                                .build();
+                        }
+                    }
+                }
+            } catch (java.sql.SQLException sqe) {
+                throw new UsernameNotFoundException("User lookup failed", sqe);
+            }
+
+            throw new UsernameNotFoundException("User not found");
         };
     }
 

@@ -99,7 +99,7 @@ public class UserManagementService {
 
     public UserResponse createUser(UserRequest request) {
         try {
-            appUserRepository.findByUsernameIgnoreCase(request.username())
+            appUserRepository.findByUsernameIgnoreCaseWithFallback(request.username())
                 .ifPresent(existing -> { throw new IllegalArgumentException("Username already exists"); });
             String passwordToUse = (request.password() == null || request.password().isBlank())
                 ? DEFAULT_PASSWORD
@@ -117,7 +117,7 @@ public class UserManagementService {
         try {
             AppUser user = appUserRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("User not found"));
-            appUserRepository.findByUsernameIgnoreCase(request.username())
+            appUserRepository.findByUsernameIgnoreCaseWithFallback(request.username())
                 .filter(other -> !other.getId().equals(id))
                 .ifPresent(other -> { throw new IllegalArgumentException("Username already exists"); });
             applyUserRequest(user, request);

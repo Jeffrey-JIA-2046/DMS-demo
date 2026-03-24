@@ -696,15 +696,11 @@ public class DocumentService {
     }
 
     private AppUser requireUser(String username) {
-        try {
-            if (!StringUtils.hasText(username)) {
-                throw new AccessDeniedException("Authentication required");
-            }
-            return appUserRepository.findByUsernameIgnoreCase(username)
-                .orElseThrow(() -> new AccessDeniedException("User not found"));
-        } catch (IOException ex) {
-            throw new RuntimeException("Failed to retrieve user", ex);
+        if (!StringUtils.hasText(username)) {
+            throw new AccessDeniedException("Authentication required");
         }
+        return appUserRepository.findByUsernameIgnoreCaseWithFallback(username)
+            .orElseThrow(() -> new AccessDeniedException("User not found"));
     }
 
     private void assertCanRead(DocumentFolder folder, AppUser user) {
