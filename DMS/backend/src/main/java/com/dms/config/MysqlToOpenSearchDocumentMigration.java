@@ -179,6 +179,7 @@ public class MysqlToOpenSearchDocumentMigration {
         String statusColumn = choose(columns, "status", "state");
         String folderIdColumn = choose(columns, "folder_id", "document_folder_id", "folder");
         String approverIdColumn = choose(columns, "approver_id", "approved_by", "approver");
+        String supervisorIdColumn = choose(columns, "supervisor_id", "supervisor", "supervisor_user_id");
         String tagsColumn = choose(columns, "tags", "tag_list");
         String metadataColumn = choose(columns, "metadata_values", "metadata", "metadata_json");
         String createdAtColumn = choose(columns, "created_at", "created_on", "created_date");
@@ -217,6 +218,9 @@ public class MysqlToOpenSearchDocumentMigration {
                 }
 
                 document.setApproverId(asStringOrNull(rs.getObject(approverIdColumn)));
+                if (StringUtils.hasText(supervisorIdColumn)) {
+                    document.setSupervisorId(asStringOrNull(rs.getObject(supervisorIdColumn)));
+                }
                 document.setTags(parseTags(rs.getObject(tagsColumn)));
                 document.setMetadataValues(parseMetadataValues(rs.getObject(metadataColumn)));
                 document.setCreatedAt(parseInstant(rs.getObject(createdAtColumn)));

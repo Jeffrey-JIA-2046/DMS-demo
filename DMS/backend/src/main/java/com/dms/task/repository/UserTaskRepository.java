@@ -53,9 +53,62 @@ public class UserTaskRepository extends BaseOpenSearchRepository<UserTask> {
 
     @Override
     public UserTask save(UserTask entity) throws IOException {
-        if (openSearchEnabled || dataSource == null) {
+        if (openSearchEnabled) {
+            try {
+                return super.save(entity);
+            } catch (Exception ex) {
+                if (dataSource == null) {
+                    throw ex instanceof IOException io ? io : new IOException("Failed to save task into OpenSearch", ex);
+                }
+                return saveToMysql(entity);
+            }
+        }
+        if (dataSource == null) {
             return super.save(entity);
         }
+        return saveToMysql(entity);
+    }
+
+    @Override
+    public Optional<UserTask> findById(String id) throws IOException {
+        if (!openSearchEnabled && dataSource != null) {
+            return findByIdFromMysql(id);
+        }
+        try {
+            Optional<UserTask> result = super.findById(id);
+            if (result.isPresent() || dataSource == null) {
+                return result;
+            }
+            return findByIdFromMysql(id);
+        } catch (OpenSearchException ex) {
+            if (dataSource != null) {
+                return findByIdFromMysql(id);
+            }
+            throw ex;
+        }
+    }
+
+    private Optional<UserTask> findByIdFromMysql(String id) throws IOException {
+        Long numericId = parseLong(id);
+        if (numericId == null) {
+            return Optional.empty();
+        }
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                 "SELECT id, title, description, status, priority, task_type, workflow_step, document_id, document_title, due_date, assignee_id, created_at, updated_at FROM user_tasks WHERE id = ? LIMIT 1")) {
+            ps.setLong(1, numericId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return Optional.of(mapTask(rs, conn));
+                }
+                return Optional.empty();
+            }
+        } catch (Exception ex) {
+            throw new IOException("Failed to find task by ID from MySQL", ex);
+        }
+    }
+
+    private UserTask saveToMysql(UserTask entity) throws IOException {
         try (Connection conn = dataSource.getConnection()) {
             Long id = parseLong(entity.getId());
             Long assigneeId = parseLong(entity.getAssigneeId());
@@ -100,12 +153,19 @@ public class UserTaskRepository extends BaseOpenSearchRepository<UserTask> {
         Query query = new Query.Builder()
             .term(t -> t.field("assignee_username.keyword").value(ov -> ov.stringValue(username)))
             .build();
-        return searchSafely(
-            new SearchRequest.Builder()
-                .index(getIndexName())
-                .query(query)
-                .size(1000)
-                .build());
+        try {
+            return searchSafely(
+                new SearchRequest.Builder()
+                    .index(getIndexName())
+                    .query(query)
+                    .size(1000)
+                    .build());
+        } catch (OpenSearchException ex) {
+            if (dataSource != null) {
+                return findByAssigneeUsernameFromMysql(username, false);
+            }
+            throw ex;
+        }
     }
 
     /**
@@ -118,13 +178,20 @@ public class UserTaskRepository extends BaseOpenSearchRepository<UserTask> {
         Query query = new Query.Builder()
             .term(t -> t.field("assignee_username.keyword").value(ov -> ov.stringValue(username)))
             .build();
-        return searchSafely(
-            new SearchRequest.Builder()
-                .index(getIndexName())
-                .query(query)
-                .sort(s -> s.field(f -> f.field("due_date").order(SortOrder.Asc)))
-                .size(1000)
-                .build());
+        try {
+            return searchSafely(
+                new SearchRequest.Builder()
+                    .index(getIndexName())
+                    .query(query)
+                    .sort(s -> s.field(f -> f.field("due_date").order(SortOrder.Asc)))
+                    .size(1000)
+                    .build());
+        } catch (OpenSearchException ex) {
+            if (dataSource != null) {
+                return findByAssigneeUsernameFromMysql(username, true);
+            }
+            throw ex;
+        }
     }
 
     /**
@@ -158,12 +225,37 @@ public class UserTaskRepository extends BaseOpenSearchRepository<UserTask> {
             )
             .build();
 
-        List<UserTask> results = searchSafely(
-            new SearchRequest.Builder()
-                .index(getIndexName())
-                .query(query)
-                .size(1)
-                .build());
+        List<UserTask> results;
+        try {
+            results = searchSafely(
+                new SearchRequest.Builder()
+                    .index(getIndexName())
+                    .query(query)
+                    .size(1)
+                    .build());
+        } catch (OpenSearchException ex) {
+            if (dataSource == null) {
+                throw ex;
+            }
+            Long numericDocumentId = parseLong(documentId);
+            if (numericDocumentId == null) {
+                return Optional.empty();
+            }
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement ps = conn.prepareStatement(
+                     "SELECT id, title, description, status, priority, task_type, workflow_step, document_id, document_title, due_date, assignee_id, created_at, updated_at FROM user_tasks WHERE document_id = ? AND task_type = ? LIMIT 1")) {
+                ps.setLong(1, numericDocumentId);
+                ps.setString(2, taskType.name());
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        return Optional.of(mapTask(rs, conn));
+                    }
+                    return Optional.empty();
+                }
+            } catch (Exception mysqlEx) {
+                throw new IOException("Failed to find task by document and type from MySQL", mysqlEx);
+            }
+        }
 
         return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
     }

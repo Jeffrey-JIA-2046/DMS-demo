@@ -7,12 +7,11 @@ export default function LoginPage() {
   const navigate = useNavigate()
 
   return (
-    <div style={{ minHeight: '80vh', display: 'grid', placeItems: 'center' }}>
-      <div className="card" style={{ width: 440 }}>
+    <div className="login-page-shell">
+      <div className="card login-page-panel">
+        <div className="login-page-titlebar">Knowledge Base</div>
         <h2 style={{ marginBottom: 8 }}>Sign in</h2>
-        <p style={{ marginBottom: 16, color: 'var(--ink-muted)' }}>
-          Use your development credentials to sign in (sysadmin/useradmin/docadmin/viewer · password: P@ssw0rd)
-        </p>
+        <p className="login-page-description">login with your windows account</p>
         <LoginPanel onSuccess={() => navigate('/', { replace: true })} />
       </div>
     </div>

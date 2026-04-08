@@ -11,12 +11,54 @@ import LoginPage from './pages/LoginPage'
 import UserManagement from './components/UserManagement'
 import UserDashboard from './components/UserDashboard'
 import KnowledgeCollaboration from './components/KnowledgeCollaboration'
+import ReportsManagement from './components/ReportsManagement'
+import RetentionManagement from './components/RetentionManagement'
+import ReminderManagement from './components/ReminderManagement'
+import JobManagement from './components/JobManagement'
+import CodeTableManagement from './components/CodeTableManagement'
+
+function SystemAdministration() {
+  const [adminTab, setAdminTab] = useState('retention')
+  return (
+    <div>
+      <nav style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        {[
+          { key: 'retention', label: 'Retention Management' },
+          { key: 'reminder', label: 'Reminder Management' },
+          { key: 'jobs', label: 'Job Management' },
+          { key: 'codetable', label: 'Code Table Management' },
+        ].map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            className={`ghost ${adminTab === tab.key ? 'is-active' : ''}`}
+            onClick={() => setAdminTab(tab.key)}
+            style={{ fontWeight: adminTab === tab.key ? 700 : 400 }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+      {adminTab === 'retention' && <RetentionManagement />}
+      {adminTab === 'reminder' && <ReminderManagement />}
+      {adminTab === 'jobs' && <JobManagement />}
+      {adminTab === 'codetable' && <CodeTableManagement />}
+    </div>
+  )
+}
 
 export default function App() {
   // HMR ping: 2026-03-10 — touch to verify Vite HMR behavior
 
+  const themeOptions = ['light','colorful','simple','mythological','thematic','cny','christmas']
+
   const [selected, setSelected] = useState('My Dashboard')
-  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'light')
+  const [knowledgeSearchContext, setKnowledgeSearchContext] = useState(null)
+  const [documentNavigationContext, setDocumentNavigationContext] = useState(null)
+  const [theme, setTheme] = useState(() => {
+    const saved = localStorage.getItem('theme')
+    return themeOptions.includes(saved) ? saved : 'light'
+  })
 
   // Debug: log mounts/unmounts, unloads and selection changes to diagnose unexpected reloads
   useEffect(() => {
@@ -45,8 +87,6 @@ export default function App() {
     } catch (e) {}
   }, [theme])
 
-  const themeOptions = ['light','dark','compact','colorful','simple','mythological','thematic','cny','christmas']
-
   const previewThemes = async () => {
     const original = theme
     for (const t of themeOptions) {
@@ -66,14 +106,42 @@ export default function App() {
       case 'My Dashboard':
         return <UserDashboard />
       case 'Knowledge Collaboration':
-        return <KnowledgeCollaboration />
+        return (
+          <KnowledgeCollaboration
+            navigationContext={knowledgeSearchContext}
+            onOpenLinkedDocument={(documentId) => {
+              setDocumentNavigationContext({
+                documentId: String(documentId),
+                stamp: Date.now(),
+              })
+              setSelected('Document Management')
+            }}
+          />
+        )
       case 'System Administration':
+        return <SystemAdministration />
       case 'System Auditing':
         return <AuditPanel />
       case 'User Management':
         return <UserManagement />
+      case 'Reports':
+        return <ReportsManagement />
       default:
-        return <DocumentWorkspace currentFunction={selected} />
+        return (
+          <DocumentWorkspace
+            currentFunction={selected}
+            navigationContext={documentNavigationContext}
+            onFindRelatedTopics={(document) => {
+              setKnowledgeSearchContext({
+                documentId: document?.id != null ? String(document.id) : '',
+                title: document?.title || '',
+                description: document?.description || '',
+                stamp: Date.now(),
+              })
+              setSelected('Knowledge Collaboration')
+            }}
+          />
+        )
     }
   }
 
@@ -96,10 +164,9 @@ export default function App() {
                   )}
                   <div>
                     <p className="eyebrow">Document Operations</p>
-                    <h1>Unified Document Management</h1>
+                    <h1>Knowledge Base</h1>
                     <p className="hero__copy">
-                      Search, review, and version important files across teams without leaving this workspace.
-                      Built for compliance-heavy teams that need clarity and speed.
+                      AI driven, centralize documents and team knowledge in one secure workspace
                     </p>
                   </div>
                   <div className="hero__cta">
@@ -108,8 +175,6 @@ export default function App() {
                         <small className="eyebrow">Theme</small>
                         <select id="theme-select" value={theme} onChange={(e) => setTheme(e.target.value)}>
                           <option value="light">Light</option>
-                          <option value="dark">Dark</option>
-                          <option value="compact">Compact</option>
                           <option value="colorful">Colorful</option>
                           <option value="simple">Simple</option>
                           <option value="mythological">Mythological</option>

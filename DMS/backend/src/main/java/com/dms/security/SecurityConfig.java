@@ -29,6 +29,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/audit/**").authenticated()
                 .requestMatchers("/api/dashboard/**").authenticated()
                 .requestMatchers("/api/folders/**").authenticated()
+                .requestMatchers("/api/knowledge/**").authenticated()
                 .requestMatchers("/api/me").authenticated()
                 .anyRequest().permitAll()
             )

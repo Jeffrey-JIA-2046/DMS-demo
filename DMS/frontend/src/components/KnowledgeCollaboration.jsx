@@ -57,7 +57,18 @@ const downloadBlob = (blob, fileName) => {
   setTimeout(() => URL.revokeObjectURL(url), 2000)
 }
 
-export default function KnowledgeCollaboration() {
+const buildRelatedTopicQuery = (context) => {
+  if (!context) return ''
+  const title = (context.title || '').trim()
+  const description = (context.description || '').trim()
+  if (title) return title
+  if (description) {
+    return description.length > 120 ? `${description.slice(0, 120)}...` : description
+  }
+  return ''
+}
+
+export default function KnowledgeCollaboration({ navigationContext = null, onOpenLinkedDocument = null }) {
   const { isAuthenticated, currentUser } = useContext(AuthContext)
   const [filters, setFilters] = useState({ query: '', tags: '', starredOnly: false, joinedOnly: false })
   const [page, setPage] = useState(0)
@@ -101,7 +112,6 @@ export default function KnowledgeCollaboration() {
   const [editingTopicId, setEditingTopicId] = useState(null)
 
   const [detailPanelOpen, setDetailPanelOpen] = useState(false)
-  const [topicModalOpen, setTopicModalOpen] = useState(false)
 
   const renderTopicDetail = (topic) => {
     if (!topic) return null
@@ -181,21 +191,28 @@ export default function KnowledgeCollaboration() {
           joinedOnly: filters.joinedOnly,
         })
         if (ignore) return
-        setTopics(response?.content ?? [])
+        const sortedTopics = [...(response?.content ?? [])].sort((a, b) => {
+          const starDelta = (b?.starCount ?? 0) - (a?.starCount ?? 0)
+          if (starDelta !== 0) {
+            return starDelta
+          }
+          return (a?.title ?? '').localeCompare(b?.title ?? '')
+        })
+        setTopics(sortedTopics)
         setPageMeta({
           page: response?.page ?? 0,
           size: response?.size ?? 8,
           totalPages: response?.totalPages ?? 0,
           totalElements: response?.totalElements ?? 0,
         })
-        if ((response?.content?.length ?? 0) === 0) {
+        if (sortedTopics.length === 0) {
           setSelectedTopicId(null)
         } else {
           setSelectedTopicId((current) => {
-            if (current && response.content.some((topic) => topic.id === current)) {
+            if (current && sortedTopics.some((topic) => topic.id === current)) {
               return current
             }
-            return response.content[0]?.id ?? null
+            return sortedTopics[0]?.id ?? null
           })
         }
       } catch (err) {
@@ -286,6 +303,23 @@ export default function KnowledgeCollaboration() {
     }
   }, [documentQuery, isAuthenticated])
 
+  useEffect(() => {
+    if (!isAuthenticated || !navigationContext?.stamp) {
+      return
+    }
+    const query = buildRelatedTopicQuery(navigationContext)
+    setPage(0)
+    setFilters((prev) => ({
+      ...prev,
+      query,
+      starredOnly: false,
+      joinedOnly: false,
+    }))
+    if (query) {
+      showBanner(`Showing related topics for document: ${navigationContext.title || navigationContext.documentId}`, 'info')
+    }
+  }, [navigationContext?.stamp, isAuthenticated, showBanner])
+
   const canJoin = selectedTopic && !selectedTopic.member
   const canStar = !!selectedTopic
 
@@ -313,7 +347,7 @@ export default function KnowledgeCollaboration() {
       // If user selected an existing document to attach/link
       if (createForm.linkDocumentId) {
         try {
-          await linkKnowledgeDocument(topic.id, { documentId: Number(createForm.linkDocumentId), note: createForm.linkNote })
+          await linkKnowledgeDocument(topic.id, { documentId: createForm.linkDocumentId, note: createForm.linkNote })
         } catch (linkErr) {
           showBanner(linkErr.message || 'Unable to link document', 'error')
         }
@@ -378,7 +412,7 @@ export default function KnowledgeCollaboration() {
     try {
       const payload = {
         content: contributionText.trim(),
-        linkedDocumentId: contributionDocId ? Number(contributionDocId) : null,
+        linkedDocumentId: contributionDocId || null,
       }
       const updated = await addKnowledgeContribution(selectedTopicId, payload)
       setSelectedTopic(updated)
@@ -432,7 +466,7 @@ export default function KnowledgeCollaboration() {
     setLinking(true)
     try {
       const payload = {
-        documentId: Number(linkForm.documentId),
+        documentId: linkForm.documentId,
         note: linkForm.note.trim(),
       }
       const updated = await linkKnowledgeDocument(selectedTopicId, payload)
@@ -501,6 +535,15 @@ export default function KnowledgeCollaboration() {
     } catch (err) {
       showBanner(err.message || 'Unable to download attachment', 'error')
     }
+  }
+
+  const handleOpenLinkedDocument = async (documentId) => {
+    if (!documentId) return
+    if (typeof onOpenLinkedDocument === 'function') {
+      onOpenLinkedDocument(String(documentId))
+      return
+    }
+    showBanner('Document navigation is unavailable.', 'error')
   }
 
   const topicStats = useMemo(() => {
@@ -600,10 +643,15 @@ export default function KnowledgeCollaboration() {
           </div>
 
           {createModalOpen && (
-            <div className="modal-backdrop">
-              <div className="modal">
+            <div
+              className="modal-overlay"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="topic-create-modal-title"
+            >
+              <div className="modal modal--focus" onClick={(e) => e.stopPropagation()}>
                 <header className="modal__header">
-                  <h3>{editingTopicId ? 'Edit topic' : 'Create topic'}</h3>
+                  <h3 id="topic-create-modal-title">{editingTopicId ? 'Edit topic' : 'Create topic'}</h3>
                   <button className="ghost" onClick={() => { setCreateModalOpen(false); setEditingTopicId(null) }}>✕</button>
                 </header>
                 <form className="modal__body" onSubmit={handleCreateTopic}>
@@ -673,7 +721,7 @@ export default function KnowledgeCollaboration() {
                     />
                   </div>
                   <div className="modal__actions">
-                    <button type="button" className="ghost" onClick={() => setCreateModalOpen(false)}>
+                    <button type="button" className="ghost" onClick={() => { setCreateModalOpen(false); setEditingTopicId(null) }}>
                       Cancel
                     </button>
                     <button className="primary" type="submit" disabled={creating}>
@@ -695,7 +743,7 @@ export default function KnowledgeCollaboration() {
               <button
                 key={topic.id}
                 className={`knowledge__topic ${selectedTopicId === topic.id ? 'is-active' : ''}`}
-                onClick={() => { setSelectedTopicId(topic.id); setTopicModalOpen(true); }}
+                onClick={() => { setSelectedTopicId(topic.id) }}
               >
                 <div>
                   <p className="knowledge__topic-title">{topic.title}</p>
@@ -708,56 +756,6 @@ export default function KnowledgeCollaboration() {
               </button>
             ))}
           </div>
-
-          {topicModalOpen && selectedTopic && (
-            <div className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="topic-modal-title">
-              <div className="modal-layer__backdrop" onClick={() => setTopicModalOpen(false)} />
-              <div className="modal-layer__content topic-modal">
-                <div className="modal-layer__header">
-                  <div>
-                    <p className="eyebrow">Topic</p>
-                    <h3 id="topic-modal-title">{selectedTopic.title}</h3>
-                    <p className="knowledge__topic-desc">{selectedTopic.description || 'No description yet.'}</p>
-                    <div className="knowledge__tags">{(selectedTopic.tags || []).map((tag) => (
-                      <span key={tag} className="pill pill--info">{tag}</span>
-                    ))}</div>
-                  </div>
-                  <button type="button" className="ghost" onClick={() => setTopicModalOpen(false)}>Close</button>
-                </div>
-                <div className="topic-modal__body">
-                  <div className="knowledge__stat-grid">
-                    {(() => {
-                      const topicStats = [
-                        { label: 'Stars', value: selectedTopic.starCount || 0 },
-                        { label: 'Members', value: selectedTopic.memberCount || 0 },
-                        { label: 'Contributions', value: selectedTopic.contributionCount || 0 },
-                      ]
-                      return topicStats.map((stat) => (
-                        <div key={stat.label} className="knowledge__stat">
-                          <span className="eyebrow">{stat.label}</span>
-                          <strong>{stat.value}</strong>
-                        </div>
-                      ))
-                    })()}
-                  </div>
-                  <div className="knowledge__actions" style={{ marginTop: '1rem' }}>
-                    <button className="ghost" onClick={handleStarToggle} disabled={!canStar}>
-                      {selectedTopic.starredByMe ? '★ Starred' : '☆ Star topic'}
-                    </button>
-                    {canJoin ? (
-                      <button className="primary" onClick={async () => { await handleJoin(); setTopicModalOpen(false); }}>
-                        Join topic
-                      </button>
-                    ) : (
-                      <button className="ghost" onClick={handleDownloadChain}>
-                        Download chain
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
 
           {pageMeta.totalPages > 1 && (
             <div className="knowledge__pagination">
@@ -1004,11 +1002,28 @@ export default function KnowledgeCollaboration() {
                           <p>{link.note || 'No notes provided.'}</p>
                           <small>Linked by {link.linkedBy}</small>
                         </div>
-                        {selectedTopic.member && (
-                          <button className="ghost ghost--small" onClick={() => handleUnlinkDocument(link.id)}>
-                            Remove
+                        <div className="knowledge__actions">
+                          <button
+                            type="button"
+                            className="ghost icon-btn"
+                            onClick={() => handleOpenLinkedDocument(link.documentId)}
+                            title="Open linked document"
+                            aria-label={`Open linked document ${link.documentTitle || link.documentId}`}
+                          >
+                            <span aria-hidden className="icon">↗️</span>
                           </button>
-                        )}
+                          {selectedTopic.member && (
+                            <button
+                              type="button"
+                              className="ghost icon-btn"
+                              onClick={() => handleUnlinkDocument(link.id)}
+                              title="Remove linked document"
+                              aria-label={`Remove linked document ${link.documentTitle || link.documentId}`}
+                            >
+                              <span aria-hidden className="icon">🗑️</span>
+                            </button>
+                          )}
+                        </div>
                       </li>
                     ))}
                   </ul>
@@ -1033,8 +1048,14 @@ export default function KnowledgeCollaboration() {
                           <p>{upload.description || 'No description'}</p>
                           <small>{(upload.size / 1024).toFixed(1)} KB · {upload.uploadedBy}</small>
                         </div>
-                        <button className="ghost ghost--small" onClick={() => handleDownloadAttachment(upload.id)}>
-                          Download
+                        <button
+                          type="button"
+                          className="ghost icon-btn"
+                          onClick={() => handleDownloadAttachment(upload.id)}
+                          title={`Download ${upload.fileName}`}
+                          aria-label={`Download ${upload.fileName}`}
+                        >
+                          <span aria-hidden className="icon">⬇️</span>
                         </button>
                       </li>
                     ))}

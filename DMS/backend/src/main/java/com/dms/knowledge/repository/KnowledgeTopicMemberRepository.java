@@ -1,12 +1,13 @@
 package com.dms.knowledge.repository;
 
 import java.io.IOException;
+import java.util.Comparator;
 import java.util.Optional;
 import java.util.List;
 import java.util.Map;
 
 import org.opensearch.client.opensearch.OpenSearchClient;
-import org.opensearch.client.opensearch._types.SortOrder;
+import org.opensearch.client.opensearch._types.Refresh;
 import org.opensearch.client.opensearch.core.SearchRequest;
 import org.opensearch.client.opensearch.core.IndexRequest;
 import org.opensearch.client.opensearch._types.query_dsl.Query;
@@ -44,7 +45,8 @@ public class KnowledgeTopicMemberRepository extends BaseOpenSearchRepository<Kno
 
         IndexRequest.Builder<Map<String, Object>> builder = new IndexRequest.Builder<Map<String, Object>>()
             .index(getIndexName())
-            .document(payload);
+            .document(payload)
+            .refresh(Refresh.WaitFor);
         if (id != null && !id.isBlank()) {
             builder.id(id);
         }
@@ -59,9 +61,9 @@ public class KnowledgeTopicMemberRepository extends BaseOpenSearchRepository<Kno
     public Optional<KnowledgeTopicMember> findByTopicIdAndUserId(String topicId, String userId) {
         try {
             Query boolQuery = Query.of(q -> q.bool(b -> b
-                .must(m1 -> m1.term(t -> t.field("entity_type").value(v -> v.stringValue(ENTITY_TYPE))))
-                .must(m2 -> m2.term(t -> t.field("topic_id").value(v -> v.stringValue(topicId))))
-                .must(m3 -> m3.term(t -> t.field("user_id").value(v -> v.stringValue(userId))))));
+                .must(m1 -> m1.term(t -> t.field("entity_type.keyword").value(v -> v.stringValue(ENTITY_TYPE))))
+                .must(m2 -> m2.term(t -> t.field("topic_id.keyword").value(v -> v.stringValue(topicId))))
+                .must(m3 -> m3.term(t -> t.field("user_id.keyword").value(v -> v.stringValue(userId))))));
             
             SearchRequest request = new SearchRequest.Builder()
                 .index(getIndexName())
@@ -83,15 +85,15 @@ public class KnowledgeTopicMemberRepository extends BaseOpenSearchRepository<Kno
     public int countByTopicId(String topicId) {
         try {
             Query termQuery = Query.of(q -> q.bool(b -> b
-                .must(m1 -> m1.term(t -> t.field("entity_type").value(v -> v.stringValue(ENTITY_TYPE))))
-                .must(m2 -> m2.term(t -> t.field("topic_id").value(v -> v.stringValue(topicId))))));
+                .must(m1 -> m1.term(t -> t.field("entity_type.keyword").value(v -> v.stringValue(ENTITY_TYPE))))
+                .must(m2 -> m2.term(t -> t.field("topic_id.keyword").value(v -> v.stringValue(topicId))))));
             SearchRequest request = new SearchRequest.Builder()
                 .index(getIndexName())
                 .query(termQuery)
                 .size(0)
                 .build();
-            
-            return (int) search(request).size();
+
+            return (int) openSearchClient.search(request, KnowledgeTopicMember.class).hits().total().value();
         } catch (IOException ex) {
             throw new RuntimeException("Failed to count members", ex);
         }
@@ -100,8 +102,8 @@ public class KnowledgeTopicMemberRepository extends BaseOpenSearchRepository<Kno
     public List<KnowledgeTopicMember> findByTopicId(String topicId) {
         try {
             Query termQuery = Query.of(q -> q.bool(b -> b
-                .must(m1 -> m1.term(t -> t.field("entity_type").value(v -> v.stringValue(ENTITY_TYPE))))
-                .must(m2 -> m2.term(t -> t.field("topic_id").value(v -> v.stringValue(topicId))))));
+                .must(m1 -> m1.term(t -> t.field("entity_type.keyword").value(v -> v.stringValue(ENTITY_TYPE))))
+                .must(m2 -> m2.term(t -> t.field("topic_id.keyword").value(v -> v.stringValue(topicId))))));
             SearchRequest request = new SearchRequest.Builder()
                 .index(getIndexName())
                 .query(termQuery)
@@ -117,16 +119,17 @@ public class KnowledgeTopicMemberRepository extends BaseOpenSearchRepository<Kno
     public List<KnowledgeTopicMember> findByTopicIdOrderByJoinedAtAsc(String topicId) {
         try {
             Query termQuery = Query.of(q -> q.bool(b -> b
-                .must(m1 -> m1.term(t -> t.field("entity_type").value(v -> v.stringValue(ENTITY_TYPE))))
-                .must(m2 -> m2.term(t -> t.field("topic_id").value(v -> v.stringValue(topicId))))));
+                .must(m1 -> m1.term(t -> t.field("entity_type.keyword").value(v -> v.stringValue(ENTITY_TYPE))))
+                .must(m2 -> m2.term(t -> t.field("topic_id.keyword").value(v -> v.stringValue(topicId))))));
             SearchRequest request = new SearchRequest.Builder()
                 .index(getIndexName())
                 .query(termQuery)
-                .sort(s -> s.field(f -> f.field("joined_at").order(SortOrder.Asc)))
                 .size(10000)
                 .build();
-            
-            return search(request);
+
+            List<KnowledgeTopicMember> results = search(request);
+            results.sort(Comparator.comparing(KnowledgeTopicMember::getJoinedAt, Comparator.nullsLast(Comparator.naturalOrder())));
+            return results;
         } catch (IOException ex) {
             throw new RuntimeException("Failed to query members", ex);
         }

@@ -9,8 +9,10 @@ import {
   fetchDocument,
   fetchMyFolderPermissions,
   fetchFolderPermissions,
+  fetchFolderPermissionTemplate,
   listDocuments,
   listFolderTree,
+  delegateApproval,
   rejectDocument,
   updateFolder,
   updateDocument,
@@ -28,10 +30,10 @@ import DocumentDetails from './DocumentDetails'
 import UploadPanel from './UploadPanel'
 import FolderBrowser from './FolderBrowser'
 import ChatbotPanel from './ChatbotPanel'
-import FolderPermissionsModal from './FolderPermissionsModal'
 import { AuthContext, Roles } from '../contexts/AuthContext'
 import { AnnounceContext } from '../contexts/AnnounceContext'
-import { findFolderNode } from '../utils/folders'
+import { findFolderNode, findFolderPath } from '../utils/folders'
+import { createKnowledgeTopic, linkKnowledgeDocument } from '../api/knowledge'
 
 const buildDefaultFilters = () => ({
   query: '',
@@ -202,6 +204,56 @@ const getLatestVersion = (versions) => {
   }, null)
 }
 
+const toTimestamp = (value) => {
+  if (!value) return 0
+  const millis = new Date(value).getTime()
+  return Number.isFinite(millis) ? millis : 0
+}
+
+const compareText = (a, b) => {
+  const left = (a ?? '').toString().toLowerCase()
+  const right = (b ?? '').toString().toLowerCase()
+  return left.localeCompare(right)
+}
+
+const sortDocumentsLocally = (items, sortValue) => {
+  if (!Array.isArray(items) || items.length <= 1) {
+    return Array.isArray(items) ? items : []
+  }
+
+  const [fieldRaw, directionRaw] = (sortValue || 'createdAt,desc').split(',')
+  const field = (fieldRaw || 'createdAt').trim()
+  const direction = (directionRaw || 'desc').trim().toLowerCase() === 'asc' ? 1 : -1
+
+  const sorted = [...items].sort((a, b) => {
+    switch (field) {
+      case 'title':
+        return compareText(a?.title, b?.title) * direction
+      case 'status':
+        return compareText(a?.status, b?.status) * direction
+      case 'latestSizeBytes': {
+        const left = Number(a?.latestSizeBytes || 0)
+        const right = Number(b?.latestSizeBytes || 0)
+        return (left - right) * direction
+      }
+      case 'updatedAt': {
+        const left = toTimestamp(a?.updatedAt)
+        const right = toTimestamp(b?.updatedAt)
+        return (left - right) * direction
+      }
+      case 'createdAt':
+      default: {
+        // Summary payload may not expose createdAt; fall back to updatedAt.
+        const left = toTimestamp(a?.createdAt || a?.updatedAt)
+        const right = toTimestamp(b?.createdAt || b?.updatedAt)
+        return (left - right) * direction
+      }
+    }
+  })
+
+  return sorted
+}
+
 const deepCloneJson = (value) => {
   try {
     return JSON.parse(JSON.stringify(value ?? {}))
@@ -245,8 +297,10 @@ const prettifyLabel = (value) => value
   .replace(/_/g, ' ')
   .replace(/\b\w/g, (char) => char.toUpperCase())
 
-export default function DocumentWorkspace({ currentFunction = 'Document Management' }) {
-  const { documentPermissions, role, setDocumentPermissionsOverride, currentUser } = useContext(AuthContext)
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+export default function DocumentWorkspace({ currentFunction = 'Document Management', onFindRelatedTopics = null, navigationContext = null }) {
+  const { documentPermissions, role, setDocumentPermissionsOverride, currentUser, isAuthenticated } = useContext(AuthContext)
   const { toast } = useContext(AnnounceContext)
   const [filters, setFilters] = useState(buildDefaultFilters)
   const [pageState, setPageState] = useState(defaultPage)
@@ -261,6 +315,13 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   const [error, setError] = useState('')
   const [uploadOpen, setUploadOpen] = useState(false)
   const [uploadPrefill, setUploadPrefill] = useState(null)
+  const [topicCreateModal, setTopicCreateModal] = useState({
+    open: false,
+    document: null,
+    title: '',
+    description: '',
+    tags: '',
+  })
   const [folderTree, setFolderTree] = useState([])
   const [folderLoading, setFolderLoading] = useState(false)
   const [folderBusy, setFolderBusy] = useState(false)
@@ -272,14 +333,6 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   const [expandedDocument, setExpandedDocument] = useState(null)
   const [expandedLoading, setExpandedLoading] = useState(false)
   const [expandedError, setExpandedError] = useState('')
-  const [permissionModal, setPermissionModal] = useState({
-    open: false,
-    folder: null,
-    entries: [],
-    loading: false,
-    saving: false,
-    error: '',
-  })
   const [chatbotOpen, setChatbotOpen] = useState(false)
   // Ensure details view opens on the content tab when a document is selected
   const [detailsInitialTab, setDetailsInitialTab] = useState('content')
@@ -312,9 +365,10 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   // Request id counter and latest id for guarding stale responses
   const requestCounterRef = useRef(0)
   const latestRequestIdRef = useRef(0)
+  const workspaceSelectionPath = useMemo(() => findFolderPath(folderTree, filters.folderId), [folderTree, filters.folderId])
   const selectedDocumentFolderId = selectedDocument?.folder?.id ?? null
   const activePermissionFolderId = filters.folderId ?? selectedDocumentFolderId ?? null
-  const canManageFolderPermissions = role === Roles.SYS_ADMIN && currentFunction === 'Workspace Management'
+  const canManageFolderPermissions = role === Roles.SYS_ADMIN || role === Roles.USER_ADMIN
   const approverUsername = currentUser?.username ? currentUser.username.toLowerCase() : null
   const latestSelectedVersion = useMemo(() => getLatestVersion(selectedDocument?.versions), [selectedDocument?.versions])
   const selectedFileName = latestSelectedVersion?.fileName ?? ''
@@ -489,6 +543,40 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     return () => clearTimeout(t)
   }, [filterQueryLocal])
 
+  useEffect(() => {
+    if (!isAuthenticated || !navigationContext?.stamp) {
+      return
+    }
+    const targetId = (navigationContext.documentId ?? '').toString().trim()
+    if (!targetId) {
+      return
+    }
+    let cancelled = false
+    const openLinkedDocument = async () => {
+      try {
+        const detail = await fetchDocument(targetId)
+        if (cancelled) {
+          return
+        }
+        const resolvedId = detail?.id != null ? String(detail.id) : targetId
+        setSelectedId(resolvedId)
+        setSelectedDocument(detail)
+        setFilterQueryLocal('')
+        setFilters((prev) => ({ ...buildDefaultFilters(), folderId: prev.folderId }))
+        setPageState({ ...defaultPage })
+      } catch (err) {
+        if (!cancelled) {
+          setError(err.message)
+          toast && toast(err.message || 'Unable to open linked document', { type: 'error' })
+        }
+      }
+    }
+    openLinkedDocument()
+    return () => {
+      cancelled = true
+    }
+  }, [navigationContext?.stamp, isAuthenticated])
+
   const loadFolderTree = useCallback(async () => {
     setFolderLoading(true)
     setFolderError('')
@@ -584,10 +672,17 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
           console.debug('loadDocuments: stale response ignored', { requestId })
           return
         }
-        setDocuments(data.content)
+        setDocuments(sortDocumentsLocally(data.content, sort))
         console.debug('loadDocuments success', { requestId, count: data.content?.length ?? 0 })
         setPageMeta(data)
-        if (!data.content.some((doc) => doc.id === selectedId)) {
+        const selectedIdText = selectedId == null ? null : String(selectedId)
+        const selectedInPage = selectedIdText != null
+          ? data.content.some((doc) => String(doc.id) === selectedIdText)
+          : false
+        const selectedInDetail = selectedIdText != null && selectedDocument?.id != null
+          ? String(selectedDocument.id) === selectedIdText
+          : false
+        if (selectedIdText != null && !selectedInPage && !selectedInDetail) {
           setSelectedId(null)
         }
       } catch (err) {
@@ -790,34 +885,6 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     setEditableExtractionData((prev) => setNestedValue(prev ?? {}, path, value))
   }
 
-  const handleSaveEditedExtraction = () => {
-    if (!editableExtractionData) {
-      toast && toast('No edited data to save.', { type: 'info' })
-      return
-    }
-    setExtractionResult((prev) => {
-      if (!prev) return prev
-      return { ...prev, extracted_json: deepCloneJson(editableExtractionData) }
-    })
-    toast && toast('Edited data saved.', { type: 'success' })
-  }
-
-  const handleResetEditedExtraction = () => {
-    if (!originalExtractionData) {
-      toast && toast('Nothing to reset.', { type: 'info' })
-      return
-    }
-    setEditableExtractionData(deepCloneJson(originalExtractionData))
-    toast && toast('Edited data reset.', { type: 'info' })
-  }
-
-  const handleDownloadEditedExtractionJson = () => {
-    const payload = editableExtractionData ?? extractionResult?.extracted_json
-    if (!payload) return
-    const stem = safeFileStem(selectedDocument?.title)
-    downloadTextFile(JSON.stringify(payload, null, 2), `${stem}.edited.extracted.json`)
-  }
-
   const handleFilterChange = (nextFilters) => {
     setFilters((prev) => ({ ...nextFilters, folderId: prev.folderId }))
     setPageState({ ...defaultPage })
@@ -860,7 +927,18 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     setFolderBusy(true)
     setFolderError('')
     try {
-      const folder = await createFolder(payload)
+      const { permissionEntries, ...folderPayload } = payload || {}
+      const folder = await createFolder(folderPayload)
+      if (canManageFolderPermissions && Array.isArray(permissionEntries)) {
+        await updateFolderPermissions(folder.id, {
+          entries: permissionEntries.map((entry) => ({
+            groupId: entry.groupId,
+            canRead: !!entry.canRead,
+            canWrite: !!entry.canWrite,
+            canDelete: !!entry.canDelete,
+          })),
+        })
+      }
       await loadFolderTree()
       handleFolderSelect(folder.id)
       toast && toast('Folder created', { type: 'success' })
@@ -881,7 +959,18 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     setFolderBusy(true)
     setFolderError('')
     try {
-      const folder = await updateFolder(folderId, payload)
+      const { permissionEntries, ...folderPayload } = payload || {}
+      const folder = await updateFolder(folderId, folderPayload)
+      if (canManageFolderPermissions && Array.isArray(permissionEntries)) {
+        await updateFolderPermissions(folder.id, {
+          entries: permissionEntries.map((entry) => ({
+            groupId: entry.groupId,
+            canRead: !!entry.canRead,
+            canWrite: !!entry.canWrite,
+            canDelete: !!entry.canDelete,
+          })),
+        })
+      }
       await loadFolderTree()
       handleFolderSelect(folder.id)
       toast && toast('Folder updated', { type: 'success' })
@@ -1057,6 +1146,128 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     }
   }
 
+  const handleCreateTopicFromDocument = (doc) => {
+    if (!doc?.id) return
+    if (!isAuthenticated) {
+      toast && toast('Please sign in before creating a knowledge topic.', { type: 'warning' })
+      return
+    }
+
+    const titleSeed = String(doc.title || doc.description || 'Untitled document').trim()
+    const initialDescription = String(doc.description || '').trim()
+    const initialTags = doc.category ? String(doc.category).trim().toLowerCase() : ''
+
+    setTopicCreateModal({
+      open: true,
+      document: doc,
+      title: `${titleSeed} topic`,
+      description: initialDescription,
+      tags: initialTags,
+    })
+  }
+
+  const handleFindRelatedTopicsFromDocument = (doc) => {
+    if (!doc?.id) return
+    if (typeof onFindRelatedTopics === 'function') {
+      onFindRelatedTopics(doc)
+    }
+  }
+
+  const closeTopicCreateModal = () => {
+    if (busy) return
+    setTopicCreateModal({
+      open: false,
+      document: null,
+      title: '',
+      description: '',
+      tags: '',
+    })
+  }
+
+  const handleSubmitTopicFromDocument = async (event) => {
+    event.preventDefault()
+    const doc = topicCreateModal.document
+    if (!doc?.id) {
+      closeTopicCreateModal()
+      return
+    }
+
+    if (!topicCreateModal.title.trim()) {
+      toast && toast('Please provide a topic title.', { type: 'warning' })
+      return
+    }
+
+    setBusy(true)
+    setError('')
+    try {
+      const title = topicCreateModal.title.trim()
+      const description = topicCreateModal.description.trim().length
+        ? topicCreateModal.description.trim()
+        : `Knowledge topic created from document "${String(doc.title || doc.description || 'Untitled document').trim()}".`
+      const tags = topicCreateModal.tags
+        .split(',')
+        .map((tag) => tag.trim().toLowerCase())
+        .filter(Boolean)
+      const topic = await createKnowledgeTopic({ title, description, tags })
+      const topicId = topic?.id
+      if (!topicId) {
+        throw new Error('Topic created but topic id is missing in response')
+      }
+
+      const numericDocumentId = Number(doc.id)
+      const linkPayload = {
+        documentId: Number.isNaN(numericDocumentId) ? doc.id : numericDocumentId,
+        note: 'Linked from document list quick action.',
+      }
+
+      try {
+        await linkKnowledgeDocument(topicId, linkPayload)
+      } catch (linkErr) {
+        const linkMessage = String(linkErr?.message || '').toLowerCase()
+        if (linkMessage.includes('knowledge topic not found')) {
+          await delay(250)
+          await linkKnowledgeDocument(topicId, linkPayload)
+        } else {
+          throw linkErr
+        }
+      }
+
+      toast && toast(`Topic created: ${topic.title}`, { type: 'success' })
+      closeTopicCreateModal()
+    } catch (err) {
+      setError(err.message)
+      toast && toast(err.message || 'Failed to create topic from document', { type: 'error' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleDelegateApproval = async (documentId, approverId, note) => {
+    if (!documentId || !approverId) return
+    setBusy(true)
+    setError('')
+    try {
+      const payload = {
+        approverId,
+        ...(note && note.trim().length ? { note: note.trim() } : {}),
+      }
+      const updated = await delegateApproval(documentId, payload)
+      if (selectedDocument?.id === documentId) {
+        setSelectedDocument(updated)
+      }
+      if (expandedDocument?.id === documentId) {
+        setExpandedDocument(updated)
+      }
+      await loadDocuments()
+      toast && toast('Approval delegated', { type: 'success' })
+    } catch (err) {
+      setError(err.message)
+      toast && toast(err.message || 'Failed to delegate approval', { type: 'error' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const handleOpenPermissions = async (folderId) => {
     if (!folderId) {
       toast && toast('Select a folder to manage permissions', { type: 'info' })
@@ -1087,6 +1298,17 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
       setPermissionModal((prev) => ({ ...prev, loading: false, error: message }))
       toast && toast(message, { type: 'error' })
     }
+  }
+
+  const handleLoadPermissionTemplate = async () => {
+    return fetchFolderPermissionTemplate()
+  }
+
+  const handleLoadFolderPermissions = async (folderId) => {
+    if (!folderId) {
+      return { permissions: [] }
+    }
+    return fetchFolderPermissions(folderId)
   }
 
   const closePermissionsModal = () => {
@@ -1174,7 +1396,8 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
           draggingDocumentId={draggedDocumentId}
           onDocumentDrop={handleDocumentMove}
           canManagePermissions={canManageFolderPermissions}
-          onManagePermissions={handleOpenPermissions}
+          onLoadPermissionTemplate={handleLoadPermissionTemplate}
+          onLoadFolderPermissions={handleLoadFolderPermissions}
         />
       </div>
       <div className="workspace__content">
@@ -1183,6 +1406,24 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
           onMouseEnter={() => setFiltersOpen(true)}
         />
         <div className="workspace__content-actions">
+          <p className="folder-selection">
+            {filters.folderId && workspaceSelectionPath?.length ? (
+              <>
+                Selected:{' '}
+                {workspaceSelectionPath.map((part, i) => (
+                  <span key={i} className="folder-selection__part">
+                    <span className="folder-selection__icon" aria-hidden>
+                      📁
+                    </span>
+                    <span className="folder-selection__label">{part}</span>
+                    {i < workspaceSelectionPath.length - 1 && <span className="folder-selection__sep"> / </span>}
+                  </span>
+                ))}
+              </>
+            ) : (
+              'Showing all documents'
+            )}
+          </p>
         </div>
         <DocumentList
           items={documents}
@@ -1208,6 +1449,8 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
           onOcrSelected={handleRunSelectedOcr}
           canRunOcrOnSelected={!!selectedId && selectedLooksPdf}
           canUpload={documentPermissions?.write ?? false}
+          onCreateTopicFromDocument={handleCreateTopicFromDocument}
+          onFindRelatedTopics={handleFindRelatedTopicsFromDocument}
           onContextAction={async (documentId, action) => {
             // Actions: copy, paste, generateLink, checkout
             try {
@@ -1476,6 +1719,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
           onAddApprovalNote={handleApprovalNote}
           onApprove={(id, note) => handleApprovalDecision(id, note, 'approve')}
           onReject={(id, note) => handleApprovalDecision(id, note, 'reject')}
+          onDelegate={handleDelegateApproval}
           busy={busy}
           initialTab={detailsInitialTab}
           downloadUrlBuilder={buildDownloadUrl}
@@ -1512,6 +1756,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
                 onAddApprovalNote={handleApprovalNote}
                 onApprove={(id, note) => handleApprovalDecision(id, note, 'approve')}
                 onReject={(id, note) => handleApprovalDecision(id, note, 'reject')}
+                onDelegate={handleDelegateApproval}
                 busy={busy}
                 downloadUrlBuilder={buildDownloadUrl}
                 initialTab="content"
@@ -1525,6 +1770,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
           onClose={() => { setUploadOpen(false); setUploadPrefill(null) }}
           onSubmit={handleUpload}
           busy={busy}
+          presetFolderId={filters.folderId ?? null}
           folders={folderTree}
           foldersLoading={folderLoading}
           folderBusy={folderBusy}
@@ -1533,17 +1779,61 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
           initial={uploadPrefill}
         />
       )}
-      {permissionModal.open && (
-        <FolderPermissionsModal
-          folderName={permissionModal.folder?.name ?? ''}
-          entries={permissionModal.entries}
-          loading={permissionModal.loading}
-          error={permissionModal.error}
-          saving={permissionModal.saving}
-          onClose={closePermissionsModal}
-          onSave={handlePermissionSave}
-          onToggle={handlePermissionToggle}
-        />
+      {topicCreateModal.open && (
+        <div
+          className="modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="create-topic-from-document-title"
+        >
+          <div className="modal modal--focus" onClick={(e) => e.stopPropagation()}>
+            <header className="modal__header">
+              <h3 id="create-topic-from-document-title">Create topic from document</h3>
+              <button type="button" className="ghost" onClick={closeTopicCreateModal} disabled={busy}>✕</button>
+            </header>
+            <form className="modal__body" onSubmit={handleSubmitTopicFromDocument}>
+              <div className="field">
+                <label>Source document</label>
+                <input
+                  type="text"
+                  value={topicCreateModal.document?.title || topicCreateModal.document?.description || `Document #${topicCreateModal.document?.id ?? ''}`}
+                  readOnly
+                />
+              </div>
+              <div className="field">
+                <label>Topic title</label>
+                <input
+                  type="text"
+                  value={topicCreateModal.title}
+                  onChange={(e) => setTopicCreateModal((prev) => ({ ...prev, title: e.target.value }))}
+                  placeholder="Topic title"
+                />
+              </div>
+              <div className="field">
+                <label>Description</label>
+                <textarea
+                  rows={3}
+                  value={topicCreateModal.description}
+                  onChange={(e) => setTopicCreateModal((prev) => ({ ...prev, description: e.target.value }))}
+                  placeholder="Topic description"
+                />
+              </div>
+              <div className="field">
+                <label>Tags</label>
+                <input
+                  type="text"
+                  value={topicCreateModal.tags}
+                  onChange={(e) => setTopicCreateModal((prev) => ({ ...prev, tags: e.target.value }))}
+                  placeholder="tag1, tag2"
+                />
+              </div>
+              <div className="modal__actions">
+                <button type="button" className="ghost" onClick={closeTopicCreateModal} disabled={busy}>Cancel</button>
+                <button className="primary" type="submit" disabled={busy}>{busy ? 'Creating…' : 'Create topic'}</button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </section>
   )

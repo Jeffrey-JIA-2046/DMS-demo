@@ -7,6 +7,7 @@ import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -110,21 +111,37 @@ public class KnowledgeTopicService {
     ) {
         AppUser user = requireUser(username);
         
-        // For OpenSearch, we fetch with pagination and filter in memory
-        // Note: In production, this should be implemented with proper OpenSearch queries
         Pageable resolved = pageable.getSort().isSorted()
             ? pageable
             : PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), Sort.by(Sort.Direction.DESC, "updatedAt"));
 
-        Page<KnowledgeTopic> page = findTopics(resolved);
-        List<KnowledgeTopicSummaryResponse> content = page.getContent().stream()
-            .filter(topic -> query == null || topic.getTitle().toLowerCase().contains(query.toLowerCase())
-                    || (topic.getDescription() != null && topic.getDescription().toLowerCase().contains(query.toLowerCase())))
-            .filter(topic -> tags == null || tags.isEmpty() || topic.getTags().stream().anyMatch(tags::contains))
-            .map(topic -> toSummary(topic, user))
-            .toList();
+        String normalizedQuery = trimToNull(query);
+        Set<String> normalizedTags = normalizeTags(tags);
 
-        return new PageResponse<>(content, page.getNumber(), page.getSize(), page.getTotalElements(), page.getTotalPages(), page.isLast());
+        List<KnowledgeTopicSummaryResponse> filtered = loadAllTopicsSorted(resolved.getSort()).stream()
+            .filter(topic -> matchesTopicQuery(topic, normalizedQuery))
+            .filter(topic -> normalizedTags.isEmpty() || topic.getTags().stream().anyMatch(normalizedTags::contains))
+            .filter(topic -> !joinedOnly || memberRepository.existsByTopicIdAndUserId(topic.getId(), user.getId()))
+            .map(topic -> toSummary(topic, user))
+            .filter(summary -> !starredOnly || summary.starredByMe())
+            .collect(Collectors.toCollection(ArrayList::new));
+
+        filtered.sort(
+            Comparator.comparingInt(KnowledgeTopicSummaryResponse::starCount)
+                .reversed()
+                .thenComparing(KnowledgeTopicSummaryResponse::title, String.CASE_INSENSITIVE_ORDER)
+        );
+
+        int pageNumber = Math.max(0, resolved.getPageNumber());
+        int pageSize = Math.max(1, resolved.getPageSize());
+        int fromIndex = Math.min(filtered.size(), pageNumber * pageSize);
+        int toIndex = Math.min(filtered.size(), fromIndex + pageSize);
+        List<KnowledgeTopicSummaryResponse> content = filtered.subList(fromIndex, toIndex);
+
+        long totalElements = filtered.size();
+        int totalPages = (int) Math.ceil(totalElements / (double) pageSize);
+        boolean last = pageNumber >= Math.max(0, totalPages - 1);
+        return new PageResponse<>(content, pageNumber, pageSize, totalElements, totalPages, last);
     }
 
     @Transactional(readOnly = true)
@@ -570,6 +587,58 @@ public class KnowledgeTopicService {
         } catch (IOException ex) {
             throw new RuntimeException("Failed to list knowledge topics", ex);
         }
+    }
+
+    private List<KnowledgeTopic> loadAllTopicsSorted(Sort sort) {
+        List<KnowledgeTopic> all = new ArrayList<>();
+        int page = 0;
+        int size = 200;
+        Sort resolvedSort = sort.isSorted() ? sort : Sort.by(Sort.Direction.DESC, "updatedAt");
+        while (true) {
+            Page<KnowledgeTopic> batch = findTopics(PageRequest.of(page, size, resolvedSort));
+            all.addAll(batch.getContent());
+            if (batch.isLast()) {
+                break;
+            }
+            page += 1;
+        }
+        return all;
+    }
+
+    private boolean matchesTopicQuery(KnowledgeTopic topic, String normalizedQuery) {
+        if (!StringUtils.hasText(normalizedQuery)) {
+            return true;
+        }
+        String needle = normalizedQuery.toLowerCase(Locale.ROOT);
+        String title = topic.getTitle() == null ? "" : topic.getTitle().toLowerCase(Locale.ROOT);
+        String description = topic.getDescription() == null ? "" : topic.getDescription().toLowerCase(Locale.ROOT);
+        boolean tagMatch = topic.getTags() != null && topic.getTags().stream()
+            .filter(StringUtils::hasText)
+            .map(tag -> tag.toLowerCase(Locale.ROOT))
+            .anyMatch(tag -> tag.contains(needle));
+        if (title.contains(needle) || description.contains(needle) || tagMatch) {
+            return true;
+        }
+
+        // Match contextual evidence so topic discovery works when keywords are present in linked docs/contributions.
+        boolean linkMatch = documentLinkRepository.findByTopicId(topic.getId()).stream().anyMatch(link ->
+            containsIgnoreCase(link.getDocumentTitle(), needle)
+                || containsIgnoreCase(link.getNote(), needle)
+                || containsIgnoreCase(link.getDocumentId(), needle)
+        );
+        if (linkMatch) {
+            return true;
+        }
+
+        return contributionRepository.findByTopicId(topic.getId()).stream().anyMatch(entry ->
+            containsIgnoreCase(entry.getContent(), needle)
+                || containsIgnoreCase(entry.getLinkedDocumentTitle(), needle)
+                || containsIgnoreCase(entry.getLinkedDocumentId(), needle)
+        );
+    }
+
+    private boolean containsIgnoreCase(String value, String lowercaseNeedle) {
+        return StringUtils.hasText(value) && value.toLowerCase(Locale.ROOT).contains(lowercaseNeedle);
     }
 
     private Optional<AppUser> findUserByUsername(String username) {

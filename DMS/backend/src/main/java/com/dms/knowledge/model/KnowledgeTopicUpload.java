@@ -114,6 +114,9 @@ public class KnowledgeTopicUpload {
 
     public void setTopic(KnowledgeTopic topic) {
         this.topic = topic;
+        if (topic != null) {
+            this.topicId = topic.getId();
+        }
     }
 
     public com.dms.user.model.AppUser getUploadedBy() {
@@ -122,5 +125,8 @@ public class KnowledgeTopicUpload {
 
     public void setUploadedBy(com.dms.user.model.AppUser uploadedBy) {
         this.uploadedBy = uploadedBy;
+        if (uploadedBy != null) {
+            this.uploadedById = uploadedBy.getId();
+        }
     }
 }

@@ -23,6 +23,9 @@ public record FolderMetadataFieldRequest(
     boolean required,
 
     @Size(max = 255)
-    String hint
+    String hint,
+
+    @Size(max = 64)
+    String codeTableCode
 ) {
 }

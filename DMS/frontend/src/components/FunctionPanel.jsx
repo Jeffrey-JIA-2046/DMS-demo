@@ -3,7 +3,6 @@ import { AuthContext } from '../contexts/AuthContext'
 
 const FUNCTIONS = [
   'My Dashboard',
-  'Workspace Management',
   'System Administration',
   'User Management',
   'Document Management',
@@ -17,7 +16,6 @@ export default function FunctionPanel({ selected, onSelect }) {
 
   const ICONS = {
     'My Dashboard': '🏠',
-    'Workspace Management': '🗂️',
     'System Administration': '🔧',
     'User Management': '👥',
     'Document Management': '📄',
@@ -58,6 +56,19 @@ export default function FunctionPanel({ selected, onSelect }) {
           )
         })}
       </nav>
+
+      <footer className="function-panel__footer" aria-label="Function panel footer">
+        <a
+          className="function-panel__shortcut"
+          href="/user-manual.html"
+          target="_blank"
+          rel="noreferrer"
+        >
+          User Help Manual
+        </a>
+        <div className="function-panel__divider" />
+        <small className="function-panel__copyright">Copyright (c) 2026 DMS</small>
+      </footer>
     </aside>
   )
 }

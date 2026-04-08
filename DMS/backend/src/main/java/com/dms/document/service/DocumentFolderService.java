@@ -23,6 +23,8 @@ import com.dms.document.repository.DocumentRepository;
 import com.dms.document.repository.DocumentFolderRepository;
 import com.dms.exception.InvalidDocumentException;
 import com.dms.exception.ResourceNotFoundException;
+import com.dms.user.model.AppUser;
+import com.dms.user.repository.AppUserRepository;
 
 @Service
 public class DocumentFolderService {
@@ -32,16 +34,31 @@ public class DocumentFolderService {
 
     private final DocumentFolderRepository folderRepository;
     private final DocumentRepository documentRepository;
+    private final AppUserRepository appUserRepository;
+    private final FolderPermissionEvaluator folderPermissionEvaluator;
 
-    public DocumentFolderService(DocumentFolderRepository folderRepository, DocumentRepository documentRepository) {
+    public DocumentFolderService(
+        DocumentFolderRepository folderRepository,
+        DocumentRepository documentRepository,
+        AppUserRepository appUserRepository,
+        FolderPermissionEvaluator folderPermissionEvaluator
+    ) {
         this.folderRepository = folderRepository;
         this.documentRepository = documentRepository;
+        this.appUserRepository = appUserRepository;
+        this.folderPermissionEvaluator = folderPermissionEvaluator;
     }
 
     @Transactional(readOnly = true)
-    public List<DocumentFolderTreeNode> getTree() {
+    public List<DocumentFolderTreeNode> getTree(String username) {
         try {
-            List<DocumentFolder> folders = folderRepository.findAll();
+            AppUser user = requireUser(username);
+            List<DocumentFolder> folders = folderRepository.findAll().stream()
+                .filter(folder -> {
+                    FolderPermissionSnapshot snapshot = folderPermissionEvaluator.evaluate(folder, user);
+                    return snapshot.canRead() || snapshot.canWrite() || snapshot.canDelete();
+                })
+                .toList();
             Map<String, DocumentFolderTreeNode> nodeMap = new HashMap<>();
             for (DocumentFolder folder : folders) {
                 nodeMap.put(folder.getId(), toTreeNode(folder, new ArrayList<>()));
@@ -67,6 +84,14 @@ public class DocumentFolderService {
         } catch (java.io.IOException ex) {
             throw new RuntimeException("Failed to retrieve folder tree", ex);
         }
+    }
+
+    private AppUser requireUser(String username) {
+        if (!StringUtils.hasText(username)) {
+            throw new org.springframework.security.access.AccessDeniedException("Authentication required");
+        }
+        return appUserRepository.findByUsernameIgnoreCaseWithFallback(username)
+            .orElseThrow(() -> new org.springframework.security.access.AccessDeniedException("User not found"));
     }
 
     @Transactional
@@ -220,7 +245,8 @@ public class DocumentFolderService {
                 field.getLabel(),
                 field.getType(),
                 field.isRequired(),
-                field.getHint()
+                field.getHint(),
+                field.getCodeTableCode()
             ))
             .toList();
     }
@@ -251,6 +277,7 @@ public class DocumentFolderService {
             field.setType(request.type());
             field.setRequired(request.required());
             field.setHint(normalizeHint(request.hint()));
+            field.setCodeTableCode(request.codeTableCode() != null ? request.codeTableCode().trim().toUpperCase() : null);
             fields.add(field);
         }
         return fields;
@@ -282,6 +309,7 @@ public class DocumentFolderService {
             clone.setType(field.getType());
             clone.setRequired(field.isRequired());
             clone.setHint(field.getHint());
+            clone.setCodeTableCode(field.getCodeTableCode());
             copied.add(clone);
         }
         return copied;

@@ -12,9 +12,12 @@ public record DocumentUploadRequest(
     @Size(max = 1024) String description,
     @NotBlank @Size(max = 160) String owner,
     @Size(max = 120) String category,
+    @NotBlank String documentDate,
+    @NotBlank String expiryDate,
     Set<@Size(max = 40) String> tags,
     @NotNull String folderId,
     @NotNull String approverId,
+    @NotBlank String supervisorId,
     Map<String, String> metadata
 ) {
 }

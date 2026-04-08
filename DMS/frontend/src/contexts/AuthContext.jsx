@@ -62,7 +62,6 @@ export function AuthProvider({ children }) {
 
   const functionsAccess = useMemo(() => ({
     'My Dashboard': true,
-    'Workspace Management': role === Roles.SYS_ADMIN,
     'System Administration': role === Roles.SYS_ADMIN,
     'User Management': role === Roles.SYS_ADMIN,
     'Document Management': [Roles.SYS_ADMIN, Roles.USER_ADMIN, Roles.DOC_ADMIN, Roles.DOC_VIEWER].includes(role),
@@ -128,6 +127,9 @@ export function AuthProvider({ children }) {
   }
 
   const logout = () => {
+    try {
+      localStorage.setItem('dms_last_logout_at', new Date().toISOString())
+    } catch (e) {}
     try {
       localStorage.removeItem('dms_auth')
     } catch (e) {}

@@ -6,6 +6,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.sql.Timestamp;
+import java.sql.Types;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -43,6 +44,9 @@ public class DocumentRepository extends BaseOpenSearchRepository<Document> {
     @Autowired(required = false)
     private DataSource dataSource;
 
+    private volatile boolean statusColumnChecked;
+    private volatile boolean supervisorColumnChecked;
+
     @Autowired
     public DocumentRepository(OpenSearchClient openSearchClient, ObjectMapper objectMapper) {
         super(openSearchClient, objectMapper, Document.class);
@@ -60,11 +64,12 @@ public class DocumentRepository extends BaseOpenSearchRepository<Document> {
         }
 
         try (Connection conn = dataSource.getConnection()) {
+            ensureSupervisorColumn(conn);
             List<Document> documents = new ArrayList<>();
             Map<String, Document> byId = new HashMap<>();
 
             try (PreparedStatement ps = conn.prepareStatement(
-                "SELECT id, title, description, owner, category, status, folder_id, approver_id, created_at, updated_at, approval_requested_at, approval_decided_at FROM documents");
+                "SELECT id, title, description, owner, category, status, folder_id, approver_id, supervisor_id, created_at, updated_at, approval_requested_at, approval_decided_at FROM documents");
                  ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     Document document = new Document();
@@ -88,6 +93,10 @@ public class DocumentRepository extends BaseOpenSearchRepository<Document> {
                     if (!rs.wasNull()) {
                         document.setApproverId(String.valueOf(approverId));
                     }
+                    long supervisorId = rs.getLong("supervisor_id");
+                    if (!rs.wasNull()) {
+                        document.setSupervisorId(String.valueOf(supervisorId));
+                    }
                     document.setCreatedAt(toInstant(rs.getTimestamp("created_at")));
                     document.setUpdatedAt(toInstant(rs.getTimestamp("updated_at")));
                     document.setApprovalRequestedAt(toInstant(rs.getTimestamp("approval_requested_at")));
@@ -110,6 +119,9 @@ public class DocumentRepository extends BaseOpenSearchRepository<Document> {
                 }
                 if (StringUtils.hasText(document.getApproverId())) {
                     document.setApprover(userMap.get(document.getApproverId()));
+                }
+                if (StringUtils.hasText(document.getSupervisorId())) {
+                    document.setSupervisor(userMap.get(document.getSupervisorId()));
                 }
             }
 
@@ -199,6 +211,9 @@ public class DocumentRepository extends BaseOpenSearchRepository<Document> {
         }
 
         try (Connection conn = dataSource.getConnection()) {
+            ensureStatusColumnSupportsRejected(conn);
+            ensureSupervisorColumn(conn);
+
             Long id = parseLong(entity.getId());
             Long folderId = parseLong(entity.getFolderId());
             if (folderId == null && entity.getFolder() != null) {
@@ -208,12 +223,16 @@ public class DocumentRepository extends BaseOpenSearchRepository<Document> {
             if (approverId == null && entity.getApprover() != null) {
                 approverId = parseLong(entity.getApprover().getId());
             }
+            Long supervisorId = parseLong(entity.getSupervisorId());
+            if (supervisorId == null && entity.getSupervisor() != null) {
+                supervisorId = parseLong(entity.getSupervisor().getId());
+            }
 
             if (id == null) {
                 try (PreparedStatement ps = conn.prepareStatement(
-                    "INSERT INTO documents(category, created_at, description, owner, status, title, updated_at, folder_id, approval_decided_at, approval_requested_at, approver_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO documents(category, created_at, description, owner, status, title, updated_at, folder_id, approval_decided_at, approval_requested_at, approver_id, supervisor_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     Statement.RETURN_GENERATED_KEYS)) {
-                    applyDocumentColumns(ps, entity, folderId, approverId);
+                    applyDocumentColumns(ps, entity, folderId, approverId, supervisorId);
                     ps.executeUpdate();
                     try (ResultSet keys = ps.getGeneratedKeys()) {
                         if (keys.next()) {
@@ -224,9 +243,9 @@ public class DocumentRepository extends BaseOpenSearchRepository<Document> {
                 }
             } else {
                 try (PreparedStatement ps = conn.prepareStatement(
-                    "UPDATE documents SET category=?, created_at=?, description=?, owner=?, status=?, title=?, updated_at=?, folder_id=?, approval_decided_at=?, approval_requested_at=?, approver_id=? WHERE id=?")) {
-                    applyDocumentColumns(ps, entity, folderId, approverId);
-                    ps.setLong(12, id);
+                    "UPDATE documents SET category=?, created_at=?, description=?, owner=?, status=?, title=?, updated_at=?, folder_id=?, approval_decided_at=?, approval_requested_at=?, approver_id=?, supervisor_id=? WHERE id=?")) {
+                    applyDocumentColumns(ps, entity, folderId, approverId, supervisorId);
+                    ps.setLong(13, id);
                     ps.executeUpdate();
                 }
             }
@@ -411,7 +430,7 @@ public class DocumentRepository extends BaseOpenSearchRepository<Document> {
             .toList();
     }
 
-    private void applyDocumentColumns(PreparedStatement ps, Document entity, Long folderId, Long approverId) throws Exception {
+    private void applyDocumentColumns(PreparedStatement ps, Document entity, Long folderId, Long approverId, Long supervisorId) throws Exception {
         ps.setString(1, entity.getCategory());
         ps.setTimestamp(2, toTimestamp(entity.getCreatedAt()));
         ps.setString(3, entity.getDescription());
@@ -427,9 +446,84 @@ public class DocumentRepository extends BaseOpenSearchRepository<Document> {
         ps.setTimestamp(9, toTimestamp(entity.getApprovalDecidedAt()));
         ps.setTimestamp(10, toTimestamp(entity.getApprovalRequestedAt()));
         if (approverId == null) {
-            ps.setNull(11, java.sql.Types.BIGINT);
+            ps.setNull(11, Types.BIGINT);
         } else {
             ps.setLong(11, approverId);
+        }
+        if (supervisorId == null) {
+            ps.setNull(12, Types.BIGINT);
+        } else {
+            ps.setLong(12, supervisorId);
+        }
+    }
+
+    private void ensureSupervisorColumn(Connection conn) throws Exception {
+        if (supervisorColumnChecked) {
+            return;
+        }
+
+        synchronized (this) {
+            if (supervisorColumnChecked) {
+                return;
+            }
+            try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT 1 FROM information_schema.columns "
+                    + "WHERE table_schema = DATABASE() AND table_name = 'documents' AND column_name = 'supervisor_id' LIMIT 1");
+                 ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    try (Statement statement = conn.createStatement()) {
+                        statement.execute("ALTER TABLE documents ADD COLUMN supervisor_id BIGINT NULL");
+                    }
+                }
+            }
+            supervisorColumnChecked = true;
+        }
+    }
+
+    private void ensureStatusColumnSupportsRejected(Connection conn) throws Exception {
+        if (statusColumnChecked) {
+            return;
+        }
+
+        synchronized (this) {
+            if (statusColumnChecked) {
+                return;
+            }
+
+            try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT data_type, column_type, character_maximum_length "
+                    + "FROM information_schema.columns "
+                    + "WHERE table_schema = DATABASE() AND table_name = 'documents' AND column_name = 'status'");
+                 ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    statusColumnChecked = true;
+                    return;
+                }
+
+                String dataType = rs.getString("data_type");
+                String columnType = rs.getString("column_type");
+                int maxLength = rs.getInt("character_maximum_length");
+                boolean hasLength = !rs.wasNull();
+
+                if ("enum".equalsIgnoreCase(dataType)) {
+                    String normalized = columnType == null ? "" : columnType.toUpperCase();
+                    if (!normalized.contains("'REJECTED'")) {
+                        try (Statement statement = conn.createStatement()) {
+                            statement.execute(
+                                "ALTER TABLE documents MODIFY COLUMN status "
+                                    + "ENUM('DRAFT','ACTIVE','REJECTED','ARCHIVED') NOT NULL DEFAULT 'DRAFT'");
+                        }
+                    }
+                } else if (("varchar".equalsIgnoreCase(dataType) || "char".equalsIgnoreCase(dataType))
+                    && hasLength && maxLength < DocumentStatus.REJECTED.name().length()) {
+                    try (Statement statement = conn.createStatement()) {
+                        statement.execute(
+                            "ALTER TABLE documents MODIFY COLUMN status VARCHAR(32) NOT NULL DEFAULT 'DRAFT'");
+                    }
+                }
+            }
+
+            statusColumnChecked = true;
         }
     }
 

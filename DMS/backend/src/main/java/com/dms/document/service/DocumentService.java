@@ -5,6 +5,7 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -70,6 +71,11 @@ import com.dms.user.repository.AppUserRepository;
 @Service
 public class DocumentService {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(DocumentService.class);
+    private static final String META_DOCUMENT_DATE = "documentDate";
+    private static final String META_APPROVAL_DATE = "approvalDate";
+    private static final String META_EXPIRY_DATE = "expiryDate";
+    private static final String META_ARCHIVE_DATE = "archiveDate";
+    private static final String META_REMINDER_DATE = "reminderDate";
 
     private final DocumentRepository documentRepository;
     private final DocumentVersionRepository documentVersionRepository;
@@ -133,7 +139,9 @@ public class DocumentService {
                 .filter(document -> filter.tags() == null || filter.tags().isEmpty() ||
                     document.getTags().stream().map(tag -> tag.toLowerCase(Locale.ROOT)).collect(Collectors.toSet())
                         .containsAll(filter.tags().stream().map(tag -> tag.toLowerCase(Locale.ROOT)).collect(Collectors.toSet())))
-                .toList();
+                .collect(Collectors.toCollection(ArrayList::new));
+
+            applySort(filtered, pageable.getSort());
 
             int from = pageable.getPageNumber() * pageable.getPageSize();
             int to = Math.min(from + pageable.getPageSize(), filtered.size());
@@ -154,6 +162,72 @@ public class DocumentService {
 
     private boolean containsIgnoreCase(String source, String query) {
         return source != null && query != null && source.toLowerCase(Locale.ROOT).contains(query.toLowerCase(Locale.ROOT));
+    }
+
+    private void applySort(List<Document> documents, Sort sort) {
+        if (documents == null || documents.isEmpty()) {
+            return;
+        }
+        Comparator<Document> comparator = buildSortComparator(sort);
+        if (comparator != null) {
+            documents.sort(comparator);
+        }
+    }
+
+    private Comparator<Document> buildSortComparator(Sort sort) {
+        Comparator<Document> comparator = null;
+        if (sort != null && sort.isSorted()) {
+            for (Sort.Order order : sort) {
+                Comparator<Document> fieldComparator = comparatorForProperty(order.getProperty());
+                if (fieldComparator == null) {
+                    continue;
+                }
+                if (order.isDescending()) {
+                    fieldComparator = fieldComparator.reversed();
+                }
+                comparator = comparator == null ? fieldComparator : comparator.thenComparing(fieldComparator);
+            }
+        }
+
+        if (comparator == null) {
+            comparator = comparatorForProperty("createdAt").reversed();
+        }
+
+        return comparator
+            .thenComparing(document -> normalizeSortText(document.getTitle()), Comparator.nullsLast(String::compareTo))
+            .thenComparing(Document::getId, Comparator.nullsLast(String::compareTo));
+    }
+
+    private Comparator<Document> comparatorForProperty(String property) {
+        if (!StringUtils.hasText(property)) {
+            return null;
+        }
+
+        return switch (property) {
+            case "createdAt" -> Comparator.comparing(Document::getCreatedAt, Comparator.nullsLast(Comparator.naturalOrder()));
+            case "updatedAt" -> Comparator.comparing(Document::getUpdatedAt, Comparator.nullsLast(Comparator.naturalOrder()));
+            case "title" -> Comparator.comparing(document -> normalizeSortText(document.getTitle()), Comparator.nullsLast(String::compareTo));
+            case "status" -> Comparator.comparing(document -> document.getStatus() == null ? "" : document.getStatus().name(), Comparator.nullsLast(String::compareTo));
+            case "latestSizeBytes" -> Comparator.comparingLong(this::latestSizeBytes);
+            default -> null;
+        };
+    }
+
+    private String normalizeSortText(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        return value.toLowerCase(Locale.ROOT);
+    }
+
+    private long latestSizeBytes(Document document) {
+        if (document == null || document.getVersions() == null || document.getVersions().isEmpty()) {
+            return 0L;
+        }
+        return document.getVersions().stream()
+            .max(Comparator.comparingInt(DocumentVersion::getVersionNumber))
+            .map(DocumentVersion::getSizeBytes)
+            .orElse(0L);
     }
 
     private String extractDocumentFolderId(Document document) {
@@ -231,11 +305,15 @@ public class DocumentService {
             assertCanWrite(folder, user);
             document.setFolder(folder);
             document.setFolderId(folder.getId());
-            document.setMetadataValues(resolveMetadataValues(folder, request.metadata()));
+            Map<String, String> resolvedMetadata = resolveMetadataValues(folder, request.metadata());
             AppUser approver = requireApprover(request.approverId());
             assertApproverEligible(user, approver);
             document.setApprover(approver);
             document.setApproverId(approver.getId());
+            AppUser supervisor = requireSupervisor(request.supervisorId());
+            assertSupervisorEligible(user, supervisor);
+            document.setSupervisor(supervisor);
+            document.setSupervisorId(supervisor.getId());
             document.setStatus(DocumentStatus.DRAFT);
 
             Instant now = Instant.now(clock);
@@ -243,6 +321,13 @@ public class DocumentService {
             document.setUpdatedAt(now);
             document.setApprovalRequestedAt(now);
             document.setApprovalDecidedAt(null);
+            document.setMetadataValues(applySystemDateMetadata(
+                resolvedMetadata,
+                request.documentDate(),
+                request.expiryDate(),
+                null,
+                null
+            ));
 
             document.addVersion(buildVersion(document, safeFile, now, 1));
 
@@ -369,6 +454,29 @@ public class DocumentService {
         }
     }
 
+    @Transactional
+    public void disposeDocumentByRetention(String documentId, java.time.LocalDate disposalDate, String retentionRuleId) {
+        try {
+            Document document = findDocument(documentId);
+            Instant now = Instant.now(clock);
+            completeApprovalTask(document, TaskStatus.CANCELLED, "Disposed by retention policy", now);
+            resolveWorkflowTask(document).ifPresent(task -> {
+                try {
+                    task.setStatus(TaskStatus.CANCELLED);
+                    task.setWorkflowStep("Disposed by retention policy");
+                    task.setUpdatedAt(now);
+                    userTaskRepository.save(task);
+                } catch (IOException ex) {
+                    log.warn("Failed to cancel workflow task during retention disposal", ex);
+                }
+            });
+            documentRepository.deleteById(String.valueOf(documentId));
+            log.info("Disposed document {} by retention rule {} on {}", documentId, retentionRuleId, disposalDate);
+        } catch (IOException ex) {
+            throw new RuntimeException("Failed to dispose document by retention", ex);
+        }
+    }
+
     @Transactional(readOnly = true)
     public DocumentVersion getVersion(String documentId, String versionId, String username) {
         AppUser user = requireUser(username);
@@ -426,6 +534,22 @@ public class DocumentService {
         }
     }
 
+    @Transactional(readOnly = true)
+    public List<ApproverOptionResponse> listEligibleSupervisors(String username) {
+        requireUser(username);
+        try {
+            return appUserRepository.findAll().stream()
+                .sorted(Comparator.comparing(
+                    candidate -> StringUtils.hasText(candidate.getDisplayName()) ? candidate.getDisplayName() : candidate.getUsername(),
+                    String.CASE_INSENSITIVE_ORDER
+                ))
+                .map(this::toApproverOption)
+                .toList();
+        } catch (IOException ex) {
+            throw new RuntimeException("Failed to list eligible supervisors", ex);
+        }
+    }
+
     @Transactional
     public DocumentDetailsResponse addApprovalNote(String documentId, DocumentApprovalDecisionRequest request, String username) {
         try {
@@ -463,6 +587,13 @@ public class DocumentService {
             }
             document.setStatus(DocumentStatus.ACTIVE);
             document.setApprovalDecidedAt(now);
+            document.setMetadataValues(applySystemDateMetadata(
+                document.getMetadataValues(),
+                null,
+                null,
+                now,
+                document.getMetadataValues() != null ? document.getMetadataValues().get(META_REMINDER_DATE) : null
+            ));
             document.setUpdatedAt(now);
             Document saved = documentRepository.save(document);
             completeApprovalTask(saved, TaskStatus.COMPLETED, "Approved", now);
@@ -490,9 +621,81 @@ public class DocumentService {
             document.setUpdatedAt(now);
             Document saved = documentRepository.save(document);
             completeApprovalTask(saved, TaskStatus.COMPLETED, "Rejected", now);
+            createOrUpdateSupervisorRejectionTask(saved, actor, request != null ? request.note() : null, now);
             return toDetails(saved);
         } catch (IOException ex) {
             throw new RuntimeException("Failed to reject document", ex);
+        }
+    }
+
+    @Transactional
+    public DocumentDetailsResponse delegateApproval(String documentId, DocumentApprovalDecisionRequest request, String username) {
+        try {
+            AppUser actor = requireUser(username);
+            Document document = findDocument(documentId);
+            assertCanManageApproval(document, actor);
+            if (document.getStatus() != DocumentStatus.DRAFT) {
+                throw new InvalidDocumentException("Document is not awaiting approval");
+            }
+            if (request == null || !StringUtils.hasText(request.approverId())) {
+                throw new InvalidDocumentException("A delegate approver is required");
+            }
+            AppUser delegate = requireApprover(request.approverId().trim());
+            assertApproverEligible(actor, delegate);
+
+            Instant now = Instant.now(clock);
+            appendApprovalNote(document, actor, buildDelegationNote(delegate, request.note()), now);
+            document.setApprover(delegate);
+            document.setApprovalRequestedAt(now);
+            document.setApprovalDecidedAt(null);
+            document.setUpdatedAt(now);
+
+            Document saved = documentRepository.save(document);
+            reassignApprovalTask(saved, delegate, now);
+            return toDetails(saved);
+        } catch (IOException ex) {
+            throw new RuntimeException("Failed to delegate approval", ex);
+        }
+    }
+
+    private void createOrUpdateSupervisorRejectionTask(Document document, AppUser approver, String rejectionNote, Instant now) {
+        try {
+            if (document == null || !StringUtils.hasText(document.getId())) {
+                return;
+            }
+            AppUser supervisor = document.getSupervisor();
+            if (supervisor == null && StringUtils.hasText(document.getSupervisorId())) {
+                supervisor = appUserRepository.findById(document.getSupervisorId()).orElse(null);
+            }
+            if (supervisor == null) {
+                return;
+            }
+
+            String note = StringUtils.hasText(rejectionNote)
+                ? rejectionNote.trim()
+                : "No note provided.";
+            String approverName = approver != null && StringUtils.hasText(approver.getDisplayName())
+                ? approver.getDisplayName()
+                : approver != null ? approver.getUsername() : "Approver";
+
+            UserTask task = resolveRejectionTask(document).orElseGet(UserTask::new);
+            task.setTitle("Revise rejected document: \"" + document.getTitle() + "\"");
+            task.setDescription("Document rejected by " + approverName + ". Update metadata/content and resubmit. Note: " + note);
+            task.setStatus(TaskStatus.PENDING);
+            task.setPriority(TaskPriority.HIGH);
+            task.setTaskType(TaskType.REJECTION);
+            task.setWorkflowStep("Rejected - supervisor follow-up");
+            task.setDocumentId(document.getId());
+            task.setDocumentTitle(document.getTitle());
+            task.setDueDate(LocalDate.now(clock).plusDays(2));
+            task.setAssignee(supervisor);
+            if (task.getCreatedAt() == null) {
+                task.setCreatedAt(now);
+            }
+            task.setUpdatedAt(now);
+            userTaskRepository.save(task);
+        } catch (IOException ex) {
+            log.warn("Failed to create supervisor rejection task", ex);
         }
     }
 
@@ -524,6 +727,18 @@ public class DocumentService {
         }
     }
 
+    private AppUser requireSupervisor(String supervisorId) {
+        try {
+            if (!StringUtils.hasText(supervisorId)) {
+                throw new InvalidDocumentException("Supervisor selection is required");
+            }
+            return appUserRepository.findById(supervisorId)
+                .orElseThrow(() -> new InvalidDocumentException("Supervisor not found"));
+        } catch (IOException ex) {
+            throw new RuntimeException("Failed to retrieve supervisor", ex);
+        }
+    }
+
     private void assertApproverEligible(AppUser requester, AppUser approver) {
         if (requester == null || approver == null) {
             throw new InvalidDocumentException("Approver selection is required");
@@ -537,6 +752,13 @@ public class DocumentService {
         if (!sharesGroup(requester, approver)) {
             throw new InvalidDocumentException("Approver must belong to one of your groups");
         }
+    }
+
+    private void assertSupervisorEligible(AppUser requester, AppUser supervisor) {
+        if (requester == null || supervisor == null) {
+            throw new InvalidDocumentException("Supervisor selection is required");
+        }
+        // Supervisors can be selected across groups.
     }
 
     private boolean sharesGroup(AppUser first, AppUser second) {
@@ -611,6 +833,35 @@ public class DocumentService {
         }
     }
 
+    private void reassignApprovalTask(Document document, AppUser delegate, Instant timestamp) {
+        try {
+            Optional<UserTask> existing = resolveApprovalTask(document);
+            if (existing.isEmpty()) {
+                createApprovalTask(document, delegate, timestamp);
+                return;
+            }
+            UserTask task = existing.get();
+            task.setAssignee(delegate);
+            task.setStatus(TaskStatus.PENDING);
+            task.setWorkflowStep("Awaiting approval (delegated)");
+            task.setUpdatedAt(timestamp);
+            userTaskRepository.save(task);
+        } catch (IOException ex) {
+            log.warn("Failed to reassign approval task", ex);
+        }
+    }
+
+    private String buildDelegationNote(AppUser delegate, String rawNote) {
+        String delegateName = StringUtils.hasText(delegate.getDisplayName())
+            ? delegate.getDisplayName()
+            : delegate.getUsername();
+        String baseNote = "Delegated approval to " + delegateName + ".";
+        if (!StringUtils.hasText(rawNote)) {
+            return baseNote;
+        }
+        return baseNote + " " + rawNote.trim();
+    }
+
     private void completeApprovalTask(Document document, TaskStatus status, String workflowStep, Instant timestamp) {
         try {
             resolveApprovalTask(document).ifPresent(task -> {
@@ -648,6 +899,20 @@ public class DocumentService {
             return Optional.empty();
         }
         return userTaskRepository.findByDocumentIdAndTaskType(String.valueOf(document.getId()), TaskType.APPROVAL);
+    }
+
+    private Optional<UserTask> resolveWorkflowTask(Document document) throws IOException {
+        if (document == null || document.getId() == null) {
+            return Optional.empty();
+        }
+        return userTaskRepository.findByDocumentIdAndTaskType(String.valueOf(document.getId()), TaskType.WORKFLOW);
+    }
+
+    private Optional<UserTask> resolveRejectionTask(Document document) throws IOException {
+        if (document == null || document.getId() == null) {
+            return Optional.empty();
+        }
+        return userTaskRepository.findByDocumentIdAndTaskType(String.valueOf(document.getId()), TaskType.REJECTION);
     }
 
     private ApproverOptionResponse toApproverOption(AppUser candidate) {
@@ -824,8 +1089,10 @@ public class DocumentService {
             document.getId(),
             document.getTitle(),
             document.getOwner(),
+            supervisorLabel(document),
             document.getCategory(),
             document.getStatus(),
+            calculateConfidenceScore(document),
             detachTags(document),
             toFolderInfo(document.getFolder()),
             latestVersion,
@@ -845,8 +1112,10 @@ public class DocumentService {
             document.getTitle(),
             document.getDescription(),
             document.getOwner(),
+            supervisorLabel(document),
             document.getCategory(),
             document.getStatus(),
+            calculateConfidenceScore(document),
             detachTags(document),
             detachMetadata(document),
             toFolderInfo(document.getFolder()),
@@ -856,6 +1125,43 @@ public class DocumentService {
             toApprovalInfo(document),
             toApprovalNotes(document)
         );
+    }
+
+    private int calculateConfidenceScore(Document document) {
+        if (document == null) {
+            return 0;
+        }
+
+        List<FolderMetadataField> template = document.getFolder() != null ? document.getFolder().getMetadataTemplate() : null;
+        if (template == null || template.isEmpty()) {
+            return 100;
+        }
+
+        Map<String, String> values = document.getMetadataValues();
+        int filled = 0;
+        for (FolderMetadataField field : template) {
+            String value = values != null ? values.get(field.getKey()) : null;
+            if (StringUtils.hasText(value)) {
+                filled++;
+            }
+        }
+
+        double ratio = (double) filled / (double) template.size();
+        int score = (int) Math.round(ratio * 100.0d);
+        return Math.max(0, Math.min(100, score));
+    }
+
+    private String supervisorLabel(Document document) {
+        if (document == null) {
+            return null;
+        }
+        if (document.getSupervisor() != null) {
+            if (StringUtils.hasText(document.getSupervisor().getUsername())) {
+                return document.getSupervisor().getUsername();
+            }
+            return document.getSupervisor().getId();
+        }
+        return document.getSupervisorId();
     }
 
     private DocumentFolder findFolder(String folderId) {
@@ -916,7 +1222,8 @@ public class DocumentService {
                 field.getLabel(),
                 field.getType(),
                 field.isRequired(),
-                field.getHint()
+                field.getHint(),
+                field.getCodeTableCode()
             ))
             .toList();
     }
@@ -951,14 +1258,6 @@ public class DocumentService {
     }
 
     private Map<String, String> resolveMetadataValues(DocumentFolder folder, Map<String, String> rawMetadata) {
-        if (folder == null) {
-            return new LinkedHashMap<>();
-        }
-        List<FolderMetadataField> template = folder.getMetadataTemplate();
-        if (template == null || template.isEmpty()) {
-            return new LinkedHashMap<>();
-        }
-
         Map<String, String> sanitizedInput = new HashMap<>();
         if (rawMetadata != null) {
             rawMetadata.forEach((key, value) -> {
@@ -969,18 +1268,103 @@ public class DocumentService {
         }
 
         Map<String, String> resolved = new LinkedHashMap<>();
-        for (FolderMetadataField field : template) {
-            String provided = sanitizedInput.get(field.getKey());
-            String normalized = normalizeMetadataValue(field, provided);
-            if (!StringUtils.hasText(normalized)) {
-                if (field.isRequired()) {
-                    throw new InvalidDocumentException("Metadata field '" + field.getLabel() + "' is required for folder '" + folder.getName() + "'");
+        if (folder != null) {
+            List<FolderMetadataField> template = folder.getMetadataTemplate();
+            if (template != null && !template.isEmpty()) {
+                for (FolderMetadataField field : template) {
+                    String provided = sanitizedInput.get(field.getKey());
+                    String normalized = normalizeMetadataValue(field, provided);
+                    if (!StringUtils.hasText(normalized)) {
+                        if (field.isRequired()) {
+                            throw new InvalidDocumentException("Metadata field '" + field.getLabel() + "' is required for folder '" + folder.getName() + "'");
+                        }
+                    } else {
+                        resolved.put(field.getKey(), normalized);
+                    }
                 }
-            } else {
-                resolved.put(field.getKey(), normalized);
             }
         }
+
+        copySystemDateMetadata(sanitizedInput, resolved);
         return resolved;
+    }
+
+    private void copySystemDateMetadata(Map<String, String> source, Map<String, String> target) {
+        copyIsoDateField(source, target, META_DOCUMENT_DATE);
+        copyIsoDateField(source, target, META_EXPIRY_DATE);
+        copyIsoDateField(source, target, META_APPROVAL_DATE);
+        copyIsoDateField(source, target, META_ARCHIVE_DATE);
+        copyIsoDateField(source, target, META_REMINDER_DATE);
+    }
+
+    private void copyIsoDateField(Map<String, String> source, Map<String, String> target, String key) {
+        String rawValue = source.get(key);
+        if (!StringUtils.hasText(rawValue)) {
+            return;
+        }
+        try {
+            target.put(key, LocalDate.parse(rawValue.trim()).toString());
+        } catch (DateTimeParseException ex) {
+            throw new InvalidDocumentException("Metadata field '" + key + "' must be a valid ISO-8601 date (YYYY-MM-DD)");
+        }
+    }
+
+    private Map<String, String> applySystemDateMetadata(
+        Map<String, String> currentMetadata,
+        String documentDateRaw,
+        String expiryDateRaw,
+        Instant approvalDate,
+        String reminderDateRaw
+    ) {
+        Map<String, String> next = new LinkedHashMap<>();
+        if (currentMetadata != null) {
+            next.putAll(currentMetadata);
+        }
+
+        LocalDate documentDate = parseRequiredDate(
+            documentDateRaw,
+            next.get(META_DOCUMENT_DATE),
+            "Document date is required and must follow YYYY-MM-DD"
+        );
+        LocalDate expiryDate = parseRequiredDate(
+            expiryDateRaw,
+            next.get(META_EXPIRY_DATE),
+            "Expiry date is required and must follow YYYY-MM-DD"
+        );
+        if (expiryDate.isBefore(documentDate)) {
+            throw new InvalidDocumentException("Expiry date cannot be earlier than document date");
+        }
+
+        next.put(META_DOCUMENT_DATE, documentDate.toString());
+        next.put(META_EXPIRY_DATE, expiryDate.toString());
+        next.put(META_ARCHIVE_DATE, expiryDate.plusYears(7).toString());
+
+        if (approvalDate != null) {
+            next.put(META_APPROVAL_DATE, approvalDate.atZone(ZoneOffset.UTC).toLocalDate().toString());
+        }
+        if (StringUtils.hasText(reminderDateRaw)) {
+            next.put(META_REMINDER_DATE, parseDate(reminderDateRaw, "Reminder date must follow YYYY-MM-DD").toString());
+        }
+
+        return next;
+    }
+
+    private LocalDate parseRequiredDate(String preferred, String fallback, String errorMessage) {
+        if (StringUtils.hasText(preferred)) {
+            return parseDate(preferred, errorMessage);
+        }
+        if (StringUtils.hasText(fallback)) {
+            return parseDate(fallback, errorMessage);
+        }
+        throw new InvalidDocumentException(errorMessage);
+    }
+
+    private LocalDate parseDate(String rawValue, String errorMessage) {
+        try {
+            return LocalDate.parse(rawValue.trim());
+        } catch (Exception ex) {
+            throw new InvalidDocumentException(errorMessage);
+        }
     }
 
     private String normalizeMetadataValue(FolderMetadataField field, String rawValue) {
@@ -989,7 +1373,7 @@ public class DocumentService {
         }
         String trimmed = rawValue.trim();
         return switch (field.getType()) {
-            case TEXT -> {
+            case TEXT, DROPDOWN -> {
                 if (trimmed.length() > 1024) {
                     throw new InvalidDocumentException("Metadata field '" + field.getLabel() + "' must be 1024 characters or fewer");
                 }

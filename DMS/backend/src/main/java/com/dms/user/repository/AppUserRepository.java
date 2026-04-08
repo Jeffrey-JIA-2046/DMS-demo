@@ -201,8 +201,31 @@ public class AppUserRepository extends BaseOpenSearchRepository<AppUser> {
 
     @Override
     public List<AppUser> findAll() throws IOException {
-        if (openSearchEnabled || dataSource == null) {
+        if (openSearchEnabled) {
+            try {
+                List<AppUser> fromOpenSearch = super.findAll();
+                if (fromOpenSearch != null && !fromOpenSearch.isEmpty()) {
+                    return fromOpenSearch;
+                }
+            } catch (IOException ex) {
+                if (dataSource == null) {
+                    throw ex;
+                }
+            }
+            if (dataSource != null) {
+                return findAllFromMysql();
+            }
+            return List.of();
+        }
+        if (dataSource == null) {
             return super.findAll();
+        }
+        return findAllFromMysql();
+    }
+
+    private List<AppUser> findAllFromMysql() throws IOException {
+        if (dataSource == null) {
+            return List.of();
         }
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement("SELECT id, username, display_name, password, user_password, role FROM app_users");

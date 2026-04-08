@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import FolderTree from './FolderTree'
 import MetadataTemplateBuilder from './MetadataTemplateBuilder'
 import { findFolderNode, findFolderPath } from '../utils/folders'
-import { describeMetadataField, validateMetadataTemplate } from '../utils/metadataTemplate'
+import { validateMetadataTemplate } from '../utils/metadataTemplate'
 
 const flattenFolders = (nodes = [], trail = []) => {
   const entries = []
@@ -33,6 +33,12 @@ const collectDescendantIds = (node) => {
   return ids
 }
 
+const permissionKeys = [
+  { key: 'canRead', label: 'Read' },
+  { key: 'canWrite', label: 'Write' },
+  { key: 'canDelete', label: 'Delete' },
+]
+
 export default function FolderBrowser({
   nodes = [],
   loading,
@@ -48,7 +54,8 @@ export default function FolderBrowser({
   draggingDocumentId,
   onDocumentDrop,
   canManagePermissions = false,
-  onManagePermissions,
+  onLoadPermissionTemplate,
+  onLoadFolderPermissions,
 }) {
   const [modalMode, setModalMode] = useState(null)
   const [name, setName] = useState('')
@@ -58,6 +65,8 @@ export default function FolderBrowser({
   const [templateError, setTemplateError] = useState('')
   const [editingFolder, setEditingFolder] = useState(null)
   const [editParentId, setEditParentId] = useState(null)
+  const [modalPermissions, setModalPermissions] = useState([])
+  const [permissionsLoading, setPermissionsLoading] = useState(false)
 
   const selectionPath = useMemo(() => findFolderPath(nodes, selectedId), [nodes, selectedId])
   const selectedFolder = useMemo(() => findFolderNode(nodes, selectedId), [nodes, selectedId])
@@ -79,8 +88,55 @@ export default function FolderBrowser({
       setInheritMetadataTemplate(false)
       setEditingFolder(null)
       setEditParentId(null)
+      setModalPermissions([])
+      setPermissionsLoading(false)
     }
   }, [isModalOpen])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadPermissions = async () => {
+      if (!isModalOpen || !canManagePermissions) {
+        return
+      }
+      setPermissionsLoading(true)
+      try {
+        if (modalMode === 'edit' && editingFolder?.id && typeof onLoadFolderPermissions === 'function') {
+          const data = await onLoadFolderPermissions(editingFolder.id)
+          if (!cancelled) {
+            setModalPermissions(Array.isArray(data?.permissions) ? data.permissions : [])
+          }
+          return
+        }
+        if (modalMode === 'create' && typeof onLoadPermissionTemplate === 'function') {
+          const data = await onLoadPermissionTemplate()
+          if (!cancelled) {
+            setModalPermissions(Array.isArray(data?.permissions) ? data.permissions : [])
+          }
+          return
+        }
+        if (!cancelled) {
+          setModalPermissions([])
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setTemplateError(err.message || 'Failed to load folder permissions')
+          setModalPermissions([])
+        }
+      } finally {
+        if (!cancelled) {
+          setPermissionsLoading(false)
+        }
+      }
+    }
+
+    loadPermissions()
+
+    return () => {
+      cancelled = true
+    }
+  }, [isModalOpen, canManagePermissions, modalMode, editingFolder?.id, onLoadFolderPermissions, onLoadPermissionTemplate])
 
   const flatFolderList = useMemo(() => flattenFolders(nodes), [nodes])
 
@@ -128,6 +184,7 @@ export default function FolderBrowser({
       parentId,
       metadataTemplate: shouldInheritTemplate ? [] : normalized,
       inheritMetadataTemplateFromParent: shouldInheritTemplate,
+      permissionEntries: canManagePermissions ? modalPermissions : undefined,
     }
     try {
       if (modalMode === 'edit') {
@@ -184,6 +241,10 @@ export default function FolderBrowser({
   const closeModal = () => setModalMode(null)
   const modalTitle = modalMode === 'edit' ? 'Edit folder' : 'Create new folder'
 
+  const handleModalPermissionToggle = (groupId, key, value) => {
+    setModalPermissions((prev) => prev.map((entry) => (entry.groupId === groupId ? { ...entry, [key]: value } : entry)))
+  }
+
   return (
     <div className="card folder-browser">
       <div className="folder-browser__header">
@@ -223,53 +284,8 @@ export default function FolderBrowser({
           >
             <span aria-hidden className="icon">🗑️</span>
           </button>
-          {canManagePermissions && (
-            <button
-              type="button"
-              className="ghost"
-              onClick={() => onManagePermissions && onManagePermissions(selectedId)}
-              disabled={busy || isModalOpen || !selectedFolder}
-              title={!selectedFolder ? 'Select a folder to manage permissions' : undefined}
-            >
-              Permissions
-            </button>
-          )}
         </div>
       </div>
-      <div className="folder-browser__selection">
-        <p className="folder-selection">
-          {selectedId && selectionPath?.length ? (
-            <>
-              Selected:{' '}
-              {selectionPath.map((part, i) => (
-                <span key={i} className="folder-selection__part">
-                  <span className="folder-selection__icon" aria-hidden>
-                    📁
-                  </span>
-                  <span className="folder-selection__label">{part}</span>
-                  {i < selectionPath.length - 1 && <span className="folder-selection__sep"> / </span>}
-                </span>
-              ))}
-            </>
-          ) : (
-            'Showing all documents'
-          )}
-        </p>
-        <div className="folder-browser__selection-actions" />
-      </div>
-      {selectedTemplate.length > 0 && (
-        <div className="metadata-template-summary">
-          <p className="metadata-template-summary__title">Folder metadata</p>
-          <ul className="metadata-template-summary__list">
-            {selectedTemplate.map((field) => (
-              <li key={field.key}>
-                <strong>{field.label}</strong>
-                <span>{describeMetadataField(field)}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
       {loading ? (
         <p className="pill pill--info">Loading folders…</p>
       ) : nodes?.length ? (
@@ -364,6 +380,49 @@ export default function FolderBrowser({
                 disabled={busy || (modalMode !== 'edit' && inheritMetadataTemplate && nestUnderSelection && Boolean(selectedId))}
                 error={templateError}
               />
+              {canManagePermissions && (
+                <div className="metadata-input-card">
+                  <div className="metadata-input-card__header">
+                    <span>Folder permissions</span>
+                    <small>Assign read/upload-edit/delete access by user group</small>
+                  </div>
+                  {permissionsLoading ? (
+                    <p className="pill pill--info">Loading permissions…</p>
+                  ) : modalPermissions.length ? (
+                    <div className="permissions-matrix" role="region" aria-live="polite">
+                      <div className="permissions-matrix__header">
+                        <span>Group</span>
+                        {permissionKeys.map((item) => (
+                          <span key={item.key}>{item.label}</span>
+                        ))}
+                      </div>
+                      <ul className="permissions-matrix__list">
+                        {modalPermissions.map((entry) => (
+                          <li key={entry.groupId} className="permissions-matrix__row">
+                            <div className="permissions-matrix__group">
+                              <strong>{entry.groupName}</strong>
+                              {entry.groupDescription && <span>{entry.groupDescription}</span>}
+                            </div>
+                            {permissionKeys.map((item) => (
+                              <label key={item.key} className="permission-toggle">
+                                <input
+                                  type="checkbox"
+                                  checked={entry[item.key]}
+                                  onChange={(event) => handleModalPermissionToggle(entry.groupId, item.key, event.target.checked)}
+                                  disabled={busy}
+                                  aria-label={`${item.label} permission for ${entry.groupName}`}
+                                />
+                              </label>
+                            ))}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : (
+                    <p className="empty-state">No groups available yet. Create a user group to assign folder permissions.</p>
+                  )}
+                </div>
+              )}
               {templateError && <p className="feedback feedback--error">{templateError}</p>}
               <div className="modal-layer__actions">
                 <button type="button" className="ghost" onClick={closeModal}>

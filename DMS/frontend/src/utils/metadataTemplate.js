@@ -2,6 +2,7 @@ const FIELD_TYPE_OPTIONS = [
   { value: 'TEXT', label: 'Short text' },
   { value: 'NUMBER', label: 'Number' },
   { value: 'DATE', label: 'Date' },
+  { value: 'DROPDOWN', label: 'Dropdown (code table)' },
 ]
 
 const VALID_TYPES = FIELD_TYPE_OPTIONS.map((option) => option.value)
@@ -14,6 +15,7 @@ export const createEmptyMetadataField = () => ({
   type: 'TEXT',
   required: false,
   hint: '',
+  codeTableCode: '',
 })
 
 const sanitizeField = (field = {}) => {
@@ -22,12 +24,14 @@ const sanitizeField = (field = {}) => {
   const type = VALID_TYPES.includes(field.type) ? field.type : 'TEXT'
   const required = Boolean(field.required)
   const hint = (field.hint ?? '').trim()
+  const codeTableCode = type === 'DROPDOWN' ? (field.codeTableCode ?? '').trim().toUpperCase() || null : null
   return {
     key,
     label,
     type,
     required,
     hint: hint || null,
+    codeTableCode,
   }
 }
 
@@ -128,7 +132,7 @@ export const validateMetadataValues = (template = [], values = {}) => {
       }
       return
     }
-    if (field.type === 'TEXT' && trimmed.length > 1024) {
+    if ((field.type === 'TEXT' || field.type === 'DROPDOWN') && trimmed.length > 1024) {
       errors[field.key] = 'Use 1024 characters or fewer.'
       return
     }

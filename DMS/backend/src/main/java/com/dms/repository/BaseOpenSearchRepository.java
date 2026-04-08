@@ -9,6 +9,7 @@ import java.util.Optional;
 
 import org.opensearch.client.opensearch.OpenSearchClient;
 import org.opensearch.client.opensearch._types.OpenSearchException;
+import org.opensearch.client.opensearch._types.Refresh;
 import org.opensearch.client.opensearch.core.DeleteRequest;
 import org.opensearch.client.opensearch.core.GetRequest;
 import org.opensearch.client.opensearch.core.IndexRequest;
@@ -65,7 +66,8 @@ public abstract class BaseOpenSearchRepository<T> {
         String id = extractId(entity);
         IndexRequest.Builder<T> builder = new IndexRequest.Builder<T>()
             .index(getIndexName())
-            .document(entity);
+            .document(entity)
+            .refresh(Refresh.WaitFor);
         if (id != null && !id.isBlank()) {
             builder.id(id);
         }
@@ -84,6 +86,7 @@ public abstract class BaseOpenSearchRepository<T> {
         DeleteRequest request = new DeleteRequest.Builder()
             .index(getIndexName())
             .id(id)
+            .refresh(Refresh.WaitFor)
             .build();
 
         openSearchClient.delete(request);

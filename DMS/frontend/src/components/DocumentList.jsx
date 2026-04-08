@@ -69,6 +69,8 @@ function DocumentList({
   canRunOcrOnSelected = false,
   canUpload = false,
   onHover = null,
+  onCreateTopicFromDocument = null,
+  onFindRelatedTopics = null,
 }) {
   const { documentPermissions } = useContext(AuthContext)
   const handleDragStart = (event, id) => {
@@ -156,72 +158,99 @@ function DocumentList({
               className="primary"
               onClick={onUpload}
               disabled={!canUpload || loading}
+              aria-label="Upload"
               title={!canUpload ? 'You do not have permission to upload documents' : undefined}
             >
-              Upload
+              <span className="icon" aria-hidden="true">⭱</span>
             </button>
           )}
         </div>
       </div>
       <div className="document-list">
         {items.map((doc) => (
-          <button
-            type="button"
-            key={doc.id}
-            className={`document-list__item ${doc.id === selectedId ? 'is-active' : ''} ${draggingId === doc.id ? 'is-dragging' : ''} ${movingId === doc.id ? 'is-moving' : ''}`}
-            onClick={() => onSelect(doc.id)}
-            onDoubleClick={(event) => {
-              event.preventDefault()
-              onMaximize(doc.id)
-            }}
-            onContextMenu={(e) => handleContextMenu(e, doc.id)}
-            draggable={false}
-            onDragStart={undefined}
-            onDragEnd={undefined}
-            aria-grabbed={false}
-            aria-pressed={doc.id === selectedId}
-            data-document-id={doc.id}
-            onMouseEnter={() => {
-              clearHoverTimer()
-              if (typeof onHover === 'function') {
-                hoverTimerRef.current = setTimeout(() => onHover(doc.id), 5000)
-              }
-            }}
-            onMouseLeave={() => {
-              clearHoverTimer()
-            }}
-          >
-            <div>
-              <p className="document-list__title">
-                <span
-                  className="document-list__icon"
-                  aria-hidden
+          <div key={doc.id} className="document-list__item-row">
+            <button
+              type="button"
+              className={`document-list__item ${doc.id === selectedId ? 'is-active' : ''} ${draggingId === doc.id ? 'is-dragging' : ''} ${movingId === doc.id ? 'is-moving' : ''}`}
+              onClick={() => onSelect(doc.id)}
+              onDoubleClick={(event) => {
+                event.preventDefault()
+                onMaximize(doc.id)
+              }}
+              onContextMenu={(e) => handleContextMenu(e, doc.id)}
+              draggable={false}
+              onDragStart={undefined}
+              onDragEnd={undefined}
+              aria-grabbed={false}
+              aria-pressed={doc.id === selectedId}
+              data-document-id={doc.id}
+              onMouseEnter={() => {
+                clearHoverTimer()
+                if (typeof onHover === 'function') {
+                  hoverTimerRef.current = setTimeout(() => onHover(doc.id), 5000)
+                }
+              }}
+              onMouseLeave={() => {
+                clearHoverTimer()
+              }}
+            >
+              <div>
+                <p className="document-list__title">
+                  <span
+                    className="document-list__icon"
+                    aria-hidden
+                  >
+                    {getIconForFileName(
+                      // Prefer the explicit file name if available, fall back to title
+                      doc.latestVersion && typeof doc.latestVersion === 'object' && doc.latestVersion.fileName
+                        ? doc.latestVersion.fileName
+                        : doc.fileName ?? doc.title
+                    )}
+                  </span>
+                  <span className="document-list__name">{doc.title}</span>
+                </p>
+                <p className="document-list__meta">
+                  {(doc.folder?.breadcrumbs?.join(' / ') ?? 'No folder')} · {doc.category || 'Uncategorized'} · Owner: {doc.owner || 'TBD'} · Supervisor: {doc.supervisor || 'TBD'}
+                </p>
+              </div>
+              <div className="document-list__right">
+                <span className={`badge badge--${STATUS_TONE[doc.status] || 'neutral'}`}>{doc.status}</span>
+                  {movingId === doc.id ? (
+                  <span className="pill pill--info">Moving...</span>
+                ) : (
+                    <>
+                      <small>v{doc.latestVersion} · {formatBytes(doc.latestSizeBytes)}</small>
+                      <small>Confidence {Number.isFinite(doc.confidenceScore) ? doc.confidenceScore : 0}%</small>
+                      {!(documentPermissions?.write ?? false) && <small className="action-lock"> 🔒</small>}
+                    </>
+                )}
+              </div>
+            </button>
+            <div className="document-list__row-actions">
+              {typeof onCreateTopicFromDocument === 'function' && (
+                <button
+                  type="button"
+                  className="ghost icon-btn document-list__topic-btn"
+                  aria-label={`Create topic from ${doc.title}`}
+                  title="Create Topic"
+                  onClick={() => onCreateTopicFromDocument(doc)}
                 >
-                  {getIconForFileName(
-                    // Prefer the explicit file name if available, fall back to title
-                    doc.latestVersion && typeof doc.latestVersion === 'object' && doc.latestVersion.fileName
-                      ? doc.latestVersion.fileName
-                      : doc.fileName ?? doc.title
-                  )}
-                </span>
-                <span className="document-list__name">{doc.title}</span>
-              </p>
-              <p className="document-list__meta">
-                {(doc.folder?.breadcrumbs?.join(' / ') ?? 'No folder')} · {doc.category || 'Uncategorized'} · {doc.owner || 'Owner TBD'}
-              </p>
-            </div>
-            <div className="document-list__right">
-              <span className={`badge badge--${STATUS_TONE[doc.status] || 'neutral'}`}>{doc.status}</span>
-                {movingId === doc.id ? (
-                <span className="pill pill--info">Moving...</span>
-              ) : (
-                  <>
-                    <small>v{doc.latestVersion} · {formatBytes(doc.latestSizeBytes)}</small>
-                    {!(documentPermissions?.write ?? false) && <small className="action-lock"> 🔒</small>}
-                  </>
+                  <span aria-hidden className="icon">🧠</span>
+                </button>
+              )}
+              {typeof onFindRelatedTopics === 'function' && (
+                <button
+                  type="button"
+                  className="ghost icon-btn document-list__topic-btn"
+                  aria-label={`Find related topics for ${doc.title}`}
+                  title="Find related Topic"
+                  onClick={() => onFindRelatedTopics(doc)}
+                >
+                  <span aria-hidden className="icon">🔎</span>
+                </button>
               )}
             </div>
-          </button>
+          </div>
         ))}
         {!items.length && !loading && <p className="empty-state">No documents match the filters. Try adjusting them.</p>}
       </div>

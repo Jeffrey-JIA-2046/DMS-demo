@@ -65,8 +65,22 @@ export const fetchFolderPermissions = async (folderId) => {
   return handleJsonResponse(response)
 }
 
+export const fetchFolderPermissionTemplate = async () => {
+  const response = await fetch(resolveApiUrl('/api/folders/permissions/template'), {
+    headers: { ...authHeaders() },
+  })
+  return handleJsonResponse(response)
+}
+
 export const listApproverOptions = async () => {
   const response = await fetch(resolveApiUrl('/api/documents/approvers'), {
+    headers: { ...authHeaders() },
+  })
+  return handleJsonResponse(response)
+}
+
+export const listSupervisorOptions = async () => {
+  const response = await fetch(resolveApiUrl('/api/documents/supervisors'), {
     headers: { ...authHeaders() },
   })
   return handleJsonResponse(response)
@@ -188,6 +202,15 @@ export const approveDocument = async (documentId, payload = {}) => {
 
 export const rejectDocument = async (documentId, payload = {}) => {
   const response = await fetch(resolveApiUrl(`/api/documents/${documentId}/approval/reject`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(payload),
+  })
+  return handleJsonResponse(response)
+}
+
+export const delegateApproval = async (documentId, payload) => {
+  const response = await fetch(resolveApiUrl(`/api/documents/${documentId}/approval/delegate`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(payload),

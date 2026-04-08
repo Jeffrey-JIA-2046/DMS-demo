@@ -1,12 +1,13 @@
 package com.dms.knowledge.repository;
 
 import java.io.IOException;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 import org.opensearch.client.opensearch.OpenSearchClient;
-import org.opensearch.client.opensearch._types.SortOrder;
+import org.opensearch.client.opensearch._types.Refresh;
 import org.opensearch.client.opensearch.core.SearchRequest;
 import org.opensearch.client.opensearch.core.IndexRequest;
 import org.opensearch.client.opensearch._types.query_dsl.Query;
@@ -44,7 +45,8 @@ public class KnowledgeTopicDocumentLinkRepository extends BaseOpenSearchReposito
 
         IndexRequest.Builder<Map<String, Object>> builder = new IndexRequest.Builder<Map<String, Object>>()
             .index(getIndexName())
-            .document(payload);
+            .document(payload)
+            .refresh(Refresh.WaitFor);
         if (id != null && !id.isBlank()) {
             builder.id(id);
         }
@@ -59,8 +61,8 @@ public class KnowledgeTopicDocumentLinkRepository extends BaseOpenSearchReposito
     @Override
     public Optional<KnowledgeTopicDocumentLink> findById(String id) throws IOException {
         Query query = Query.of(q -> q.bool(b -> b
-            .must(m1 -> m1.term(t -> t.field("entity_type").value(v -> v.stringValue(ENTITY_TYPE))))
-            .must(m2 -> m2.term(t -> t.field("id").value(v -> v.stringValue(id))))));
+            .must(m1 -> m1.term(t -> t.field("entity_type.keyword").value(v -> v.stringValue(ENTITY_TYPE))))
+            .must(m2 -> m2.ids(i -> i.values(id)))));
         SearchRequest request = new SearchRequest.Builder()
             .index(getIndexName())
             .query(query)
@@ -73,8 +75,8 @@ public class KnowledgeTopicDocumentLinkRepository extends BaseOpenSearchReposito
     public List<KnowledgeTopicDocumentLink> findByTopicId(String topicId) {
         try {
             Query termQuery = Query.of(q -> q.bool(b -> b
-                .must(m1 -> m1.term(t -> t.field("entity_type").value(v -> v.stringValue(ENTITY_TYPE))))
-                .must(m2 -> m2.term(t -> t.field("topic_id").value(v -> v.stringValue(topicId))))));
+                .must(m1 -> m1.term(t -> t.field("entity_type.keyword").value(v -> v.stringValue(ENTITY_TYPE))))
+                .must(m2 -> m2.term(t -> t.field("topic_id.keyword").value(v -> v.stringValue(topicId))))));
             SearchRequest request = new SearchRequest.Builder()
                 .index(getIndexName())
                 .query(termQuery)
@@ -102,15 +104,15 @@ public class KnowledgeTopicDocumentLinkRepository extends BaseOpenSearchReposito
     public int countByTopicId(String topicId) {
         try {
             Query termQuery = Query.of(q -> q.bool(b -> b
-                .must(m1 -> m1.term(t -> t.field("entity_type").value(v -> v.stringValue(ENTITY_TYPE))))
-                .must(m2 -> m2.term(t -> t.field("topic_id").value(v -> v.stringValue(topicId))))));
+                .must(m1 -> m1.term(t -> t.field("entity_type.keyword").value(v -> v.stringValue(ENTITY_TYPE))))
+                .must(m2 -> m2.term(t -> t.field("topic_id.keyword").value(v -> v.stringValue(topicId))))));
             SearchRequest request = new SearchRequest.Builder()
                 .index(getIndexName())
                 .query(termQuery)
                 .size(0)
                 .build();
-            
-            return (int) search(request).size();
+
+            return (int) openSearchClient.search(request, KnowledgeTopicDocumentLink.class).hits().total().value();
         } catch (IOException ex) {
             throw new RuntimeException("Failed to count document links", ex);
         }
@@ -119,16 +121,17 @@ public class KnowledgeTopicDocumentLinkRepository extends BaseOpenSearchReposito
     public List<KnowledgeTopicDocumentLink> findByTopicIdOrderByLinkedAtDesc(String topicId) {
         try {
             Query termQuery = Query.of(q -> q.bool(b -> b
-                .must(m1 -> m1.term(t -> t.field("entity_type").value(v -> v.stringValue(ENTITY_TYPE))))
-                .must(m2 -> m2.term(t -> t.field("topic_id").value(v -> v.stringValue(topicId))))));
+                .must(m1 -> m1.term(t -> t.field("entity_type.keyword").value(v -> v.stringValue(ENTITY_TYPE))))
+                .must(m2 -> m2.term(t -> t.field("topic_id.keyword").value(v -> v.stringValue(topicId))))));
             SearchRequest request = new SearchRequest.Builder()
                 .index(getIndexName())
                 .query(termQuery)
-                .sort(s -> s.field(f -> f.field("linked_at").order(SortOrder.Desc)))
                 .size(10000)
                 .build();
-            
-            return search(request);
+
+            List<KnowledgeTopicDocumentLink> results = search(request);
+            results.sort(Comparator.comparing(KnowledgeTopicDocumentLink::getLinkedAt, Comparator.nullsLast(Comparator.reverseOrder())));
+            return results;
         } catch (IOException ex) {
             throw new RuntimeException("Failed to query document links", ex);
         }

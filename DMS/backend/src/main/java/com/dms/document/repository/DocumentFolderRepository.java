@@ -10,6 +10,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Repository;
@@ -40,6 +41,23 @@ public class DocumentFolderRepository extends BaseOpenSearchRepository<DocumentF
     @Autowired
     public DocumentFolderRepository(OpenSearchClient openSearchClient, ObjectMapper objectMapper) {
         super(openSearchClient, objectMapper, DocumentFolder.class);
+    }
+
+    @PostConstruct
+    public void ensureSchema() {
+        if (dataSource == null) return;
+        try (Connection conn = dataSource.getConnection()) {
+            // Add code_table_code column to folder_metadata_fields if not yet present
+            try (ResultSet cols = conn.getMetaData().getColumns(null, null, "folder_metadata_fields", "code_table_code")) {
+                if (!cols.next()) {
+                    try (Statement st = conn.createStatement()) {
+                        st.execute("ALTER TABLE folder_metadata_fields ADD COLUMN code_table_code VARCHAR(64) NULL");
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            // Non-fatal: table may not exist yet (created on first folder save)
+        }
     }
 
     @Override
@@ -91,7 +109,7 @@ public class DocumentFolderRepository extends BaseOpenSearchRepository<DocumentF
             }
 
             try (PreparedStatement ps = conn.prepareStatement(
-                "SELECT folder_id, field_key, field_label, field_type, is_required, field_hint " +
+                "SELECT folder_id, field_key, field_label, field_type, is_required, field_hint, code_table_code " +
                     "FROM folder_metadata_fields ORDER BY folder_id, field_order");
                  ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
@@ -110,6 +128,11 @@ public class DocumentFolderRepository extends BaseOpenSearchRepository<DocumentF
                     }
                     field.setRequired(rs.getBoolean("is_required"));
                     field.setHint(rs.getString("field_hint"));
+                    try {
+                        field.setCodeTableCode(rs.getString("code_table_code"));
+                    } catch (Exception ex) {
+                        // column may not yet exist on older schemas
+                    }
                     folder.getMetadataTemplate().add(field);
                 }
             }
@@ -219,7 +242,7 @@ public class DocumentFolderRepository extends BaseOpenSearchRepository<DocumentF
                 for (int i = 0; i < template.size(); i++) {
                     FolderMetadataField field = template.get(i);
                     try (PreparedStatement insert = conn.prepareStatement(
-                        "INSERT INTO folder_metadata_fields(folder_id, field_hint, field_key, field_label, is_required, field_type, field_order) VALUES (?, ?, ?, ?, ?, ?, ?)")) {
+                        "INSERT INTO folder_metadata_fields(folder_id, field_hint, field_key, field_label, is_required, field_type, field_order, code_table_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")) {
                         insert.setLong(1, id);
                         insert.setString(2, field.getHint());
                         insert.setString(3, field.getKey());
@@ -227,6 +250,7 @@ public class DocumentFolderRepository extends BaseOpenSearchRepository<DocumentF
                         insert.setBoolean(5, field.isRequired());
                         insert.setString(6, field.getType() != null ? field.getType().name() : MetadataFieldType.TEXT.name());
                         insert.setInt(7, i);
+                        insert.setString(8, field.getCodeTableCode());
                         insert.executeUpdate();
                     }
                 }

@@ -82,6 +82,9 @@ public class KnowledgeTopicShare {
 
     public void setTopic(KnowledgeTopic topic) {
         this.topic = topic;
+        if (topic != null) {
+            this.topicId = topic.getId();
+        }
     }
 
     public com.dms.user.model.AppUser getSender() {
@@ -90,6 +93,9 @@ public class KnowledgeTopicShare {
 
     public void setSender(com.dms.user.model.AppUser sender) {
         this.sender = sender;
+        if (sender != null) {
+            this.senderId = sender.getId();
+        }
     }
 
     public com.dms.user.model.AppUser getRecipient() {
@@ -98,5 +104,8 @@ public class KnowledgeTopicShare {
 
     public void setRecipient(com.dms.user.model.AppUser recipient) {
         this.recipient = recipient;
+        if (recipient != null) {
+            this.recipientId = recipient.getId();
+        }
     }
 }

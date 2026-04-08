@@ -3,9 +3,10 @@ import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist/build/pdf'
 import pdfjsWorkerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { AuthContext } from '../contexts/AuthContext'
 import { AnnounceContext } from '../contexts/AnnounceContext'
-import { authHeaders, downloadDocument } from '../api/documents'
+import { authHeaders, downloadDocument, listApproverOptions } from '../api/documents'
 import MetadataFieldInputs from './MetadataFieldInputs'
 import { describeMetadataField, normalizeMetadataValues, validateMetadataValues } from '../utils/metadataTemplate'
+import { fetchActiveCodeTableItems } from '../api/codeTable'
 
 GlobalWorkerOptions.workerSrc = pdfjsWorkerSrc
 // Debug: log the worker src to help diagnose reloads/HMR triggers
@@ -26,6 +27,7 @@ const formatBytes = (bytes) => {
 }
 
 const MAX_PREVIEW_CHARS = 100000
+const MAX_PDF_PREVIEW_CHARS = 120000
 
 const STATUS_TONE = {
   DRAFT: 'warning',
@@ -65,12 +67,14 @@ const buildFormState = (doc) => ({
 const normalizeInitialTab = (value) => (value === 'details' ? 'details' : 'content')
 export default function DocumentDetails({
   document,
+  taskContext,
   onUploadVersion,
   onArchive,
   onSaveMetadata,
   onAddApprovalNote,
   onApprove,
   onReject,
+  onDelegate,
   busy,
   downloadUrlBuilder,
   initialTab = 'content',
@@ -81,12 +85,20 @@ export default function DocumentDetails({
   const [activeTab, setActiveTab] = useState(normalizeInitialTab(initialTab))
   const [previewState, setPreviewState] = useState(createPreviewState)
   const [previewReloadKey, setPreviewReloadKey] = useState(0)
+  const [pdfPager, setPdfPager] = useState({ pageNumber: 1, pageCount: 0, renderingPage: false, status: 'idle' })
+  const [requestedPdfPage, setRequestedPdfPage] = useState(1)
+  const [pdfPageInput, setPdfPageInput] = useState('1')
   const lastRequestedVersionRef = useRef(null)
   const [downloadingMap, setDownloadingMap] = useState({})
   const [printing, setPrinting] = useState(false)
   const [metadataErrors, setMetadataErrors] = useState({})
+  const [documentCategoryOptions, setDocumentCategoryOptions] = useState([])
   const [approvalModal, setApprovalModal] = useState(null)
   const [approvalNote, setApprovalNote] = useState('')
+  const [delegateApproverId, setDelegateApproverId] = useState('')
+  const [delegateOptions, setDelegateOptions] = useState([])
+  const [delegateLoading, setDelegateLoading] = useState(false)
+  const [delegateError, setDelegateError] = useState('')
   const { documentPermissions, currentUser } = useContext(AuthContext)
   const { announce, toast, confirm } = useContext(AnnounceContext)
   const resolvedInitialTab = normalizeInitialTab(initialTab)
@@ -116,12 +128,16 @@ export default function DocumentDetails({
   const openApprovalModal = (mode) => {
     if (!document) return
     setApprovalNote('')
+    setDelegateApproverId('')
+    setDelegateError('')
     setApprovalModal(mode)
   }
 
   const closeApprovalModal = () => {
     setApprovalModal(null)
     setApprovalNote('')
+    setDelegateApproverId('')
+    setDelegateError('')
   }
 
   const handleApprovalModalSubmit = async (event) => {
@@ -132,6 +148,10 @@ export default function DocumentDetails({
       toast && toast('Add a note before saving', { type: 'error' })
       return
     }
+    if (approvalModal === 'delegate' && !delegateApproverId) {
+      toast && toast('Select a user to delegate to', { type: 'error' })
+      return
+    }
     try {
       if (approvalModal === 'note' && typeof onAddApprovalNote === 'function') {
         await onAddApprovalNote(document.id, trimmed)
@@ -139,12 +159,41 @@ export default function DocumentDetails({
         await onApprove(document.id, trimmed)
       } else if (approvalModal === 'reject' && typeof onReject === 'function') {
         await onReject(document.id, trimmed)
+      } else if (approvalModal === 'delegate' && typeof onDelegate === 'function') {
+        await onDelegate(document.id, delegateApproverId, trimmed)
       }
       closeApprovalModal()
     } catch (err) {
       toast && toast(err.message || 'Unable to record approval action', { type: 'error' })
     }
   }
+
+  useEffect(() => {
+    if (approvalModal !== 'delegate') {
+      return
+    }
+    let cancelled = false
+    setDelegateLoading(true)
+    setDelegateError('')
+    listApproverOptions()
+      .then((options) => {
+        if (cancelled) return
+        const normalized = Array.isArray(options) ? options : []
+        setDelegateOptions(normalized)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setDelegateOptions([])
+        setDelegateError(err.message || 'Failed to load approver options')
+      })
+      .finally(() => {
+        if (cancelled) return
+        setDelegateLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [approvalModal])
 
   const handleSubmit = (event) => {
     event?.preventDefault?.()
@@ -188,6 +237,9 @@ export default function DocumentDetails({
     setFileInputKey((prev) => prev + 1)
     setActiveTab(resolvedInitialTab)
     setPreviewState(createPreviewState())
+    setPdfPager({ pageNumber: 1, pageCount: 0, renderingPage: false, status: 'idle' })
+    setRequestedPdfPage(1)
+    setPdfPageInput('1')
     lastRequestedVersionRef.current = null
     setPrinting(false)
     setMetadataErrors({})
@@ -319,6 +371,9 @@ export default function DocumentDetails({
   const handlePreviewRetry = () => {
     lastRequestedVersionRef.current = null
     setPreviewState(createPreviewState())
+    setPdfPager({ pageNumber: 1, pageCount: 0, renderingPage: false, status: 'idle' })
+    setRequestedPdfPage(1)
+    setPdfPageInput('1')
     setPreviewReloadKey((prev) => prev + 1)
   }
 
@@ -326,13 +381,55 @@ export default function DocumentDetails({
   const latestDownloadUrl = latestVersion ? downloadUrlBuilder(document.id, latestVersion.id) : null
   const folderTemplate = document?.folder?.metadataTemplate ?? []
   const metadataValues = document?.metadata ?? {}
+
+  const [codeTableItems, setCodeTableItems] = useState({})
+  useEffect(() => {
+    const dropdownFields = folderTemplate.filter((f) => f.type === 'DROPDOWN' && f.codeTableCode)
+    if (!dropdownFields.length) {
+      setCodeTableItems({})
+      return
+    }
+    const codes = [...new Set(dropdownFields.map((f) => f.codeTableCode))]
+    Promise.all(codes.map((code) => fetchActiveCodeTableItems(code).then((items) => [code, items]).catch(() => [code, []]))).then(
+      (results) => setCodeTableItems(Object.fromEntries(results))
+    )
+  }, [document?.folder?.id])
+
+  useEffect(() => {
+    let cancelled = false
+    fetchActiveCodeTableItems('DOCUMENT_CATEGORY')
+      .then((items) => {
+        if (cancelled) return
+        setDocumentCategoryOptions(Array.isArray(items) ? items : [])
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDocumentCategoryOptions([])
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  const systemMetadataKeys = ['documentDate', 'approvalDate', 'expiryDate', 'archiveDate', 'reminderDate']
+  const systemMetadataLabels = {
+    documentDate: 'Document Date',
+    approvalDate: 'Approval Date',
+    expiryDate: 'Expiry Date',
+    archiveDate: 'Archive Date',
+    reminderDate: 'Reminder Date',
+  }
+  const templateKeys = new Set(folderTemplate.map((field) => field.key))
+  const systemMetadataEntries = systemMetadataKeys
+    .filter((key) => metadataValues[key] && !templateKeys.has(key))
+    .map((key) => ({ key, label: systemMetadataLabels[key], value: metadataValues[key], required: false }))
   const metadataDisplay = (folderTemplate.length
     ? folderTemplate.map((field) => ({
         key: field.key,
         label: field.label,
         value: metadataValues[field.key],
         required: field.required,
-      }))
+      })).concat(systemMetadataEntries)
     : Object.entries(metadataValues).map(([key, value]) => ({ key, label: key, value }))
   ).filter((entry) => entry)
   const statusTone = STATUS_TONE[document?.status] || 'neutral'
@@ -341,10 +438,37 @@ export default function DocumentDetails({
   const isApprover = approvalInfo?.approverUsername && currentUser?.username
     ? approvalInfo.approverUsername.toLowerCase() === currentUser.username.toLowerCase()
     : false
+  const isRetentionTask = taskContext?.taskType === 'RETENTION'
+    && ['PENDING', 'IN_PROGRESS', 'BLOCKED'].includes(taskContext?.status)
   const awaitingApproval = document?.status === 'DRAFT'
   const canEditMetadata = (documentPermissions?.write ?? false) || (isApprover && awaitingApproval)
   const canAddApprovalNote = isApprover && awaitingApproval && typeof onAddApprovalNote === 'function'
-  const canDecideApproval = isApprover && awaitingApproval && typeof onApprove === 'function' && typeof onReject === 'function'
+  const canDecideApproval =
+    ((isApprover && awaitingApproval) || isRetentionTask)
+    && typeof onApprove === 'function'
+    && typeof onReject === 'function'
+  const canDelegateApproval =
+    ((isApprover && awaitingApproval) || isRetentionTask)
+    && typeof onDelegate === 'function'
+  const canPdfNavigate = previewState.status === 'ready' && previewState.mode === 'pdf' && pdfPager.status === 'ready' && pdfPager.pageCount > 1
+  const documentDateValue = form.metadata?.documentDate ?? ''
+  const expiryDateValue = form.metadata?.expiryDate ?? ''
+
+  useEffect(() => {
+    const maxPage = pdfPager.pageCount || 1
+    const safePage = Math.min(Math.max(pdfPager.pageNumber || 1, 1), maxPage)
+    setPdfPageInput(String(safePage))
+  }, [pdfPager.pageNumber, pdfPager.pageCount])
+
+  const commitPdfPageInput = () => {
+    const target = Number(pdfPageInput)
+    const maxPage = pdfPager.pageCount || 1
+    if (Number.isFinite(target) && target >= 1 && target <= maxPage) {
+      setRequestedPdfPage(Math.floor(target))
+    } else {
+      setPdfPageInput(String(Math.min(Math.max(pdfPager.pageNumber || 1, 1), maxPage)))
+    }
+  }
 
   const handlePrintLatest = async () => {
     if (!latestVersion || !document) return
@@ -529,6 +653,10 @@ export default function DocumentDetails({
                 <dd>{document.owner || '—'}</dd>
               </div>
               <div>
+                <dt>Supervisor</dt>
+                <dd>{document.supervisor || '—'}</dd>
+              </div>
+              <div>
                 <dt>Folder</dt>
                 <dd>{document.folder?.breadcrumbs?.join(' / ') || 'No folder'}</dd>
               </div>
@@ -537,6 +665,10 @@ export default function DocumentDetails({
                 <dd>
                   <span className={`badge badge--${statusTone}`}>{document.status}</span>
                 </dd>
+              </div>
+              <div>
+                <dt>Confidence Score</dt>
+                <dd>{Number.isFinite(document.confidenceScore) ? document.confidenceScore : 0}%</dd>
               </div>
               <div>
                 <dt>Category</dt>
@@ -566,7 +698,7 @@ export default function DocumentDetails({
             )}
             <div className="details-card__section approval-card">
               <div className="section-header">
-                <h4>Approval workflow</h4>
+                <h4>{isRetentionTask ? 'Retention disposition' : 'Approval workflow'}</h4>
                 {(canAddApprovalNote || canDecideApproval) && (
                   <div className="approval-card__actions">
                     {canAddApprovalNote && (
@@ -579,6 +711,11 @@ export default function DocumentDetails({
                         <button type="button" className="ghost ghost--small ghost--danger" onClick={() => openApprovalModal('reject')} disabled={busy}>
                           Reject
                         </button>
+                        {canDelegateApproval && (
+                          <button type="button" className="ghost ghost--small" onClick={() => openApprovalModal('delegate')} disabled={busy}>
+                            Delegate
+                          </button>
+                        )}
                         <button type="button" className="primary" onClick={() => openApprovalModal('approve')} disabled={busy}>
                           Approve
                         </button>
@@ -692,25 +829,78 @@ export default function DocumentDetails({
                     </small>
                   </div>
                   <div className="content-panel__actions">
-                    <button type="button" className="ghost icon-btn" onClick={handlePreviewRetry} disabled={previewState.status === 'loading'} title="Refresh preview" aria-label="Refresh preview">
-                      <span aria-hidden className="icon">🔄</span>
-                    </button>
-                    {latestDownloadUrl && (
-                      <button
-                        type="button"
-                        className="ghost icon-btn"
-                        onClick={handlePrintLatest}
-                        disabled={printing}
-                        title={printing ? 'Preparing…' : 'Print'}
-                        aria-label="Print latest version"
-                      >
-                        <span aria-hidden className="icon">🖨️</span>
+                    <div className="content-panel__quick-actions">
+                      <button type="button" className="ghost icon-btn" onClick={handlePreviewRetry} disabled={previewState.status === 'loading'} title="Refresh preview" aria-label="Refresh preview">
+                        <span aria-hidden className="icon">🔄</span>
                       </button>
-                    )}
-                    {latestDownloadUrl && (
-                      <button className="ghost icon-btn" onClick={() => handleDownload(latestVersion)} disabled={!!downloadingMap[latestVersion.id]?.active} title="Download latest" aria-label="Download latest">
-                        <span aria-hidden className="icon">⬇️</span>
-                      </button>
+                      {latestDownloadUrl && (
+                        <button
+                          type="button"
+                          className="ghost icon-btn"
+                          onClick={handlePrintLatest}
+                          disabled={printing}
+                          title={printing ? 'Preparing…' : 'Print'}
+                          aria-label="Print latest version"
+                        >
+                          <span aria-hidden className="icon">🖨️</span>
+                        </button>
+                      )}
+                      {latestDownloadUrl && (
+                        <button className="ghost icon-btn" onClick={() => handleDownload(latestVersion)} disabled={!!downloadingMap[latestVersion.id]?.active} title="Download latest" aria-label="Download latest">
+                          <span aria-hidden className="icon">⬇️</span>
+                        </button>
+                      )}
+                    </div>
+                    {previewState.status === 'ready' && previewState.mode === 'pdf' && (
+                      <div className="content-panel__pager">
+                        <button
+                          type="button"
+                          className="ghost icon-btn"
+                          aria-label="Previous page"
+                          disabled={!canPdfNavigate || pdfPager.pageNumber <= 1 || pdfPager.renderingPage}
+                          onClick={() => setRequestedPdfPage(Math.max(1, pdfPager.pageNumber - 1))}
+                        >
+                          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M15 18l-6-6 6-6" />
+                          </svg>
+                          <span className="sr-only">Previous page</span>
+                        </button>
+                        <span className="content-panel__page">
+                          Page {Math.min(pdfPager.pageNumber, pdfPager.pageCount) || 1} of {pdfPager.pageCount || 1}
+                        </span>
+                        <button
+                          type="button"
+                          className="ghost icon-btn"
+                          aria-label="Next page"
+                          disabled={!canPdfNavigate || pdfPager.pageNumber >= pdfPager.pageCount || pdfPager.renderingPage}
+                          onClick={() => setRequestedPdfPage(Math.min(pdfPager.pageCount || 1, pdfPager.pageNumber + 1))}
+                        >
+                          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M9 6l6 6-6 6" />
+                          </svg>
+                          <span className="sr-only">Next page</span>
+                        </button>
+                        <label className="content-panel__pager-input">
+                          <span className="sr-only">Go to page</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={pdfPager.pageCount || 1}
+                            value={pdfPageInput}
+                            onChange={(event) => setPdfPageInput(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault()
+                                commitPdfPageInput()
+                              }
+                            }}
+                            disabled={!canPdfNavigate || pdfPager.renderingPage}
+                          />
+                        </label>
+                        <button type="button" className="ghost" onClick={commitPdfPageInput} disabled={!canPdfNavigate || pdfPager.renderingPage}>
+                          Go
+                        </button>
+                      </div>
                     )}
                     {downloadingMap[latestVersion?.id] && (
                       <div style={{ marginLeft: 12, display: 'inline-flex', alignItems: 'center' }}>
@@ -756,7 +946,11 @@ export default function DocumentDetails({
                   </>
                 )}
                 {previewState.status === 'ready' && previewState.mode === 'pdf' && previewState.pdfData && (
-                  <PdfPreview data={previewState.pdfData} />
+                  <PdfPreview
+                    data={previewState.pdfData}
+                    requestedPage={requestedPdfPage}
+                    onPagerStateChange={setPdfPager}
+                  />
                 )}
                 {previewState.status === 'empty' && <p className="empty-state">No versions available for preview.</p>}
                 {previewState.status === 'idle' && <p className="empty-state">Select refresh to load the preview.</p>}
@@ -770,44 +964,104 @@ export default function DocumentDetails({
           <form className="modal-layer__content metadata-modal" onSubmit={handleSubmit}>
             <div className="modal-layer__header">
               <div>
-                <p className="eyebrow">Metadata</p>
-                <h3 id="metadata-modal-title">Edit document metadata</h3>
+                <p className="eyebrow">Document metadata</p>
+                <h3 id="metadata-modal-title">Update document details</h3>
               </div>
               <button type="button" className="ghost" onClick={handleCancelEdit}>
                 Close
               </button>
             </div>
-            <label>
-              <span>Title</span>
-              <input value={form.title} onChange={(e) => handleChange('title', e.target.value)} disabled={!canEditMetadata} />
-            </label>
-            <label>
-              <span>Description</span>
-              <textarea value={form.description} onChange={(e) => handleChange('description', e.target.value)} disabled={!canEditMetadata} />
-            </label>
-            <label>
-              <span>Category</span>
-              <input value={form.category} onChange={(e) => handleChange('category', e.target.value)} disabled={!canEditMetadata} />
-            </label>
-            <label>
-              <span>Tags</span>
-              <input value={form.tags.join(', ')} onChange={(e) => handleChange('tags', e.target.value.split(','))} disabled={!canEditMetadata} />
-            </label>
-            {folderTemplate.length > 0 && (
-              <div className="metadata-input-card">
+            <div className="metadata-modal__grid">
+              <section className="metadata-modal__section">
+                <div className="metadata-modal__section-header">
+                  <span>Document fields</span>
+                  <small>Aligned with upload form</small>
+                </div>
+                <label>
+                  <span>Title</span>
+                  <input value={form.title} onChange={(e) => handleChange('title', e.target.value)} disabled={!canEditMetadata} />
+                </label>
+                <label>
+                  <span>Description</span>
+                  <textarea value={form.description} onChange={(e) => handleChange('description', e.target.value)} disabled={!canEditMetadata} />
+                </label>
+                <label>
+                  <span>Document category</span>
+                  <select value={form.category} onChange={(e) => handleChange('category', e.target.value)} disabled={!canEditMetadata}>
+                    <option value="">Select document category</option>
+                    {documentCategoryOptions.map((item) => (
+                      <option key={item.id ?? item.itemCode} value={item.itemCode || ''}>
+                        {item.itemLabel || item.itemCode || ''}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="metadata-modal__date-grid">
+                  <label>
+                    <span>Document date</span>
+                    <input
+                      type="date"
+                      value={documentDateValue}
+                      onChange={(e) => handleMetadataValueChange('documentDate', e.target.value)}
+                      disabled={!canEditMetadata}
+                      required
+                    />
+                  </label>
+                  <label>
+                    <span>Expiry date</span>
+                    <input
+                      type="date"
+                      value={expiryDateValue}
+                      onChange={(e) => handleMetadataValueChange('expiryDate', e.target.value)}
+                      disabled={!canEditMetadata}
+                      required
+                    />
+                  </label>
+                </div>
+                <label>
+                  <span>Tags</span>
+                  <input
+                    value={form.tags.join(', ')}
+                    onChange={(e) => handleChange('tags', e.target.value.split(',').map((tag) => tag.trim()).filter(Boolean))}
+                    disabled={!canEditMetadata}
+                    placeholder="policy, quarterly"
+                  />
+                </label>
+              </section>
+
+              <section className="metadata-modal__section metadata-modal__section--secondary">
                 <div className="metadata-input-card__header">
                   <span>Folder metadata</span>
                   <small>{document.folder?.name || 'Folder requirements'}</small>
                 </div>
-                <MetadataFieldInputs
-                  template={folderTemplate}
-                  values={form.metadata}
-                  errors={metadataErrors}
-                  onChange={handleMetadataValueChange}
-                  disabled={!canEditMetadata}
-                />
-              </div>
-            )}
+                {folderTemplate.length > 0 ? (
+                  <>
+                    <div className="metadata-template-summary">
+                      <ul className="metadata-template-summary__list">
+                        {folderTemplate.map((field) => (
+                          <li key={field.key}>
+                            <strong>{field.label}</strong>
+                            <span>{describeMetadataField(field)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div className="metadata-input-card">
+                      <MetadataFieldInputs
+                        template={folderTemplate}
+                        values={form.metadata}
+                        errors={metadataErrors}
+                        onChange={handleMetadataValueChange}
+                        disabled={!canEditMetadata}
+                        codeTableItems={codeTableItems}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <p className="metadata-template-summary__empty">No custom metadata fields for this folder.</p>
+                )}
+              </section>
+            </div>
             <div className="modal-layer__actions">
               <button type="button" className="ghost" onClick={handleCancelEdit}>
                 Cancel
@@ -830,18 +1084,37 @@ export default function DocumentDetails({
                   {approvalModal === 'note' && 'Add approval note'}
                   {approvalModal === 'approve' && 'Approve document'}
                   {approvalModal === 'reject' && 'Reject document'}
+                  {approvalModal === 'delegate' && 'Delegate approval'}
                 </h3>
               </div>
               <button type="button" className="ghost" onClick={closeApprovalModal}>
                 Close
               </button>
             </div>
+            {approvalModal === 'delegate' && (
+              <label>
+                <span>Delegate to</span>
+                <select
+                  value={delegateApproverId}
+                  onChange={(e) => setDelegateApproverId(e.target.value)}
+                  disabled={delegateLoading || busy}
+                >
+                  <option value="">Select approver</option>
+                  {delegateOptions.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.displayName || option.username}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {approvalModal === 'delegate' && delegateError && <small className="feedback feedback--error">{delegateError}</small>}
             <label>
               <span>Notes</span>
               <textarea
                 value={approvalNote}
                 onChange={(e) => setApprovalNote(e.target.value)}
-                placeholder={approvalModal === 'note' ? 'Share guidance with the document owner' : 'Share context for your decision'}
+                placeholder={approvalModal === 'note' ? 'Share guidance with the document owner' : approvalModal === 'delegate' ? 'Optionally explain why this is being delegated' : 'Share context for your decision'}
               />
             </label>
             {approvalModal === 'note' && <small>Notes remain visible in the approval history.</small>}
@@ -852,11 +1125,12 @@ export default function DocumentDetails({
               <button
                 type="submit"
                 className={approvalModal === 'reject' ? 'ghost ghost--danger' : 'primary'}
-                disabled={busy || (approvalModal === 'note' && !approvalNote.trim())}
+                disabled={busy || (approvalModal === 'note' && !approvalNote.trim()) || (approvalModal === 'delegate' && (!delegateApproverId || delegateLoading))}
               >
                 {approvalModal === 'note' && 'Save note'}
                 {approvalModal === 'approve' && 'Approve document'}
                 {approvalModal === 'reject' && 'Reject document'}
+                {approvalModal === 'delegate' && 'Delegate approval'}
               </button>
             </div>
           </form>
@@ -866,7 +1140,7 @@ export default function DocumentDetails({
   )
 }
 
-function PdfPreview({ data }) {
+function PdfPreview({ data, requestedPage = 1, onPagerStateChange }) {
   const canvasRef = useRef(null)
   const pdfRef = useRef(null)
   const renderTaskRef = useRef(null)
@@ -876,7 +1150,48 @@ function PdfPreview({ data }) {
   const [pageNumber, setPageNumber] = useState(1)
   const [scale, setScale] = useState(1.2)
   const [renderingPage, setRenderingPage] = useState(false)
-  const [pageInput, setPageInput] = useState('1')
+  const [selectableText, setSelectableText] = useState('')
+  const [textTruncated, setTextTruncated] = useState(false)
+
+  const extractPdfText = async (pdf) => {
+    let chunks = []
+    let totalChars = 0
+    let truncated = false
+    for (let page = 1; page <= pdf.numPages; page += 1) {
+      const pageRef = await pdf.getPage(page)
+      const textContent = await pageRef.getTextContent()
+      let pageText = ''
+      for (const item of textContent.items || []) {
+        const str = typeof item?.str === 'string' ? item.str : ''
+        if (!str) continue
+        pageText += str
+        pageText += item?.hasEOL ? '\n' : ' '
+      }
+      pageText = pageText.trim()
+      if (!pageText) continue
+      const labeledPageText = `--- Page ${page} ---\n${pageText}\n\n`
+      if (totalChars + labeledPageText.length > MAX_PDF_PREVIEW_CHARS) {
+        const remaining = Math.max(0, MAX_PDF_PREVIEW_CHARS - totalChars)
+        if (remaining > 0) {
+          chunks.push(labeledPageText.slice(0, remaining))
+        }
+        truncated = true
+        break
+      }
+      chunks.push(labeledPageText)
+      totalChars += labeledPageText.length
+    }
+    return { text: chunks.join('').trim(), truncated }
+  }
+
+  const handleCopyText = async () => {
+    if (!selectableText || !navigator?.clipboard?.writeText) return
+    try {
+      await navigator.clipboard.writeText(selectableText)
+    } catch (err) {
+      console.debug('[PdfPreview] clipboard copy failed', err)
+    }
+  }
 
   useEffect(() => {
     if (!data?.length) {
@@ -886,6 +1201,8 @@ function PdfPreview({ data }) {
       setPageNumber(1)
       setScale(1.2)
       setRenderingPage(false)
+      setSelectableText('')
+      setTextTruncated(false)
       return
     }
     let cancelled = false
@@ -894,10 +1211,11 @@ function PdfPreview({ data }) {
     setStatus('loading')
     setError('')
     setPageNumber(1)
-    setPageInput('1')
     setScale(1.2)
     setPageCount(0)
     setRenderingPage(true)
+    setSelectableText('')
+    setTextTruncated(false)
 
     loadingTask.promise
       .then((pdf) => {
@@ -909,6 +1227,18 @@ function PdfPreview({ data }) {
         pdfRef.current = pdf
         setPageCount(pdf.numPages)
         setStatus('ready')
+        extractPdfText(pdf)
+          .then(({ text, truncated }) => {
+            if (cancelled) return
+            setSelectableText(text)
+            setTextTruncated(truncated)
+          })
+          .catch((err) => {
+            if (cancelled) return
+            console.debug('[PdfPreview] text extraction error', err)
+            setSelectableText('')
+            setTextTruncated(false)
+          })
       })
       .catch((err) => {
         if (cancelled) {
@@ -933,7 +1263,6 @@ function PdfPreview({ data }) {
   useEffect(() => {
     if (!pageCount) {
       setPageNumber(1)
-      setPageInput('1')
       return
     }
     setPageNumber((prev) => {
@@ -944,8 +1273,18 @@ function PdfPreview({ data }) {
   }, [pageCount])
 
   useEffect(() => {
-    setPageInput(String(Math.min(pageNumber, pageCount || pageNumber || 1)))
-  }, [pageNumber, pageCount])
+    const target = Number(requestedPage)
+    if (!Number.isFinite(target)) {
+      return
+    }
+    const maxPage = pageCount || 1
+    const nextPage = Math.min(Math.max(Math.floor(target), 1), maxPage)
+    setPageNumber((prev) => (prev === nextPage ? prev : nextPage))
+  }, [requestedPage, pageCount])
+
+  useEffect(() => {
+    onPagerStateChange && onPagerStateChange({ pageNumber, pageCount, renderingPage, status })
+  }, [pageNumber, pageCount, renderingPage, status, onPagerStateChange])
 
   useEffect(() => {
     const pdf = pdfRef.current
@@ -992,108 +1331,28 @@ function PdfPreview({ data }) {
     }
   }, [pageNumber, scale, status])
 
-  const canNavigate = status === 'ready' && pageCount > 1
-  const canZoom = status === 'ready'
-  const zoomPercent = Math.round(scale * 100)
-
-  const handleZoom = (delta) => {
-    setScale((prev) => {
-      const next = Math.min(Math.max(prev + delta, 0.5), 3)
-      return Number(next.toFixed(2))
-    })
-  }
-
-  const resetZoom = () => setScale(1.2)
-
-  const handlePageInputChange = (event) => {
-    setPageInput(event.target.value)
-  }
-
-  const commitPageInput = () => {
-    const target = Number(pageInput)
-    if (Number.isFinite(target) && target >= 1 && target <= (pageCount || 1)) {
-      setPageNumber(target)
-    } else {
-      setPageInput(String(pageNumber))
-    }
-  }
-
-  const handlePageInputKey = (event) => {
-    if (event.key === 'Enter') {
-      event.preventDefault()
-      commitPageInput()
-    }
-  }
-
   return (
     <div className="pdf-preview">
-      <div className="pdf-preview__toolbar">
-        <div className="pdf-preview__group">
-          <button
-            type="button"
-            className="ghost"
-            aria-label="Previous page"
-            disabled={!canNavigate || pageNumber <= 1 || renderingPage}
-            onClick={() => setPageNumber((prev) => Math.max(1, prev - 1))}
-          >
-            <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M15 18l-6-6 6-6" />
-            </svg>
-            <span className="sr-only">Previous page</span>
-          </button>
-          <span className="pdf-preview__page">
-            Page {Math.min(pageNumber, pageCount) || 1} of {pageCount || 1}
-          </span>
-          <button
-            type="button"
-            className="ghost"
-            aria-label="Next page"
-            disabled={!canNavigate || pageNumber >= pageCount || renderingPage}
-            onClick={() => setPageNumber((prev) => Math.min(pageCount || 1, prev + 1))}
-          >
-            <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M9 6l6 6-6 6" />
-            </svg>
-            <span className="sr-only">Next page</span>
-          </button>
-          <div className="pdf-preview__pager">
-            <label>
-              <span className="sr-only">Go to page</span>
-              <input
-                type="number"
-                min={1}
-                max={pageCount || 1}
-                value={pageInput}
-                onChange={handlePageInputChange}
-                onKeyDown={handlePageInputKey}
-                disabled={!canNavigate || renderingPage}
-              />
-            </label>
-            <button type="button" className="ghost" onClick={commitPageInput} disabled={!canNavigate || renderingPage}>
-              Go
-            </button>
-          </div>
-        </div>
-        {/* zoom controls removed per request */}
-      </div>
-      {canNavigate && pageCount > 1 && (
-        <div className="pdf-preview__slider">
-          <input
-            type="range"
-            min="1"
-            max={pageCount}
-            value={Math.min(pageNumber, pageCount)}
-            onChange={(event) => setPageNumber(Number(event.target.value))}
-            disabled={renderingPage}
-          />
-        </div>
-      )}
       {status === 'loading' && <span className="pill pill--info">Rendering PDF…</span>}
       {status === 'error' && <div className="feedback feedback--error">{error}</div>}
       <canvas ref={canvasRef} className="pdf-preview__canvas" aria-label="PDF preview" />
       {renderingPage && status === 'ready' && <small className="content-panel__hint">Rendering page {pageNumber}…</small>}
       {status === 'ready' && pageCount > 1 && !renderingPage && (
         <small className="content-panel__hint">Viewing page {pageNumber} of {pageCount}.</small>
+      )}
+      {status === 'ready' && selectableText && (
+        <div className="pdf-preview__text-panel">
+          <div className="pdf-preview__text-header">
+            <strong>Selectable text preview</strong>
+            <button type="button" className="ghost" onClick={handleCopyText}>
+              Copy text
+            </button>
+          </div>
+          <pre className="content-preview content-preview--selectable" aria-label="Extracted PDF text preview">
+            {selectableText}
+          </pre>
+          {textTruncated && <small className="content-panel__hint">Extracted text preview truncated for performance.</small>}
+        </div>
       )}
     </div>
   )

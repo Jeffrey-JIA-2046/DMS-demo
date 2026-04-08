@@ -25,8 +25,12 @@ public class Document {
     @JsonProperty("approver_id")
     private String approverId;
 
+    @JsonProperty("supervisor_id")
+    private String supervisorId;
+
     private DocumentFolder folder;
     private com.dms.user.model.AppUser approver;
+    private com.dms.user.model.AppUser supervisor;
 
     private Set<String> tags = new HashSet<>();
     private List<DocumentVersion> versions = new ArrayList<>();
@@ -122,6 +126,14 @@ public class Document {
         this.approverId = approverId;
     }
 
+    public String getSupervisorId() {
+        return supervisorId;
+    }
+
+    public void setSupervisorId(String supervisorId) {
+        this.supervisorId = supervisorId;
+    }
+
     public Instant getCreatedAt() {
         return createdAt;
     }
@@ -197,5 +209,13 @@ public class Document {
 
     public void setApprover(com.dms.user.model.AppUser approver) {
         this.approver = approver;
+    }
+
+    public com.dms.user.model.AppUser getSupervisor() {
+        return supervisor;
+    }
+
+    public void setSupervisor(com.dms.user.model.AppUser supervisor) {
+        this.supervisor = supervisor;
     }
 }

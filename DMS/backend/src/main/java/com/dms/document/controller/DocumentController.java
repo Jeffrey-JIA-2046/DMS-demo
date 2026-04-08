@@ -74,6 +74,11 @@ public class DocumentController {
         return documentService.listEligibleApprovers(principal != null ? principal.getName() : null);
     }
 
+    @GetMapping("/supervisors")
+    public List<ApproverOptionResponse> supervisorOptions(java.security.Principal principal) {
+        return documentService.listEligibleSupervisors(principal != null ? principal.getName() : null);
+    }
+
     @GetMapping("/{id}")
     public DocumentDetailsResponse get(@PathVariable String id, java.security.Principal principal) {
         return documentService.getDocument(id, principal != null ? principal.getName() : null);
@@ -202,6 +207,17 @@ public class DocumentController {
     ) {
         DocumentDetailsResponse resp = documentService.rejectDocument(id, request, principal != null ? principal.getName() : null);
         auditService.record("REJECT", id, principal != null ? principal.getName() : "system", "document rejected");
+        return resp;
+    }
+
+    @PostMapping("/{id}/approval/delegate")
+    public DocumentDetailsResponse delegateApproval(
+        @PathVariable String id,
+        @RequestBody @Valid DocumentApprovalDecisionRequest request,
+        java.security.Principal principal
+    ) {
+        DocumentDetailsResponse resp = documentService.delegateApproval(id, request, principal != null ? principal.getName() : null);
+        auditService.record("DELEGATE", id, principal != null ? principal.getName() : "system", "approval delegated");
         return resp;
     }
 

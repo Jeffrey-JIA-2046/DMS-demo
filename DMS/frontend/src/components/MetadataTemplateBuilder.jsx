@@ -131,6 +131,17 @@ export default function MetadataTemplateBuilder({ value = [], onChange, disabled
                     />
                     <span>Required</span>
                   </label>
+                  {field.type === 'DROPDOWN' && (
+                    <label>
+                      <span>Code table code</span>
+                      <input
+                        value={field.codeTableCode ?? ''}
+                        onChange={(e) => updateField(index, { codeTableCode: e.target.value.toUpperCase() })}
+                        placeholder="e.g. DOCUMENT_CATEGORY"
+                        disabled={disabled}
+                      />
+                    </label>
+                  )}
                   <label className="metadata-field__hint">
                     <span>Hint (optional)</span>
                     <input
