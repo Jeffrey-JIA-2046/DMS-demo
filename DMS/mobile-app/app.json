@@ -1,0 +1,18 @@
+{
+  "expo": {
+    "name": "DMS Mobile",
+    "slug": "dms-mobile-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.dms.mobile"
+    },
+    "android": {
+      "package": "com.dms.mobile"
+    }
+  }
+}

@@ -1,6 +1,7 @@
 package com.dms.document.service;
 
 import java.io.IOException;
+import java.net.URLConnection;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
@@ -1017,8 +1018,15 @@ public class DocumentService {
             version.setDocumentId(document.getId());
         }
         version.setVersionNumber(versionNumber);
-        version.setFileName(Optional.ofNullable(file.getOriginalFilename()).orElse("document"));
-        version.setContentType(file.getContentType());
+        String fileName = Optional.ofNullable(file.getOriginalFilename()).orElse("document");
+        version.setFileName(fileName);
+
+        String contentType = file.getContentType();
+        if (!StringUtils.hasText(contentType)) {
+            contentType = URLConnection.guessContentTypeFromName(fileName);
+        }
+        version.setContentType(StringUtils.hasText(contentType) ? contentType : "application/octet-stream");
+
         version.setSizeBytes(file.getSize());
         version.setCreatedAt(createdAt);
         try {

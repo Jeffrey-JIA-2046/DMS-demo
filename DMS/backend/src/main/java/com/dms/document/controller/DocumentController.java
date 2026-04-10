@@ -1,5 +1,6 @@
 package com.dms.document.controller;
 
+import java.net.URLConnection;
 import java.util.List;
 import java.util.Set;
 
@@ -222,8 +223,16 @@ public class DocumentController {
     }
 
     private ResponseEntity<byte[]> toFileResponse(DocumentVersion version) {
+        String contentType = version.getContentType();
+        if (!org.springframework.util.StringUtils.hasText(contentType)) {
+            contentType = URLConnection.guessContentTypeFromName(version.getFileName());
+        }
+        if (!org.springframework.util.StringUtils.hasText(contentType)) {
+            contentType = MediaType.APPLICATION_OCTET_STREAM_VALUE;
+        }
+
         return ResponseEntity.ok()
-            .contentType(MediaType.parseMediaType(version.getContentType() == null ? MediaType.APPLICATION_OCTET_STREAM_VALUE : version.getContentType()))
+            .contentType(MediaType.parseMediaType(contentType))
             .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=" + version.getFileName())
             .body(version.getContent());
     }

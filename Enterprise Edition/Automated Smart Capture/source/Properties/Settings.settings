@@ -1,0 +1,65 @@
+﻿<?xml version='1.0' encoding='utf-8'?>
+<SettingsFile xmlns="http://schemas.microsoft.com/VisualStudio/2004/01/settings" CurrentProfile="(Default)" GeneratedClassNamespace="AutomatedSmartCapture.Properties" GeneratedClassName="Settings">
+  <Profiles />
+  <Settings>
+    <Setting Name="ServerURI" Type="System.String" Scope="Application">
+      <Value Profile="(Default)">http://localhost:8080/</Value>
+    </Setting>
+    <Setting Name="ServerLoginName" Type="System.String" Scope="Application">
+      <Value Profile="(Default)">sysadmin</Value>
+    </Setting>
+    <Setting Name="ServerPassword" Type="System.String" Scope="Application">
+      <Value Profile="(Default)">P@ssw0rd</Value>
+    </Setting>
+    <Setting Name="SingleLoginMode" Type="System.Boolean" Scope="Application">
+      <Value Profile="(Default)">True</Value>
+    </Setting>
+    <Setting Name="LdapURI" Type="System.String" Scope="Application">
+      <Value Profile="(Default)">LDAP://infobrau1:389</Value>
+    </Setting>
+    <Setting Name="SearchBase" Type="System.String" Scope="Application">
+      <Value Profile="(Default)">OU=TestGroup1,DC=testdomain,DC=local</Value>
+    </Setting>
+    <Setting Name="SearchGroupFilter" Type="System.String" Scope="Application">
+      <Value Profile="(Default)">CN=*</Value>
+    </Setting>
+    <Setting Name="SearchUserFilter" Type="System.String" Scope="Application">
+      <Value Profile="(Default)">CN=*</Value>
+    </Setting>
+    <Setting Name="UserGroups" Type="System.Collections.Specialized.StringCollection" Scope="Application">
+      <Value Profile="(Default)">&lt;?xml version="1.0" encoding="utf-16"?&gt;
+&lt;ArrayOfString xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"&gt;
+  &lt;string&gt;EM or above:CN=EM or above,CN=Users,DC=testdomain,DC=local&lt;/string&gt;
+  &lt;string&gt;HR:CN=HR,CN=Users,DC=testdomain,DC=local&lt;/string&gt;
+  &lt;string&gt;Non HR:CN=Non HR,CN=Users,DC=testdomain,DC=local&lt;/string&gt;
+&lt;/ArrayOfString&gt;</Value>
+    </Setting>
+    <Setting Name="DaysToRetainLogs" Type="System.Int32" Scope="Application">
+      <Value Profile="(Default)">30</Value>
+    </Setting>
+    <Setting Name="Timeout" Type="System.Int32" Scope="Application">
+      <Value Profile="(Default)">1000000000</Value>
+    </Setting>
+    <Setting Name="EnableTWAIN" Type="System.Boolean" Scope="Application">
+      <Value Profile="(Default)">True</Value>
+    </Setting>
+    <Setting Name="QREncodeSize" Type="System.Int32" Scope="Application">
+      <Value Profile="(Default)">300</Value>
+    </Setting>
+    <Setting Name="QRDecodeSize" Type="System.Int32" Scope="Application">
+      <Value Profile="(Default)">375</Value>
+    </Setting>
+    <Setting Name="Base64Loop" Type="System.Int32" Scope="Application">
+      <Value Profile="(Default)">3</Value>
+    </Setting>
+    <Setting Name="DmsTargetFolderId" Type="System.String" Scope="Application">
+      <Value Profile="(Default)">Pfiles</Value>
+    </Setting>
+    <Setting Name="DmsDefaultApproverId" Type="System.String" Scope="Application">
+      <Value Profile="(Default)"></Value>
+    </Setting>
+    <Setting Name="DmsDefaultSupervisorId" Type="System.String" Scope="Application">
+      <Value Profile="(Default)"></Value>
+    </Setting>
+  </Settings>
+</SettingsFile>

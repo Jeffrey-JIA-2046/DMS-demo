@@ -1,0 +1,216 @@
+﻿using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Data;
+using System.Diagnostics;
+using System.Drawing;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Web.UI.WebControls;
+using System.Windows.Forms;
+using Microsoft.Office.Interop.Word;
+
+namespace TWAINCSScan
+{
+    public partial class FormOptions : Form
+    {
+        public new FormMigrate Owner;
+
+        internal Boolean schedule_changed = false;
+        internal int RowCount;
+
+        public FormOptions()
+        {
+            InitializeComponent();
+        }
+        private void FormOption_Load(object sender, EventArgs e)
+        {
+            btnValidate.Enabled = true;
+            btnValidate.Visible = true;
+            btnManual.Enabled = true;
+            btnManual.Visible = true;
+            btnOptions.Enabled = true;
+            btnOptions.Visible = true;
+            //RowCount = ; //prefer get from the scheduled count at the config?
+            RowCount = 3;
+            TableCreate();
+        }
+
+
+        private void btnValidate_click(object sender, EventArgs e)
+        {
+            //this.Hide();
+            var formV = new FormValidation() { Owner = this.Owner };
+            formV.ShowDialog();
+            this.Close();
+        }
+
+        private void btnManual_click(object sender, EventArgs e)
+        {
+            //this.Hide();
+            var formM = new FormManual() { Owner = this.Owner };
+            formM.ShowDialog();
+            this.Close();
+        }
+
+        private void btnOptions_click(object sender, EventArgs e)
+        {
+            //this.Hide();
+            var formO = new FormOptions() { Owner = this.Owner };
+            formO.ShowDialog();
+            this.Close();
+        }
+
+        private void btnSave_click(object sender, EventArgs e)
+        {
+            Program.AppSettings.MigrationFolderPath = tbPath.Text;
+
+            SaveSchedule();
+        }
+
+        private void btnBrowse_click(object sender, EventArgs e)
+        {
+            FolderBrowserDialog dlgChooseFolder = new FolderBrowserDialog();
+            if (dlgChooseFolder.ShowDialog() == DialogResult.OK)
+            {
+                tbPath.Text = dlgChooseFolder.SelectedPath;
+            }
+        }
+        private void btnRowplus_click(object sender, EventArgs e)
+        {
+            TableAddRow(tableLayoutPanel1.RowCount + 1);
+            tableLayoutPanel1.RowCount++;
+        }
+        private void btnRowminus_click(object sender, EventArgs e)
+        {
+            System.Windows.Forms.Button btn = (System.Windows.Forms.Button)sender;
+            int i =  (tableLayoutPanel1.GetCellPosition(btn)).Row;
+            //MessageBox.Show(i.ToString());
+            TableDeleteRow(i);
+            tableLayoutPanel1.RowCount--;
+        }
+
+        private void SaveSchedule()
+        {
+            for (int y = 0; y < tableLayoutPanel1.RowCount; y++)
+            {
+                Control getHour = tableLayoutPanel1.GetControlFromPosition(0, y);
+                Control getMin = tableLayoutPanel1.GetControlFromPosition(2, y);
+                Control getSec = tableLayoutPanel1.GetControlFromPosition(4, y);
+                String temp = getHour.Text + ":" + getMin.Text + ":" + getSec.Text;
+                //check the text either one is null or not
+                if (getHour.Text.Trim().Length == 0 || getMin.Text.Trim().Length == 0 || getSec.Text.Trim().Length == 0)
+                {
+                    //do something
+                    MessageBox.Show(temp + " is not valid time");
+                }
+                else
+                {   //check the time format valid or not
+                    if (Int32.Parse(getHour.Text) > 24 || Int32.Parse(getMin.Text) > 60 || Int32.Parse(getSec.Text) > 60)
+                    {
+                        //do something
+                        MessageBox.Show(temp + " is not valid time");
+                    }
+                    else
+                    {
+                        //do the save action.
+                    }
+                }
+            }
+        }
+
+        private void TableCreate()
+        {
+            for (int i = 1; i <= RowCount;i++) {
+                TableAddRow(i);
+                Control Hour = tableLayoutPanel1.GetControlFromPosition(0, i-1);
+                Control Min = tableLayoutPanel1.GetControlFromPosition(2, i-1);
+                Control Sec = tableLayoutPanel1.GetControlFromPosition(4, i-1);
+                Hour.Text = "1";//get from config?
+                Min.Text = "1";//get from config?
+                Sec.Text = "1";//get from config?
+            }
+            tableLayoutPanel1.RowCount = RowCount;
+        }
+        private void TableAddRow(int row)
+        {
+            row = row - 1;//On the Panel it start from 0, ie: 3 row, 0-2
+            var tbh = new System.Windows.Forms.TextBox() { Size = new System.Drawing.Size(40, 27), Anchor = System.Windows.Forms.AnchorStyles.None };
+            tbh.TextChanged += new EventHandler(TextBox_changed);
+            var tbm = new System.Windows.Forms.TextBox() { Size = new System.Drawing.Size(40, 27), Anchor = System.Windows.Forms.AnchorStyles.None };
+            tbm.TextChanged += new EventHandler(TextBox_changed);
+            var tbs = new System.Windows.Forms.TextBox() { Size = new System.Drawing.Size(40, 27), Anchor = System.Windows.Forms.AnchorStyles.None };
+            tbs.TextChanged += new EventHandler(TextBox_changed);
+            var lb = new System.Windows.Forms.Label() { Text = ":", Size = new System.Drawing.Size(14, 20), Anchor = System.Windows.Forms.AnchorStyles.None };
+            var lb2 = new System.Windows.Forms.Label() { Text = ":", Size = new System.Drawing.Size(14, 20), Anchor = System.Windows.Forms.AnchorStyles.None };
+            var lb3 = new System.Windows.Forms.Label() { Text = "", Size = new System.Drawing.Size(14, 20), Anchor = System.Windows.Forms.AnchorStyles.None };
+            var btn = new System.Windows.Forms.Button() { Text = "+", Size = new System.Drawing.Size(40, 40), Anchor = System.Windows.Forms.AnchorStyles.None };
+            btn.Click += new EventHandler(btnRowplus_click);
+            var btn2 = new System.Windows.Forms.Button() { Text = "-", Size = new System.Drawing.Size(40, 40), Anchor = System.Windows.Forms.AnchorStyles.None };
+            btn2.Click += new EventHandler(btnRowminus_click);
+            tableLayoutPanel1.SuspendLayout();
+
+            tableLayoutPanel1.RowStyles.Clear();
+            tableLayoutPanel1.RowStyles.Add(new System.Windows.Forms.RowStyle());
+            tableLayoutPanel1.AutoScroll = true;
+            tableLayoutPanel1.Controls.Add(tbh, 0, row);
+            tableLayoutPanel1.Controls.Add(lb, 1, row);
+            tableLayoutPanel1.Controls.Add(tbm, 2, row);
+            tableLayoutPanel1.Controls.Add(lb2, 3, row);
+            tableLayoutPanel1.Controls.Add(tbs, 4, row);
+            tableLayoutPanel1.Controls.Add(lb3, 5, row);
+            tableLayoutPanel1.Controls.Add(btn, 6, row);
+            tableLayoutPanel1.Controls.Add(btn2, 7, row);
+
+            tableLayoutPanel1.ResumeLayout();
+        }
+
+        private void TableDeleteRow(int selected_row)
+        {
+            tableLayoutPanel1.SuspendLayout();
+
+            // delete all controls of row that we want to delete
+            for (int i = 0; i < tableLayoutPanel1.ColumnCount; i++)
+            {
+                var control = tableLayoutPanel1.GetControlFromPosition(i, selected_row);
+                tableLayoutPanel1.Controls.Remove(control);
+            }
+
+            // move up row controls that comes after row we want to remove
+            for (int i = selected_row + 1; i < tableLayoutPanel1.RowCount; i++)
+            {
+                for (int j = 0; j < tableLayoutPanel1.ColumnCount; j++)
+                {
+                    var control = tableLayoutPanel1.GetControlFromPosition(j, i);
+                    if (control != null)
+                    {
+                        tableLayoutPanel1.SetRow(control, i - 1);
+                    }
+                }
+            }
+
+            var removeStyle = tableLayoutPanel1.RowCount - 1;
+
+            if (tableLayoutPanel1.RowStyles.Count > removeStyle)
+                tableLayoutPanel1.RowStyles.RemoveAt(removeStyle);
+
+            tableLayoutPanel1.ResumeLayout();
+        }
+
+        private void TextBox_changed(object sender, EventArgs e)
+        {
+            //clear the input if input not numeric
+            System.Windows.Forms.TextBox tb = (System.Windows.Forms.TextBox)sender;
+            int result;
+            if (!Int32.TryParse(tb.Text, out result)) {
+                tb.Text = "";
+            }
+        }
+
+        private void FormOptions_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            this.Owner.Show();
+        }
+    }
+}
