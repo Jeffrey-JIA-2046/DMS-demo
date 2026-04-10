@@ -161,7 +161,7 @@ function DocumentList({
               aria-label="Upload"
               title={!canUpload ? 'You do not have permission to upload documents' : undefined}
             >
-              <span className="icon" aria-hidden="true">⭱</span>
+              Upload
             </button>
           )}
         </div>

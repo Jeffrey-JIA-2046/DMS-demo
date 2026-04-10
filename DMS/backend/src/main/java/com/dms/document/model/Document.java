@@ -50,6 +50,18 @@ public class Document {
     @JsonProperty("updated_at")
     private Instant updatedAt;
 
+    @JsonProperty("is_ocr")
+    private Boolean isOcr = false;
+
+    @JsonProperty("ocr_status")
+    private String ocrStatus = "NOT_STARTED";
+
+    @JsonProperty("ocr_status_message")
+    private String ocrStatusMessage;
+
+    @JsonProperty("ocr_status_updated_at")
+    private Instant ocrStatusUpdatedAt;
+
     public String getId() {
         return id;
     }
@@ -169,6 +181,38 @@ public class Document {
 
     public void setUpdatedAt(Instant updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public Boolean getIsOcr() {
+        return isOcr;
+    }
+
+    public void setIsOcr(Boolean isOcr) {
+        this.isOcr = isOcr;
+    }
+
+    public String getOcrStatus() {
+        return ocrStatus;
+    }
+
+    public void setOcrStatus(String ocrStatus) {
+        this.ocrStatus = ocrStatus;
+    }
+
+    public String getOcrStatusMessage() {
+        return ocrStatusMessage;
+    }
+
+    public void setOcrStatusMessage(String ocrStatusMessage) {
+        this.ocrStatusMessage = ocrStatusMessage;
+    }
+
+    public Instant getOcrStatusUpdatedAt() {
+        return ocrStatusUpdatedAt;
+    }
+
+    public void setOcrStatusUpdatedAt(Instant ocrStatusUpdatedAt) {
+        this.ocrStatusUpdatedAt = ocrStatusUpdatedAt;
     }
 
     public Map<String, String> getMetadataValues() {

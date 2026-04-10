@@ -36,7 +36,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 @Component
 public class DotsOcrClient {
 
-    private static final String DEFAULT_PROMPT = "prompt_layout_all_en";
+    private static final String DEFAULT_PROMPT = "prompt_ocr";
     private static final int DEFAULT_CONFIDENCE = 95;
 
     private final DotsOcrProperties properties;

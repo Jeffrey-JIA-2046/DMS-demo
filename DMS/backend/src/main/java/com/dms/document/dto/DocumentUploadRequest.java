@@ -18,6 +18,8 @@ public record DocumentUploadRequest(
     @NotNull String folderId,
     @NotNull String approverId,
     @NotBlank String supervisorId,
-    Map<String, String> metadata
+    Map<String, String> metadata,
+    Boolean runOcr,
+    Boolean runDataExtraction
 ) {
 }

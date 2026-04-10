@@ -96,6 +96,7 @@ function ReportResult({ result }) {
                 <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Title</th>
                 <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Owner</th>
                 <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Category</th>
+                <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Relevance</th>
                 <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Status</th>
                 <th style={{ textAlign: 'left', borderBottom: '1px solid #ddd', padding: 8 }}>Updated</th>
               </tr>
@@ -109,6 +110,9 @@ function ReportResult({ result }) {
                   </td>
                   <td style={{ borderBottom: '1px solid #f0f0f0', padding: 8 }}>{row.owner || '-'}</td>
                   <td style={{ borderBottom: '1px solid #f0f0f0', padding: 8 }}>{row.category || '-'}</td>
+                  <td style={{ borderBottom: '1px solid #f0f0f0', padding: 8 }}>
+                    {Number.isFinite(row.relevanceScore) ? row.relevanceScore.toFixed(3) : '-'}
+                  </td>
                   <td style={{ borderBottom: '1px solid #f0f0f0', padding: 8 }}>{row.status || '-'}</td>
                   <td style={{ borderBottom: '1px solid #f0f0f0', padding: 8 }}>{row.updatedAt ? new Date(row.updatedAt).toLocaleString() : '-'}</td>
                 </tr>

@@ -125,7 +125,7 @@ export const uploadVersion = async (documentId, file) => {
   return handleJsonResponse(response)
 }
 
-export const runPdfOcr = async (file, prompt = 'prompt_layout_all_en', confidence = 95) => {
+export const runPdfOcr = async (file, prompt = 'prompt_ocr', confidence = 95) => {
   const formData = new FormData()
   formData.append('file', file)
   formData.append('prompt', prompt)
@@ -139,7 +139,7 @@ export const runPdfOcr = async (file, prompt = 'prompt_layout_all_en', confidenc
   return handleJsonResponse(response)
 }
 
-export const runStoredDocumentOcr = async (documentId, prompt = 'prompt_layout_all_en', confidence = 95) => {
+export const runStoredDocumentOcr = async (documentId, prompt = 'prompt_ocr', confidence = 95) => {
   const params = new URLSearchParams()
   if (prompt) {
     params.set('prompt', prompt)
@@ -152,7 +152,7 @@ export const runStoredDocumentOcr = async (documentId, prompt = 'prompt_layout_a
   return handleJsonResponse(response)
 }
 
-export const getStoredDocumentOcr = async (documentId, prompt = 'prompt_layout_all_en', confidence = 95) => {
+export const getStoredDocumentOcr = async (documentId, prompt = 'prompt_ocr', confidence = 95) => {
   const params = new URLSearchParams()
   if (prompt) {
     params.set('prompt', prompt)

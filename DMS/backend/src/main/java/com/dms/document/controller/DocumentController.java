@@ -33,6 +33,7 @@ import com.dms.document.model.DocumentStatus;
 import com.dms.document.model.DocumentVersion;
 import com.dms.document.service.DocumentService;
 import com.dms.ocr.client.DotsOcrClient;
+import com.dms.ocr.service.DocumentOcrProcessingService;
 import com.dms.ocr.service.DocumentOcrResultService;
 import com.dms.audit.service.AuditService;
 
@@ -46,12 +47,14 @@ public class DocumentController {
     private final AuditService auditService;
     private final DotsOcrClient dotsOcrClient;
     private final DocumentOcrResultService documentOcrResultService;
+    private final DocumentOcrProcessingService documentOcrProcessingService;
 
-    public DocumentController(DocumentService documentService, AuditService auditService, DotsOcrClient dotsOcrClient, DocumentOcrResultService documentOcrResultService) {
+    public DocumentController(DocumentService documentService, AuditService auditService, DotsOcrClient dotsOcrClient, DocumentOcrResultService documentOcrResultService, DocumentOcrProcessingService documentOcrProcessingService) {
         this.documentService = documentService;
         this.auditService = auditService;
         this.dotsOcrClient = dotsOcrClient;
         this.documentOcrResultService = documentOcrResultService;
+        this.documentOcrProcessingService = documentOcrProcessingService;
     }
 
     @GetMapping
@@ -92,6 +95,10 @@ public class DocumentController {
     ) {
         DocumentDetailsResponse resp = documentService.createDocument(metadata, file, principal != null ? principal.getName() : null);
         auditService.record("CREATE", resp.id(), principal != null ? principal.getName() : "system", "created document");
+        if (documentOcrProcessingService.shouldQueueUploadOcr(metadata.runOcr(), metadata.runDataExtraction(), file.getOriginalFilename(), file.getContentType())) {
+            documentOcrProcessingService.queueStoredDocumentOcr(resp.id(), null, null, Boolean.TRUE.equals(metadata.runDataExtraction()));
+            return documentService.getDocument(resp.id(), principal != null ? principal.getName() : null);
+        }
         return resp;
     }
 
@@ -111,14 +118,13 @@ public class DocumentController {
         @RequestParam(value = "confidence", required = false) Integer confidence,
         java.security.Principal principal
     ) {
+        documentService.getLatestVersion(id, principal != null ? principal.getName() : null);
+
         java.util.Optional<java.util.Map<String, Object>> cached = documentOcrResultService.findCached(id, prompt, confidence);
         if (cached.isPresent()) {
             return cached.get();
         }
-
-        DocumentVersion version = documentService.getLatestVersion(id, principal != null ? principal.getName() : null);
-        java.util.Map<String, Object> response = dotsOcrClient.ocrPdf(version.getFileName(), version.getContentType(), version.getContent(), prompt, confidence);
-        return documentOcrResultService.save(id, prompt, confidence, response);
+        return documentOcrProcessingService.processStoredDocumentOcr(id, prompt, confidence);
     }
 
     @GetMapping("/{id}/ocr/pdf")

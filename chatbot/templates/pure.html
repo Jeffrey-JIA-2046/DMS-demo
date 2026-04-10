@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Chat Assistant</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <style>
+        /* 保留你的所有聊天相关样式，这里省略，请保留你原有的style内容 */
+        :root {
+            --primary-color: #2c3e50;
+            --secondary-color: #1a5276;
+            --accent-color: #e74c3c;
+            --light-color: #f8f9fa;
+            --dark-color: #212529;
+            --border-radius: 8px;
+            --box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            --chat-bg: #f5f7fa;
+            --user-msg: #e3f2fd;
+            --ai-msg: #ffffff;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Poppins', sans-serif;
+            background-color: #ecf0f1;
+            color: var(--dark-color);
+            line-height: 1.6;
+        }
+        .app-container {
+            display: flex;
+            min-height: 100vh;
+            justify-content: center;
+            align-items: center;
+        }
+        .chat-section {
+            width: 60%;
+            max-width: 800px;
+            padding: 2rem;
+            background-color: var(--chat-bg);
+            display: flex;
+            flex-direction: column;
+            border-radius: var(--border-radius);
+            box-shadow: var(--box-shadow);
+        }
+        .chat-header {
+            text-align: center;
+            margin-bottom: 1.5rem;
+        }
+        .chat-container {
+            flex: 1;
+            background-color: white;
+            border-radius: var(--border-radius);
+            box-shadow: var(--box-shadow);
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+            overflow-y: auto;
+            max-height: 70vh;
+            min-height: 400px;
+        }
+        .message {
+            margin-bottom: 1rem;
+            padding: 0.75rem 1rem;
+            border-radius: var(--border-radius);
+            max-width: 80%;
+        }
+        .user-message {
+            background-color: var(--user-msg);
+            margin-left: auto;
+            border-bottom-right-radius: 0;
+        }
+        .ai-message {
+            background-color: var(--ai-msg);
+            margin-right: auto;
+            border-bottom-left-radius: 0;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        }
+        .message-content {
+            line-height: 1.5;
+        }
+        .message-meta {
+            font-size: 0.75rem;
+            color: #666;
+            margin-top: 0.5rem;
+            text-align: right;
+        }
+        .chat-input {
+            display: flex;
+            gap: 0.5rem;
+        }
+        #chatPrompt {
+            flex: 1;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: var(--border-radius);
+            font-size: 1rem;
+        }
+        #sendPrompt {
+            padding: 0 1.5rem;
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: var(--border-radius);
+            cursor: pointer;
+        }
+        #sendPrompt:disabled {
+            background-color: #95a5a6;
+            cursor: not-allowed;
+        }
+        /* 其他你需要的样式，如loading等，保留 */
+        .loading-message { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem; }
+        .loading-dots { display: flex; gap: 0.25rem; }
+        .loading-dot { width: 8px; height: 8px; border-radius: 50%; background-color: var(--secondary-color); animation: loading-bounce 1.4s infinite ease-in-out; }
+        .loading-dot:nth-child(1) { animation-delay: -0.32s; }
+        .loading-dot:nth-child(2) { animation-delay: -0.16s; }
+        @keyframes loading-bounce { 0%,80%,100% { transform: scale(0); } 40% { transform: scale(1); } }
+        .typewriter { border-right: 2px solid #777; white-space: pre-wrap; overflow: hidden; display: inline-block; animation: blink-caret 0.75s step-end infinite; }
+        @keyframes blink-caret { from,to { border-color: transparent; } 50% { border-color: #777; } }
+        .keyword-link { color: var(--secondary-color); text-decoration: underline; font-weight: 500; }
+        .reference-links { margin-top: 1rem; padding: 1rem; background: #f8f9fa; border-radius: var(--border-radius); }
+        code { background: #f0f0f0; padding: 0.2rem 0.4rem; border-radius: 3px; font-family: monospace; }
+        strong { font-weight: 600; }
+        h3 { font-size: 1.2rem; margin: 1rem 0 0.5rem 0; color: var(--secondary-color); }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <div class="chat-section">
+            <div class="chat-header">
+                <h2><i class="fas fa-robot"></i> AI Assistant</h2>
+                <p>Ask me anything</p>
+            </div>
+            <div class="chat-container" id="chatContainer">
+                <div class="message ai-message">
+                    <div class="message-content">Hello! How can I help you today?</div>
+                    <div class="message-meta">AI Assistant</div>
+                </div>
+            </div>
+            <div class="chat-input">
+                <input type="text" id="chatPrompt" placeholder="Type your message...">
+                <button id="sendPrompt"><i class="fas fa-paper-plane"></i></button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const chatContainer = document.getElementById('chatContainer');
+            const chatPrompt = document.getElementById('chatPrompt');
+            const sendPrompt = document.getElementById('sendPrompt');
+
+            // 强制启用按钮（解决之前被禁用的残留状态）
+            sendPrompt.disabled = false;
+            chatPrompt.disabled = false;
+
+            let currentChatId = null;
+            let loadingMessage = null;
+            let typewriterTimeout = null;
+
+            // 关键词链接（可选）
+            const keywordLinks = {
+                "COVID-19": "https://www.who.int/emergencies/diseases/novel-coronavirus-2019",
+                "疫苗": "https://www.cdc.gov/coronavirus/2019-ncov/vaccines/index.html",
+            };
+
+            function formatMessage(message) {
+                if (!message) return '';
+                message = message.replace(/^(?:###### |##### |#### |### |## )(.+)$/gm, '<h3>$1</h3>');
+                message = message.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+                message = message.replace(/\n\n/g, '<br><br>');
+                message = message.replace(/\n/g, '<br>');
+                message = message.replace(/`(.*?)`/g, '<code>$1</code>');
+                Object.keys(keywordLinks).forEach(keyword => {
+                    const regex = new RegExp(`(${keyword})`, 'gi');
+                    message = message.replace(regex, `<a href="${keywordLinks[keyword]}" target="_blank" class="keyword-link">$1</a>`);
+                });
+                return message;
+            }
+
+            function createLoadingMessage() {
+                if (loadingMessage) return loadingMessage;
+                const messageDiv = document.createElement('div');
+                messageDiv.className = 'message ai-message loading-message';
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'message-content';
+                const dotsDiv = document.createElement('div');
+                dotsDiv.className = 'loading-dots';
+                dotsDiv.innerHTML = `<div class="loading-dot"></div><div class="loading-dot"></div><div class="loading-dot"></div>`;
+                contentDiv.appendChild(document.createTextNode('AI Assistant is thinking'));
+                contentDiv.appendChild(dotsDiv);
+                const metaDiv = document.createElement('div');
+                metaDiv.className = 'message-meta';
+                metaDiv.textContent = 'AI Assistant';
+                messageDiv.appendChild(contentDiv);
+                messageDiv.appendChild(metaDiv);
+                chatContainer.appendChild(messageDiv);
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+                loadingMessage = messageDiv;
+                return messageDiv;
+            }
+
+            function removeLoadingMessage() {
+                if (loadingMessage) {
+                    loadingMessage.remove();
+                    loadingMessage = null;
+                }
+            }
+
+            function addMessage(role, content) {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `message ${role}-message`;
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'message-content';
+                contentDiv.innerHTML = formatMessage(content);
+                const metaDiv = document.createElement('div');
+                metaDiv.className = 'message-meta';
+                metaDiv.textContent = role === 'user' ? 'You' : 'AI Assistant';
+                messageDiv.appendChild(contentDiv);
+                messageDiv.appendChild(metaDiv);
+                chatContainer.appendChild(messageDiv);
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+
+            function sendChatMessage() {
+                const prompt = chatPrompt.value.trim();
+                if (!prompt) return;
+
+                addMessage('user', prompt);
+                chatPrompt.value = '';
+
+                const messageDiv = document.createElement('div');
+                messageDiv.className = 'message ai-message';
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'message-content';
+                const metaDiv = document.createElement('div');
+                metaDiv.className = 'message-meta';
+                metaDiv.textContent = 'AI Assistant';
+                messageDiv.appendChild(contentDiv);
+                messageDiv.appendChild(metaDiv);
+                chatContainer.appendChild(messageDiv);
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+
+                fetch('/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        chat_id: currentChatId,
+                        question: prompt
+                    })
+                })
+                .then(async response => {
+                    if (!response.ok) throw new Error('Network response was not ok');
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let fullResponse = '';
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        const chunk = decoder.decode(value);
+                        const lines = chunk.split('\n');
+                        for (const line of lines) {
+                            if (line.startsWith('data: ')) {
+                                try {
+                                    const data = JSON.parse(line.substring(6));
+                                    if (data.exceed_tokens === "context_length_exceeded") {
+                                        contentDiv.innerHTML = data.message;
+                                        // 不再禁用按钮，只提示
+                                        return;
+                                    }
+                                    if (data.chunk) {
+                                        fullResponse += data.chunk;
+                                        contentDiv.innerHTML = formatMessage(fullResponse);
+                                        messageDiv.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                                    }
+                                    if (data.chat_id) {
+                                        currentChatId = data.chat_id;
+                                    }
+                                    if (data.complete) {
+                                        if (data.assistant_response) {
+                                            fullResponse = data.assistant_response;
+                                            contentDiv.innerHTML = formatMessage(fullResponse);
+                                        }
+                                        return;
+                                    }
+                                    if (data.error) {
+                                        contentDiv.innerHTML = `Error: ${data.error}`;
+                                        return;
+                                    }
+                                } catch (e) {
+                                    console.error('Error parsing stream data:', e);
+                                }
+                            }
+                        }
+                    }
+                })
+                .catch(error => {
+                    contentDiv.innerHTML = 'Failed to get response';
+                    console.error('Error:', error);
+                });
+            }
+
+            // 事件监听
+            sendPrompt.addEventListener('click', sendChatMessage);
+            chatPrompt.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (!sendPrompt.disabled) {
+                        sendChatMessage();
+                    }
+                }
+            });
+        });
+    </script>
+</body>
+</html>

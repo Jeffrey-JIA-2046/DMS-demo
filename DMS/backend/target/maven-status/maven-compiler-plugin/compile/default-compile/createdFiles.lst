@@ -12,6 +12,7 @@ com\dms\document\dto\DocumentUploadRequest.class
 com\dms\task\service\UserDashboardService.class
 com\dms\user\dto\UserResponse.class
 com\dms\document\model\DocumentVersion.class
+com\dms\extraction\service\DocumentExtractionProcessingService.class
 com\dms\job\service\JobManagementService.class
 com\dms\user\controller\UserManagementController.class
 com\dms\document\dto\FolderPermissionEntryDto.class
@@ -19,6 +20,7 @@ com\dms\document\dto\DocumentFolderRequest.class
 com\dms\document\dto\DocumentApprovalNoteResponse.class
 com\dms\user\dto\CurrentUserResponse.class
 com\dms\knowledge\repository\KnowledgeContributionRepository.class
+com\dms\extraction\service\DocumentExtractionProcessingService$1.class
 com\dms\knowledge\repository\KnowledgeTopicRepository.class
 com\dms\chatbot\client\DeepSeekClient$ChatResponse.class
 com\dms\config\MysqlToOpenSearchDocumentMigration$1.class
@@ -37,6 +39,7 @@ com\dms\user\controller\CurrentUserController.class
 com\dms\document\dto\ApproverOptionResponse.class
 com\dms\reminder\model\ReminderDateColumn.class
 com\dms\chatbot\dto\ChatDocumentSummaryResponse.class
+com\dms\extraction\config\ExtractionApiProperties.class
 com\dms\knowledge\repository\KnowledgeTopicShareRepository.class
 com\dms\task\model\TaskPriority.class
 com\dms\knowledge\dto\KnowledgeShareRequest.class
@@ -104,6 +107,7 @@ com\dms\codetable\dto\CodeTableItemRequest.class
 com\dms\document\dto\DocumentVersionResponse.class
 com\dms\retention\dto\RetentionRuleResponse.class
 com\dms\reminder\dto\ReminderRuleRequest.class
+com\dms\ocr\service\DocumentOcrProcessingService.class
 com\dms\knowledge\repository\KnowledgeTopicMemberRepository.class
 com\dms\task\model\TaskType.class
 com\dms\codetable\controller\CodeTablePublicController.class
@@ -136,6 +140,7 @@ com\dms\job\model\JobType.class
 com\dms\knowledge\dto\KnowledgeAttachmentResponse.class
 com\dms\exception\AiServiceException.class
 com\dms\codetable\model\CodeTableItem.class
+com\dms\extraction\client\ExtractionApiClient.class
 com\dms\config\AiConfiguration.class
 com\dms\document\repository\DocumentVersionRepository.class
 com\dms\task\model\TaskStatus.class
@@ -175,6 +180,7 @@ com\dms\document\service\DocumentService$1.class
 com\dms\reminder\dto\ReminderSweepResponse.class
 com\dms\document\dto\DocumentDetailsResponse.class
 com\dms\config\MysqlToOpenSearchDocumentMigration$4.class
+com\dms\extraction\client\ExtractionApiClient$1.class
 com\dms\knowledge\model\KnowledgeTopicShare.class
 com\dms\knowledge\model\KnowledgeTopic.class
 com\dms\document\model\MetadataFieldType.class

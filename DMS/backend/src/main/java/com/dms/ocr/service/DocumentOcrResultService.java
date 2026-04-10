@@ -22,7 +22,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 @Service
 public class DocumentOcrResultService {
 
-    private static final String DEFAULT_PROMPT = "prompt_layout_all_en";
+    private static final String DEFAULT_PROMPT = "prompt_ocr";
     private static final int DEFAULT_CONFIDENCE = 95;
 
     private final DocumentOcrResultRepository repository;
@@ -49,6 +49,19 @@ public class DocumentOcrResultService {
     public Map<String, Object> getCachedOrThrow(String documentId, String prompt, Integer confidence) {
         return findCached(documentId, prompt, confidence)
             .orElseThrow(() -> new ResourceNotFoundException("No cached OCR result found for this document and prompt."));
+    }
+
+    @Transactional
+    public void invalidateDocumentCache(String documentId) {
+        try {
+            for (DocumentOcrResult record : repository.findAllByDocumentId(documentId)) {
+                if (StringUtils.hasText(record.getId())) {
+                    repository.deleteById(record.getId());
+                }
+            }
+        } catch (IOException ex) {
+            throw new RuntimeException("Failed to invalidate OCR cache", ex);
+        }
     }
 
     @Transactional

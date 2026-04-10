@@ -26,6 +26,19 @@ const formatBytes = (bytes) => {
   return `${value.toFixed(1)} ${units[exponent]}`
 }
 
+const formatMetadataDisplayValue = (field, rawValue, codeTableItems = {}) => {
+  const normalized = rawValue == null ? '' : String(rawValue).trim()
+  if (!normalized) {
+    return '—'
+  }
+  if (field?.type === 'DROPDOWN' && field.codeTableCode) {
+    const options = Array.isArray(codeTableItems[field.codeTableCode]) ? codeTableItems[field.codeTableCode] : []
+    const matched = options.find((item) => String(item?.itemCode ?? '') === normalized)
+    return matched?.itemLabel || normalized
+  }
+  return normalized
+}
+
 const MAX_PREVIEW_CHARS = 100000
 const MAX_PDF_PREVIEW_CHARS = 120000
 
@@ -422,15 +435,31 @@ export default function DocumentDetails({
   const templateKeys = new Set(folderTemplate.map((field) => field.key))
   const systemMetadataEntries = systemMetadataKeys
     .filter((key) => metadataValues[key] && !templateKeys.has(key))
-    .map((key) => ({ key, label: systemMetadataLabels[key], value: metadataValues[key], required: false }))
+    .map((key) => ({
+      key,
+      label: systemMetadataLabels[key],
+      value: metadataValues[key],
+      displayValue: formatMetadataDisplayValue(null, metadataValues[key]),
+      required: false,
+      note: 'System metadata',
+    }))
   const metadataDisplay = (folderTemplate.length
     ? folderTemplate.map((field) => ({
         key: field.key,
         label: field.label,
         value: metadataValues[field.key],
         required: field.required,
+        displayValue: formatMetadataDisplayValue(field, metadataValues[field.key], codeTableItems),
+        note: field.hint || describeMetadataField(field),
       })).concat(systemMetadataEntries)
-    : Object.entries(metadataValues).map(([key, value]) => ({ key, label: key, value }))
+    : Object.entries(metadataValues).map(([key, value]) => ({
+        key,
+        label: key,
+        value,
+        displayValue: formatMetadataDisplayValue(null, value),
+        required: false,
+        note: null,
+      }))
   ).filter((entry) => entry)
   const statusTone = STATUS_TONE[document?.status] || 'neutral'
   const approvalInfo = document?.approval ?? null
@@ -775,6 +804,22 @@ export default function DocumentDetails({
                   <span className="tag-list__empty">No tags</span>
                 )}
               </div>
+              {metadataDisplay.length ? (
+                <dl className="metadata metadata--compact metadata-display-grid">
+                  {metadataDisplay.map((entry) => (
+                    <div key={entry.key} className="metadata-display-grid__item">
+                      <dt>
+                        {entry.label}
+                        {entry.required ? <span className="metadata-display-grid__required"> *</span> : null}
+                      </dt>
+                      <dd>{entry.displayValue}</dd>
+                      {entry.note ? <small className="metadata-display-grid__note">{entry.note}</small> : null}
+                    </div>
+                  ))}
+                </dl>
+              ) : (
+                <p className="metadata-template-summary__empty">No metadata fields are defined for this document.</p>
+              )}
             </div>
             <div className="details-card__section">
               <div className="section-header">

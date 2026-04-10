@@ -17,6 +17,10 @@ public record DocumentSummaryResponse(
     DocumentFolderInfo folder,
     int latestVersion,
     long latestSizeBytes,
-    Instant updatedAt
+    Instant updatedAt,
+    Boolean isOcr,
+    String ocrStatus,
+    String ocrStatusMessage,
+    Instant ocrStatusUpdatedAt
 ) {
 }

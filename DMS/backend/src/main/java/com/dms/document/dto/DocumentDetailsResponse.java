@@ -21,6 +21,10 @@ public record DocumentDetailsResponse(
     DocumentFolderInfo folder,
     Instant createdAt,
     Instant updatedAt,
+    Boolean isOcr,
+    String ocrStatus,
+    String ocrStatusMessage,
+    Instant ocrStatusUpdatedAt,
     List<DocumentVersionResponse> versions,
     DocumentApprovalInfo approval,
     List<DocumentApprovalNoteResponse> approvalNotes

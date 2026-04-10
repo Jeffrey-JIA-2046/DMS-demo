@@ -57,6 +57,7 @@ import com.dms.document.repository.DocumentRepository;
 import com.dms.document.repository.DocumentVersionRepository;
 import com.dms.exception.InvalidDocumentException;
 import com.dms.exception.ResourceNotFoundException;
+import com.dms.ocr.service.DocumentOcrProcessingService;
 import com.dms.security.Role;
 import com.dms.task.model.TaskPriority;
 import com.dms.task.model.TaskStatus;
@@ -83,6 +84,7 @@ public class DocumentService {
     private final AppUserRepository appUserRepository;
     private final UserTaskRepository userTaskRepository;
     private final FolderPermissionEvaluator folderPermissionEvaluator;
+    private final DocumentOcrProcessingService documentOcrProcessingService;
     private final Clock clock;
 
     public DocumentService(
@@ -92,6 +94,7 @@ public class DocumentService {
         AppUserRepository appUserRepository,
         UserTaskRepository userTaskRepository,
         FolderPermissionEvaluator folderPermissionEvaluator,
+        DocumentOcrProcessingService documentOcrProcessingService,
         Clock clock
     ) {
         this.documentRepository = documentRepository;
@@ -100,6 +103,7 @@ public class DocumentService {
         this.appUserRepository = appUserRepository;
         this.userTaskRepository = userTaskRepository;
         this.folderPermissionEvaluator = folderPermissionEvaluator;
+        this.documentOcrProcessingService = documentOcrProcessingService;
         this.clock = clock;
     }
 
@@ -321,6 +325,10 @@ public class DocumentService {
             document.setUpdatedAt(now);
             document.setApprovalRequestedAt(now);
             document.setApprovalDecidedAt(null);
+            document.setIsOcr(false);
+            document.setOcrStatus("NOT_STARTED");
+            document.setOcrStatusMessage(null);
+            document.setOcrStatusUpdatedAt(now);
             document.setMetadataValues(applySystemDateMetadata(
                 resolvedMetadata,
                 request.documentDate(),
@@ -353,8 +361,13 @@ public class DocumentService {
                 .orElse(0) + 1;
 
             document.addVersion(buildVersion(document, safeFile, now, nextVersion));
+            document.setIsOcr(false);
+            document.setOcrStatus("NOT_STARTED");
+            document.setOcrStatusMessage(null);
+            document.setOcrStatusUpdatedAt(now);
             document.setUpdatedAt(now);
             Document saved = documentRepository.save(document);
+            documentOcrProcessingService.markDocumentOcrUnavailable(saved.getId());
             return toDetails(saved);
         } catch (IOException ex) {
             throw new RuntimeException("Failed to add document version", ex);
@@ -422,6 +435,33 @@ public class DocumentService {
             return toDetails(saved);
         } catch (IOException ex) {
             throw new RuntimeException("Failed to update document", ex);
+        }
+    }
+
+    @Transactional
+    public DocumentDetailsResponse applyExtractedMetadata(String documentId, Map<String, String> extractedMetadata) {
+        try {
+            Document document = findDocument(documentId);
+            DocumentFolder folder = document.getFolder();
+
+            Map<String, String> mergedMetadata = new LinkedHashMap<>();
+            if (document.getMetadataValues() != null) {
+                mergedMetadata.putAll(document.getMetadataValues());
+            }
+            if (extractedMetadata != null) {
+                extractedMetadata.forEach((key, value) -> {
+                    if (StringUtils.hasText(key) && StringUtils.hasText(value)) {
+                        mergedMetadata.put(key.trim(), value.trim());
+                    }
+                });
+            }
+
+            document.setMetadataValues(resolveMetadataValues(folder, mergedMetadata));
+            document.setUpdatedAt(Instant.now(clock));
+            Document saved = documentRepository.save(document);
+            return toDetails(saved);
+        } catch (IOException ex) {
+            throw new RuntimeException("Failed to apply extracted metadata", ex);
         }
     }
 
@@ -1097,7 +1137,11 @@ public class DocumentService {
             toFolderInfo(document.getFolder()),
             latestVersion,
             size,
-            document.getUpdatedAt()
+            document.getUpdatedAt(),
+            Boolean.TRUE.equals(document.getIsOcr()),
+            document.getOcrStatus(),
+            document.getOcrStatusMessage(),
+            document.getOcrStatusUpdatedAt()
         );
     }
 
@@ -1121,6 +1165,10 @@ public class DocumentService {
             toFolderInfo(document.getFolder()),
             document.getCreatedAt(),
             document.getUpdatedAt(),
+            Boolean.TRUE.equals(document.getIsOcr()),
+            document.getOcrStatus(),
+            document.getOcrStatusMessage(),
+            document.getOcrStatusUpdatedAt(),
             versions,
             toApprovalInfo(document),
             toApprovalNotes(document)

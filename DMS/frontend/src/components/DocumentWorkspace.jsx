@@ -30,9 +30,11 @@ import DocumentDetails from './DocumentDetails'
 import UploadPanel from './UploadPanel'
 import FolderBrowser from './FolderBrowser'
 import ChatbotPanel from './ChatbotPanel'
+import { getEmbeddingJobStatus, startEmbeddingJob } from '../api/chatbot'
 import { AuthContext, Roles } from '../contexts/AuthContext'
 import { AnnounceContext } from '../contexts/AnnounceContext'
 import { findFolderNode, findFolderPath } from '../utils/folders'
+import { validateMetadataValues } from '../utils/metadataTemplate'
 import { createKnowledgeTopic, linkKnowledgeDocument } from '../api/knowledge'
 
 const buildDefaultFilters = () => ({
@@ -45,6 +47,32 @@ const buildDefaultFilters = () => ({
 })
 
 const defaultPage = { page: 0, size: 12 }
+
+const OCR_STATUS_META = {
+  NOT_STARTED: { label: 'Not Run', tone: 'neutral', description: 'OCR has not been run for this document.' },
+  QUEUED: { label: 'Queued', tone: 'info', description: 'OCR job has been queued in the backend.' },
+  RUNNING: { label: 'Running', tone: 'info', description: 'OCR is currently running.' },
+  READY: { label: 'Ready', tone: 'success', description: 'OCR result is available.' },
+  FAILED: { label: 'Failed', tone: 'danger', description: 'OCR failed. Review the status message and try again.' },
+}
+
+const EMBEDDING_STATUS_META = {
+  IDLE: { label: 'Idle', tone: 'neutral' },
+  QUEUED: { label: 'Queued', tone: 'info' },
+  RUNNING: { label: 'Running', tone: 'info' },
+  COMPLETED: { label: 'Ready', tone: 'success' },
+  FAILED: { label: 'Failed', tone: 'danger' },
+}
+
+const EXTRACTION_PLACEHOLDER_VALUES = new Set(['n/a', 'na', 'not available', 'not found', 'none', 'null', 'undefined', 'unknown'])
+
+function normalizeOcrStatus(value, isOcr) {
+  const normalized = typeof value === 'string' ? value.trim().toUpperCase() : ''
+  if (normalized && OCR_STATUS_META[normalized]) {
+    return normalized
+  }
+  return isOcr ? 'READY' : 'NOT_STARTED'
+}
 
 function normalizeTags(value) {
   return (value ?? [])
@@ -133,40 +161,48 @@ const renderSimpleMarkdown = (content) => {
     return ''
   }
 
-  let html = escapeHtml(content)
-  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, url) => `<img src="${url.trim()}" alt="${alt}" />`)
-
-  html = html
-    .replace(/^######\s+(.+)$/gm, '<h6>$1</h6>')
-    .replace(/^#####\s+(.+)$/gm, '<h5>$1</h5>')
-    .replace(/^####\s+(.+)$/gm, '<h4>$1</h4>')
-    .replace(/^###\s+(.+)$/gm, '<h3>$1</h3>')
-    .replace(/^##\s+(.+)$/gm, '<h2>$1</h2>')
-    .replace(/^#\s+(.+)$/gm, '<h1>$1</h1>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-
-  const blocks = html
-    .split(/\n{2,}/)
+  // Split into blocks by paragraph breaks first (before escaping)
+  const blocks = content
+    .split(/\r?\n{2,}/)
     .map((block) => block.trim())
     .filter(Boolean)
     .map((block) => {
-      if (/^<h[1-6]>/.test(block) || /^<table[\s>]/.test(block) || /^<img[\s>]/.test(block) || /^<ul[\s>]/.test(block) || /^<ol[\s>]/.test(block) || /^<pre[\s>]/.test(block)) {
+      // Check if this block is raw HTML (tag detected before escaping)
+      const isHtmlBlock = /^<[a-z][\s\S]*>/.test(block)
+
+      if (isHtmlBlock) {
+        // Keep HTML blocks as-is
         return block
       }
-      return `<p>${block.replace(/\n/g, '<br />')}</p>`
+
+      // For non-HTML blocks, escape and apply markdown formatting
+      let html = escapeHtml(block)
+      html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, url) => `<img src="${url.trim()}" alt="${alt}" />`)
+      html = html
+        .replace(/^######\s+(.+)$/gm, '<h6>$1</h6>')
+        .replace(/^#####\s+(.+)$/gm, '<h5>$1</h5>')
+        .replace(/^####\s+(.+)$/gm, '<h4>$1</h4>')
+        .replace(/^###\s+(.+)$/gm, '<h3>$1</h3>')
+        .replace(/^##\s+(.+)$/gm, '<h2>$1</h2>')
+        .replace(/^#\s+(.+)$/gm, '<h1>$1</h1>')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.+?)\*/g, '<em>$1</em>')
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+
+      // Check if markdown formatting produced HTML tags (headings, images, etc.)
+      if (/^<[a-z]/.test(html)) {
+        return html
+      }
+
+      // Wrap remaining non-HTML content in paragraph tags with br for line breaks
+      return `<p>${html.replace(/\r?\n/g, '<br />')}</p>`
     })
 
   return blocks.join('\n')
 }
 
 const buildPreviewDocument = (content) => {
-  const converted = convertMarkdownLikeImages(content)
-  const hasHtmlTags = /<\/?[a-z][\s\S]*>/i.test(content)
-  const body = hasHtmlTags
-    ? `<article class="ocr-markdown">${converted}</article>`
-    : `<article class="ocr-markdown">${renderSimpleMarkdown(content)}</article>`
+  const body = `<article class="ocr-markdown">${renderSimpleMarkdown(content)}</article>`
 
   return `<!doctype html>
 <html>
@@ -297,6 +333,36 @@ const prettifyLabel = (value) => value
   .replace(/_/g, ' ')
   .replace(/\b\w/g, (char) => char.toUpperCase())
 
+const isMeaningfulExtractionValue = (value) => {
+  if (value == null) {
+    return false
+  }
+  const normalized = String(value).trim()
+  if (!normalized) {
+    return false
+  }
+  return !EXTRACTION_PLACEHOLDER_VALUES.has(normalized.toLowerCase())
+}
+
+const mergeExtractedMetadata = (currentMetadata, extractedMetadata, metadataTemplate = []) => {
+  const merged = currentMetadata && typeof currentMetadata === 'object' ? { ...currentMetadata } : {}
+  if (!extractedMetadata || typeof extractedMetadata !== 'object') {
+    return merged
+  }
+  metadataTemplate.forEach((field) => {
+    const key = field?.key
+    if (!key) {
+      return
+    }
+    const nextValue = extractedMetadata[key]
+    if (!isMeaningfulExtractionValue(nextValue)) {
+      return
+    }
+    merged[key] = String(nextValue).trim()
+  })
+  return merged
+}
+
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 export default function DocumentWorkspace({ currentFunction = 'Document Management', onFindRelatedTopics = null, navigationContext = null }) {
@@ -336,7 +402,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   const [chatbotOpen, setChatbotOpen] = useState(false)
   // Ensure details view opens on the content tab when a document is selected
   const [detailsInitialTab, setDetailsInitialTab] = useState('content')
-  const [ocrPrompt, setOcrPrompt] = useState('prompt_layout_all_en')
+  const [ocrPrompt, setOcrPrompt] = useState('prompt_ocr')
   const [ocrBusy, setOcrBusy] = useState(false)
   const [ocrLoadingCached, setOcrLoadingCached] = useState(false)
   const [ocrError, setOcrError] = useState('')
@@ -345,6 +411,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   const [ocrPreviewMode, setOcrPreviewMode] = useState('render')
   const [ocrConfidenceLevel, setOcrConfidenceLevel] = useState(95)
   const [ocrPageIndex, setOcrPageIndex] = useState(0)
+  const [ocrRefreshKey, setOcrRefreshKey] = useState(0)
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState('')
   const [pdfPreviewLoading, setPdfPreviewLoading] = useState(false)
   const [pdfPreviewError, setPdfPreviewError] = useState('')
@@ -355,6 +422,12 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   const [extractionResult, setExtractionResult] = useState(null)
   const [editableExtractionData, setEditableExtractionData] = useState(null)
   const [originalExtractionData, setOriginalExtractionData] = useState(null)
+  const [embeddingBusy, setEmbeddingBusy] = useState(false)
+  const [embeddingJobId, setEmbeddingJobId] = useState(null)
+  const [embeddingStatus, setEmbeddingStatus] = useState('IDLE')
+  const [embeddingMessage, setEmbeddingMessage] = useState('')
+  const [embeddingError, setEmbeddingError] = useState('')
+  const [embeddingResult, setEmbeddingResult] = useState(null)
 
   const normalizedFilters = useMemo(() => ({
     ...filters,
@@ -366,6 +439,10 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   const requestCounterRef = useRef(0)
   const latestRequestIdRef = useRef(0)
   const workspaceSelectionPath = useMemo(() => findFolderPath(folderTree, filters.folderId), [folderTree, filters.folderId])
+  const selectedListDocument = useMemo(
+    () => documents.find((doc) => String(doc.id) === String(selectedId ?? '')) ?? null,
+    [documents, selectedId]
+  )
   const selectedDocumentFolderId = selectedDocument?.folder?.id ?? null
   const activePermissionFolderId = filters.folderId ?? selectedDocumentFolderId ?? null
   const canManageFolderPermissions = role === Roles.SYS_ADMIN || role === Roles.USER_ADMIN
@@ -373,6 +450,39 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   const latestSelectedVersion = useMemo(() => getLatestVersion(selectedDocument?.versions), [selectedDocument?.versions])
   const selectedFileName = latestSelectedVersion?.fileName ?? ''
   const selectedContentType = latestSelectedVersion?.contentType ?? ''
+  const selectedDocumentIsOcr = Boolean(
+    selectedDocument?.isOcr ?? selectedDocument?.is_ocr ?? selectedListDocument?.isOcr ?? selectedListDocument?.is_ocr
+  )
+  const selectedDocumentOcrStatus = useMemo(
+    () => normalizeOcrStatus(
+      selectedDocument?.ocrStatus
+        ?? selectedDocument?.ocr_status
+        ?? selectedListDocument?.ocrStatus
+        ?? selectedListDocument?.ocr_status,
+      selectedDocumentIsOcr
+    ),
+    [
+      selectedDocument?.ocrStatus,
+      selectedDocument?.ocr_status,
+      selectedListDocument?.ocrStatus,
+      selectedListDocument?.ocr_status,
+      selectedDocumentIsOcr,
+    ]
+  )
+  const selectedDocumentOcrStatusMeta = OCR_STATUS_META[selectedDocumentOcrStatus] ?? OCR_STATUS_META.NOT_STARTED
+  const selectedDocumentOcrStatusMessage =
+    selectedDocument?.ocrStatusMessage
+      ?? selectedDocument?.ocr_status_message
+      ?? selectedListDocument?.ocrStatusMessage
+      ?? selectedListDocument?.ocr_status_message
+      ?? selectedDocumentOcrStatusMeta.description
+  const selectedDocumentOcrStatusUpdatedAt =
+    selectedDocument?.ocrStatusUpdatedAt
+      ?? selectedDocument?.ocr_status_updated_at
+      ?? selectedListDocument?.ocrStatusUpdatedAt
+      ?? selectedListDocument?.ocr_status_updated_at
+      ?? null
+  const embeddingStatusMeta = EMBEDDING_STATUS_META[embeddingStatus] ?? EMBEDDING_STATUS_META.IDLE
   const selectedLooksPdf = useMemo(() => {
     const byName = selectedFileName.toLowerCase().endsWith('.pdf')
     const byType = selectedContentType.toLowerCase().includes('pdf')
@@ -408,6 +518,12 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   }, [editableExtractionData])
 
   useEffect(() => {
+    if (!selectedDocumentIsOcr && ocrPrompt !== 'prompt_ocr') {
+      setOcrPrompt('prompt_ocr')
+    }
+  }, [selectedDocumentIsOcr, ocrPrompt])
+
+  useEffect(() => {
     let cancelled = false
 
     const loadCachedOcr = async () => {
@@ -415,6 +531,22 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
         setOcrResult(null)
         setOcrPreview('')
         setOcrError('')
+        return
+      }
+
+      if (!selectedDocumentIsOcr) {
+        setOcrResult(null)
+        setOcrPreview('')
+        setOcrError('')
+        setOcrLoadingCached(false)
+        return
+      }
+
+      if (ocrPrompt !== 'prompt_ocr') {
+        setOcrResult(null)
+        setOcrPreview('')
+        setOcrError('')
+        setOcrLoadingCached(false)
         return
       }
 
@@ -452,7 +584,62 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     return () => {
       cancelled = true
     }
-  }, [selectedId, selectedLooksPdf, ocrPrompt, ocrConfidenceLevel])
+  }, [selectedId, selectedLooksPdf, selectedDocumentIsOcr, ocrPrompt, ocrConfidenceLevel, ocrRefreshKey])
+
+  useEffect(() => {
+    setEmbeddingBusy(false)
+    setEmbeddingJobId(null)
+    setEmbeddingStatus('IDLE')
+    setEmbeddingMessage('')
+    setEmbeddingError('')
+    setEmbeddingResult(null)
+  }, [selectedId])
+
+  useEffect(() => {
+    if (!embeddingJobId || !['QUEUED', 'RUNNING'].includes(embeddingStatus)) {
+      return undefined
+    }
+
+    let cancelled = false
+    const pollEmbeddingJob = async () => {
+      try {
+        const response = await getEmbeddingJobStatus(embeddingJobId)
+        if (cancelled) {
+          return
+        }
+        const nextStatus = String(response?.status ?? 'FAILED').toUpperCase()
+        const nextMessage = response?.message ?? ''
+        const nextError = response?.error ?? ''
+        setEmbeddingStatus(nextStatus)
+        setEmbeddingMessage(nextMessage)
+        setEmbeddingError(nextError)
+        setEmbeddingResult(response?.result ?? null)
+        setEmbeddingBusy(nextStatus === 'QUEUED' || nextStatus === 'RUNNING')
+        if (nextStatus === 'COMPLETED') {
+          toast && toast('Chunking and embedding completed for chatbot search.', { type: 'success' })
+        } else if (nextStatus === 'FAILED') {
+          toast && toast(nextError || nextMessage || 'Chunking and embedding failed.', { type: 'error' })
+        }
+      } catch (err) {
+        if (cancelled) {
+          return
+        }
+        const message = err.message || 'Failed to poll embedding job status'
+        setEmbeddingBusy(false)
+        setEmbeddingStatus('FAILED')
+        setEmbeddingMessage(message)
+        setEmbeddingError(message)
+        toast && toast(message, { type: 'error' })
+      }
+    }
+
+    pollEmbeddingJob()
+    const timer = window.setInterval(pollEmbeddingJob, 3000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [embeddingJobId, embeddingStatus, toast])
 
   useEffect(() => {
     let cancelled = false
@@ -655,6 +842,31 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     loadDocumentDetails(selectedId)
   }, [selectedId])
 
+  useEffect(() => {
+    if (!selectedId || !['QUEUED', 'RUNNING'].includes(selectedDocumentOcrStatus)) {
+      return
+    }
+    let cancelled = false
+    const intervalId = window.setInterval(async () => {
+      try {
+        const document = await fetchDocument(selectedId)
+        if (cancelled) {
+          return
+        }
+        setSelectedDocument(document)
+        if (expandedDocument?.id === selectedId) {
+          setExpandedDocument(document)
+        }
+      } catch {
+        // keep polling silent while background OCR is in progress
+      }
+    }, 5000)
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [selectedId, selectedDocumentOcrStatus, expandedDocument?.id])
+
   const loadDocuments = async () => {
     console.debug('loadDocuments requested', { filters: normalizedFilters, page: pageState.page, size: pageState.size, sort })
     // debounce to collapse rapid calls
@@ -672,7 +884,25 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
           console.debug('loadDocuments: stale response ignored', { requestId })
           return
         }
-        setDocuments(sortDocumentsLocally(data.content, sort))
+        const sortedDocuments = sortDocumentsLocally(data.content, sort)
+        setDocuments(sortedDocuments)
+        if (selectedId != null) {
+          const matchingSummary = sortedDocuments.find((doc) => String(doc.id) === String(selectedId))
+          if (matchingSummary) {
+            setSelectedDocument((prev) => {
+              if (!prev || String(prev.id) !== String(selectedId)) {
+                return prev
+              }
+              return {
+                ...prev,
+                isOcr: matchingSummary.isOcr ?? matchingSummary.is_ocr ?? prev.isOcr ?? prev.is_ocr,
+                ocrStatus: matchingSummary.ocrStatus ?? matchingSummary.ocr_status ?? prev.ocrStatus ?? prev.ocr_status,
+                ocrStatusMessage: matchingSummary.ocrStatusMessage ?? matchingSummary.ocr_status_message ?? prev.ocrStatusMessage ?? prev.ocr_status_message,
+                ocrStatusUpdatedAt: matchingSummary.ocrStatusUpdatedAt ?? matchingSummary.ocr_status_updated_at ?? prev.ocrStatusUpdatedAt ?? prev.ocr_status_updated_at,
+              }
+            })
+          }
+        }
         console.debug('loadDocuments success', { requestId, count: data.content?.length ?? 0 })
         setPageMeta(data)
         const selectedIdText = selectedId == null ? null : String(selectedId)
@@ -707,6 +937,27 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     } catch (err) {
       setError(err.message)
       toast && toast(err.message || 'Failed to load document details', { type: 'error' })
+    }
+  }
+
+  const handleRefreshOcrWorkspace = async () => {
+    if (!selectedId) {
+      toast && toast('Select a document first', { type: 'info' })
+      return
+    }
+    setOcrLoadingCached(true)
+    setOcrError('')
+    try {
+      await loadDocumentDetails(selectedId)
+      await loadDocuments()
+      setOcrRefreshKey((prev) => prev + 1)
+      toast && toast('OCR workspace refreshed', { type: 'success' })
+    } catch (err) {
+      const message = err.message || 'Failed to refresh OCR workspace'
+      setOcrError(message)
+      toast && toast(message, { type: 'error' })
+    } finally {
+      setOcrLoadingCached(false)
     }
   }
 
@@ -787,18 +1038,39 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     setOcrBusy(true)
     setOcrLoadingCached(false)
     setOcrError('')
+    setSelectedDocument((prev) => (prev ? {
+      ...prev,
+      ocrStatus: 'RUNNING',
+      ocrStatusMessage: 'OCR is currently running.',
+      ocrStatusUpdatedAt: new Date().toISOString(),
+    } : prev))
     try {
-      const response = await runStoredDocumentOcr(selectedId, ocrPrompt, ocrConfidenceLevel)
+      const effectivePrompt = selectedDocumentIsOcr ? ocrPrompt : 'prompt_ocr'
+      const response = await runStoredDocumentOcr(selectedId, effectivePrompt, ocrConfidenceLevel)
       setOcrResult(response)
       setOcrPreview(extractOcrPreview(response))
       setOcrPageIndex(0)
       if (typeof response?.dms_confidence === 'number') {
         setOcrConfidenceLevel(Math.min(100, Math.max(0, response.dms_confidence)))
       }
+      setSelectedDocument((prev) => (prev ? {
+        ...prev,
+        isOcr: true,
+        ocrStatus: 'READY',
+        ocrStatusMessage: 'OCR result is available.',
+        ocrStatusUpdatedAt: new Date().toISOString(),
+      } : prev))
       toast && toast('OCR completed for selected document', { type: 'success' })
     } catch (err) {
       const message = err.message || 'OCR failed'
       setOcrError(message)
+      setSelectedDocument((prev) => (prev ? {
+        ...prev,
+        isOcr: false,
+        ocrStatus: 'FAILED',
+        ocrStatusMessage: message,
+        ocrStatusUpdatedAt: new Date().toISOString(),
+      } : prev))
       toast && toast(message, { type: 'error' })
     } finally {
       setOcrBusy(false)
@@ -853,13 +1125,66 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
       const extracted = deepCloneJson(result?.extracted_json)
       setEditableExtractionData(extracted)
       setOriginalExtractionData(deepCloneJson(extracted))
-      toast && toast('Data extraction completed.', { type: 'success' })
+
+      const persistence = await persistExtractedMetadata(extracted, metadataTemplate, {
+        successMessage: 'Data extraction completed and document metadata updated.',
+        skippedMessage: 'Data extraction completed. Review the extracted data before updating document metadata.',
+      })
+      toast && toast(persistence.message, { type: persistence.type })
     } catch (err) {
       const message = err.message || 'Data extraction failed'
       setExtractionError(message)
       toast && toast(message, { type: 'error' })
     } finally {
       setExtractionBusy(false)
+    }
+  }
+
+  const handleRunEmbedding = async () => {
+    const ocrText = activeOcrPreviewContent
+
+    if (!selectedId) {
+      toast && toast('Select a document first.', { type: 'info' })
+      return
+    }
+
+    if (!ocrText) {
+      toast && toast('Run OCR first to obtain text for chunking and embedding.', { type: 'info' })
+      return
+    }
+
+    setEmbeddingBusy(true)
+    setEmbeddingError('')
+    setEmbeddingResult(null)
+    setEmbeddingStatus('QUEUED')
+    setEmbeddingMessage('Embedding job queued.')
+
+    try {
+      const response = await startEmbeddingJob({
+        document_id: String(selectedId),
+        title: selectedDocument?.title ?? selectedListDocument?.title ?? '',
+        ocr_text: ocrText,
+        category: selectedDocument?.category ?? selectedListDocument?.category ?? null,
+        owner: selectedDocument?.owner ?? selectedListDocument?.owner ?? null,
+        created_at:
+          selectedDocument?.createdAt
+          ?? selectedDocument?.created_at
+          ?? selectedListDocument?.createdAt
+          ?? selectedListDocument?.created_at
+          ?? null,
+        force_reindex: true,
+      })
+      setEmbeddingJobId(response?.job_id ?? null)
+      setEmbeddingStatus(String(response?.status ?? 'QUEUED').toUpperCase())
+      setEmbeddingMessage(response?.message ?? 'Embedding job queued.')
+      toast && toast('Chunking and embedding job started in the backend.', { type: 'success' })
+    } catch (err) {
+      const message = err.message || 'Failed to start embedding job'
+      setEmbeddingBusy(false)
+      setEmbeddingStatus('FAILED')
+      setEmbeddingMessage(message)
+      setEmbeddingError(message)
+      toast && toast(message, { type: 'error' })
     }
   }
 
@@ -885,6 +1210,49 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     setEditableExtractionData((prev) => setNestedValue(prev ?? {}, path, value))
   }
 
+  const handleSaveEditedExtraction = async () => {
+    if (!editableExtractionData) {
+      toast && toast('No edited data to save.', { type: 'info' })
+      return
+    }
+    const metadataTemplate = selectedDocument?.folder?.metadataTemplate
+    setExtractionBusy(true)
+    setExtractionError('')
+    setExtractionResult((prev) => {
+      if (!prev) return prev
+      return { ...prev, extracted_json: deepCloneJson(editableExtractionData) }
+    })
+    try {
+      const persistence = await persistExtractedMetadata(editableExtractionData, metadataTemplate, {
+        successMessage: 'Edited extraction saved and document metadata updated.',
+        skippedMessage: 'Edited extraction saved locally. Document metadata was not updated.',
+      })
+      toast && toast(persistence.message, { type: persistence.type })
+    } catch (err) {
+      const message = err.message || 'Edited data saved locally, but metadata update failed.'
+      setExtractionError(message)
+      toast && toast(message, { type: 'error' })
+    } finally {
+      setExtractionBusy(false)
+    }
+  }
+
+  const handleResetEditedExtraction = () => {
+    if (!originalExtractionData) {
+      toast && toast('Nothing to reset.', { type: 'info' })
+      return
+    }
+    setEditableExtractionData(deepCloneJson(originalExtractionData))
+    toast && toast('Edited data reset.', { type: 'info' })
+  }
+
+  const handleDownloadEditedExtractionJson = () => {
+    const payload = editableExtractionData ?? extractionResult?.extracted_json
+    if (!payload) return
+    const stem = safeFileStem(selectedDocument?.title)
+    downloadTextFile(JSON.stringify(payload, null, 2), `${stem}.edited.extracted.json`)
+  }
+
   const handleFilterChange = (nextFilters) => {
     setFilters((prev) => ({ ...nextFilters, folderId: prev.folderId }))
     setPageState({ ...defaultPage })
@@ -907,14 +1275,23 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     setBusy(true)
     setError('')
     try {
-      await uploadDocument({
+      const created = await uploadDocument({
         ...payload,
         tags: normalizeTags(payload.tags),
         metadata: payload.metadata ?? {},
       }, file)
       setUploadOpen(false)
+      if (created?.id) {
+        setSelectedId(created.id)
+        setSelectedDocument(created)
+      }
       await loadDocuments()
-      toast && toast('Upload complete', { type: 'success' })
+      toast && toast(
+        payload?.runOcr
+          ? 'Upload complete. OCR is running in the background.'
+          : 'Upload complete',
+        { type: 'success' }
+      )
     } catch (err) {
       setError(err.message)
       toast && toast(err.message || 'Upload failed', { type: 'error' })
@@ -1095,6 +1472,53 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
       toast && toast(err.message || 'Failed to update metadata', { type: 'error' })
     } finally {
       setBusy(false)
+    }
+  }
+
+  const persistExtractedMetadata = async (extractedMetadata, metadataTemplate, {
+    successMessage,
+    skippedMessage,
+  } = {}) => {
+    if (!selectedId) {
+      return { message: skippedMessage || 'Data extraction completed.', type: 'success' }
+    }
+
+    if (!Array.isArray(metadataTemplate) || !metadataTemplate.length) {
+      return { message: skippedMessage || 'Data extraction completed.', type: 'success' }
+    }
+
+    if (!extractedMetadata || typeof extractedMetadata !== 'object') {
+      return { message: skippedMessage || 'Data extraction completed.', type: 'success' }
+    }
+
+    const mergedMetadata = mergeExtractedMetadata(selectedDocument?.metadata, extractedMetadata, metadataTemplate)
+    const validation = validateMetadataValues(metadataTemplate, mergedMetadata)
+    if (!validation.valid) {
+      const firstError = Object.values(validation.errors)[0] || 'The extracted values do not satisfy the folder metadata rules.'
+      return {
+        message: `Data extraction completed, but document metadata was not updated: ${firstError}`,
+        type: 'warning',
+      }
+    }
+
+    const overrideWrite = canOverrideWriteForDocument(selectedId)
+    if (!(documentPermissions?.write ?? false) && !overrideWrite) {
+      return {
+        message: 'Data extraction completed, but document metadata was not updated because you do not have permission to edit this document.',
+        type: 'warning',
+      }
+    }
+
+    const updated = await updateDocument(selectedId, { metadata: mergedMetadata })
+    setSelectedDocument(updated)
+    if (expandedDocument?.id === selectedId) {
+      setExpandedDocument(updated)
+    }
+    await loadDocuments()
+    return {
+      message: successMessage || 'Document metadata updated from extracted data.',
+      type: 'success',
+      updated,
     }
   }
 
@@ -1506,37 +1930,70 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
             <div>
               <p className="eyebrow">OCR Output</p>
               <h3>Selected Document OCR</h3>
+              {selectedId && (
+                <div className="workspace-ocr-card__status">
+                  <span className={`pill pill--${selectedDocumentOcrStatusMeta.tone}`}>
+                    {selectedDocumentOcrStatusMeta.label}
+                  </span>
+                  <small>{selectedDocumentOcrStatusMessage}</small>
+                  {selectedDocumentOcrStatusUpdatedAt && (
+                    <small>Updated {new Date(selectedDocumentOcrStatusUpdatedAt).toLocaleString()}</small>
+                  )}
+                </div>
+              )}
             </div>
-            {ocrWorkspaceTab === 'ocr' ? (
+            <div className="workspace-ocr-card__header-actions">
               <button
                 type="button"
-                className="primary"
-                onClick={handleRunSelectedOcr}
-                disabled={ocrBusy || !(documentPermissions?.write ?? false) || !selectedId || !selectedLooksPdf}
-                title={!selectedId ? 'Select a document first' : !selectedLooksPdf ? 'OCR currently supports PDF documents only' : undefined}
+                className="ghost"
+                onClick={handleRefreshOcrWorkspace}
+                disabled={!selectedId || ocrBusy || ocrLoadingCached}
+                title={!selectedId ? 'Select a document first' : 'Refresh OCR status and output'}
               >
-                {ocrBusy ? 'Running OCR...' : 'Run OCR'}
+                {ocrLoadingCached ? 'Refreshing...' : 'Refresh'}
               </button>
-            ) : ocrWorkspaceTab === 'extraction' ? (
-              <button
-                type="button"
-                className="primary"
-                onClick={handleRunExtraction}
-                disabled={extractionBusy || !activeOcrPreviewContent}
-                title={!activeOcrPreviewContent ? 'Run OCR first to obtain text for extraction' : undefined}
-              >
-                {extractionBusy ? 'Extracting...' : 'Extract Data'}
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="primary"
-                onClick={handleSaveEditedExtraction}
-                disabled={!editableExtractionData}
-              >
-                Save Changes
-              </button>
-            )}
+              {ocrWorkspaceTab === 'ocr' ? (
+                <>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={handleRunEmbedding}
+                    disabled={embeddingBusy || !selectedId || !activeOcrPreviewContent}
+                    title={!selectedId ? 'Select a document first' : !activeOcrPreviewContent ? 'Run OCR first to obtain text for chunking and embedding' : undefined}
+                  >
+                    {embeddingBusy ? 'Embedding...' : 'Embed for Search'}
+                  </button>
+                  <button
+                    type="button"
+                    className="primary"
+                    onClick={handleRunSelectedOcr}
+                    disabled={ocrBusy || !(documentPermissions?.write ?? false) || !selectedId || !selectedLooksPdf}
+                    title={!selectedId ? 'Select a document first' : !selectedLooksPdf ? 'OCR currently supports PDF documents only' : undefined}
+                  >
+                    {ocrBusy ? 'Running OCR...' : 'Run OCR'}
+                  </button>
+                </>
+              ) : ocrWorkspaceTab === 'extraction' ? (
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={handleRunExtraction}
+                  disabled={extractionBusy || !activeOcrPreviewContent}
+                  title={!activeOcrPreviewContent ? 'Run OCR first to obtain text for extraction' : undefined}
+                >
+                  {extractionBusy ? 'Extracting...' : 'Extract Data'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={handleSaveEditedExtraction}
+                  disabled={!editableExtractionData}
+                >
+                  Save Changes
+                </button>
+              )}
+            </div>
           </div>
           {/* Nav-tabs */}
           <div className="workspace-ocr-tabs">
@@ -1565,11 +2022,12 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
           {ocrWorkspaceTab === 'ocr' && <div className="workspace-ocr-card__settings">
             <label>
               <span>OCR prompt</span>
-              <select value={ocrPrompt} onChange={(evt) => setOcrPrompt(evt.target.value)} disabled={ocrBusy}>
-                <option value="prompt_layout_all_en">prompt_layout_all_en</option>
-                <option value="prompt_layout_only_en">prompt_layout_only_en</option>
+              <select value={ocrPrompt} onChange={(evt) => setOcrPrompt(evt.target.value)} disabled={ocrBusy || !selectedDocumentIsOcr}>
                 <option value="prompt_ocr">prompt_ocr</option>
+                {selectedDocumentIsOcr && <option value="prompt_layout_all_en">prompt_layout_all_en</option>}
+                {selectedDocumentIsOcr && <option value="prompt_layout_only_en">prompt_layout_only_en</option>}
               </select>
+              {!selectedDocumentIsOcr && <small>First OCR run is fixed to prompt_ocr. Layout prompts unlock after OCR is completed.</small>}
             </label>
             <label>
               <span>Confidence level</span>
@@ -1589,7 +2047,16 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
             </label>
           </div>}
           {ocrWorkspaceTab === 'ocr' && !selectedId && <p className="feedback">Select a document in the workspace list to run OCR.</p>}
+          {ocrWorkspaceTab === 'ocr' && selectedId && embeddingStatus !== 'IDLE' && (
+            <p className={`feedback${embeddingStatus === 'FAILED' ? ' feedback--error' : ''}`}>
+              <span className={`pill pill--${embeddingStatusMeta.tone}`}>{embeddingStatusMeta.label}</span>{' '}
+              {embeddingError || embeddingMessage || 'Embedding status unavailable.'}
+              {embeddingResult?.chunk_count ? ` Chunks: ${embeddingResult.chunk_count}.` : ''}
+            </p>
+          )}
           {ocrWorkspaceTab === 'ocr' && selectedId && !selectedLooksPdf && <p className="feedback">Selected document is not a PDF. OCR supports PDF only.</p>}
+          {ocrWorkspaceTab === 'ocr' && selectedId && selectedLooksPdf && selectedDocumentOcrStatus === 'QUEUED' && <p className="feedback">OCR is queued and will start in the backend shortly.</p>}
+          {ocrWorkspaceTab === 'ocr' && selectedId && selectedLooksPdf && selectedDocumentOcrStatus === 'RUNNING' && <p className="feedback">OCR is running in the backend. This panel refreshes automatically.</p>}
           {ocrWorkspaceTab === 'ocr' && ocrLoadingCached && <p className="feedback">Loading cached OCR result...</p>}
           {ocrWorkspaceTab === 'ocr' && ocrError && <p className="feedback feedback--error">{ocrError}</p>}
           {ocrWorkspaceTab === 'extraction' && (

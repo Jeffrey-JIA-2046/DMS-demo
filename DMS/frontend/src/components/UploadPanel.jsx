@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useContext } from 'react'
-import { listApproverOptions, listSupervisorOptions, runPdfOcr } from '../api/documents'
+import { listApproverOptions, listSupervisorOptions } from '../api/documents'
 import FolderTree from './FolderTree'
 import { collectFolderIds, findFolderNode, findFolderPath } from '../utils/folders'
 import { AnnounceContext } from '../contexts/AnnounceContext'
@@ -25,6 +25,8 @@ const initialState = {
   folderId: null,
   approverId: null,
   supervisorId: null,
+  runOcr: false,
+  runDataExtraction: false,
 }
 
 const normalizeApproverOptions = (data) => {
@@ -43,15 +45,6 @@ const normalizeApproverOptions = (data) => {
     .filter((item) => item.id)
 }
 
-const isPdfFile = (selectedFile) => {
-  if (!selectedFile) {
-    return false
-  }
-  const fileName = (selectedFile.name ?? '').toLowerCase()
-  const contentType = (selectedFile.type ?? '').toLowerCase()
-  return fileName.endsWith('.pdf') || contentType.includes('pdf')
-}
-
 const deriveTitleFromFileName = (name = '') => {
   const trimmed = String(name || '').trim()
   if (!trimmed) {
@@ -64,47 +57,13 @@ const deriveTitleFromFileName = (name = '') => {
   return trimmed.slice(0, lastDot)
 }
 
-const collectTextFromNode = (node, lines) => {
-  if (!node) {
-    return
+const fileLooksPdf = (candidate) => {
+  if (!candidate) {
+    return false
   }
-  if (typeof node === 'string') {
-    const trimmed = node.trim()
-    if (trimmed.length) {
-      lines.push(trimmed)
-    }
-    return
-  }
-  if (Array.isArray(node)) {
-    node.forEach((item) => collectTextFromNode(item, lines))
-    return
-  }
-  if (typeof node === 'object') {
-    if (typeof node.text === 'string') {
-      collectTextFromNode(node.text, lines)
-    }
-    if (typeof node.markdown === 'string') {
-      collectTextFromNode(node.markdown, lines)
-    }
-    if (typeof node.md === 'string') {
-      collectTextFromNode(node.md, lines)
-    }
-    if (typeof node.content === 'string') {
-      collectTextFromNode(node.content, lines)
-    }
-  }
-}
-
-const extractOcrPreview = (response) => {
-  const lines = []
-  collectTextFromNode(response?.results, lines)
-  if (!lines.length) {
-    collectTextFromNode(response, lines)
-  }
-  if (!lines.length) {
-    return ''
-  }
-  return lines.join('\n\n')
+  const fileName = typeof candidate.name === 'string' ? candidate.name.toLowerCase() : ''
+  const contentType = typeof candidate.type === 'string' ? candidate.type.toLowerCase() : ''
+  return fileName.endsWith('.pdf') || contentType.includes('pdf')
 }
 
 export default function UploadPanel({
@@ -138,11 +97,6 @@ export default function UploadPanel({
   const [supervisorOptions, setSupervisorOptions] = useState([])
   const [supervisorLoading, setSupervisorLoading] = useState(false)
   const [supervisorError, setSupervisorError] = useState('')
-  const [ocrPrompt, setOcrPrompt] = useState('prompt_layout_all_en')
-  const [ocrBusy, setOcrBusy] = useState(false)
-  const [ocrError, setOcrError] = useState('')
-  const [ocrPreview, setOcrPreview] = useState('')
-  const [ocrRaw, setOcrRaw] = useState(null)
   const { toast, confirm } = useContext(AnnounceContext)
   const { currentUser } = useContext(AuthContext)
 
@@ -293,12 +247,6 @@ export default function UploadPanel({
     }
   }, [])
 
-  useEffect(() => {
-    setOcrError('')
-    setOcrPreview('')
-    setOcrRaw(null)
-  }, [file])
-
   const handleSubmit = (event) => {
     event.preventDefault()
     if (!file) {
@@ -354,6 +302,8 @@ export default function UploadPanel({
       owner: currentOwner,
       approverId: normalizedApproverId,
       supervisorId: normalizedSupervisorId,
+      runOcr: Boolean((form.runOcr || form.runDataExtraction) && fileLooksPdf(file)),
+      runDataExtraction: Boolean(form.runDataExtraction && fileLooksPdf(file)),
       tags: form.tags,
       metadata: normalizedMetadata,
     }, file)
@@ -366,6 +316,9 @@ export default function UploadPanel({
   const handleFileChange = (event) => {
     const nextFile = event.target.files?.[0] ?? null
     setFile(nextFile)
+    if (!fileLooksPdf(nextFile)) {
+      setForm((prev) => ({ ...prev, runOcr: false, runDataExtraction: false }))
+    }
     if (!nextFile) {
       return
     }
@@ -374,6 +327,23 @@ export default function UploadPanel({
       return
     }
     setForm((prev) => ({ ...prev, title: suggestedTitle }))
+  }
+
+  const canRunUploadOcr = fileLooksPdf(file)
+
+  const handleOcrToggle = (checked) => {
+    setForm((prev) => ({
+      ...prev,
+      runOcr: checked || prev.runDataExtraction,
+    }))
+  }
+
+  const handleExtractionToggle = (checked) => {
+    setForm((prev) => ({
+      ...prev,
+      runDataExtraction: checked,
+      runOcr: checked ? true : prev.runOcr,
+    }))
   }
 
   const handleMetadataValueChange = (key, value) => {
@@ -428,34 +398,7 @@ export default function UploadPanel({
     }
   }
 
-  const handleRunOcr = async () => {
-    if (!file) {
-      setOcrError('Select a PDF file first')
-      return
-    }
-    if (!isPdfFile(file)) {
-      setOcrError('OCR currently supports PDF files only')
-      return
-    }
-
-    setOcrBusy(true)
-    setOcrError('')
-    try {
-      const response = await runPdfOcr(file, ocrPrompt)
-      setOcrRaw(response)
-      setOcrPreview(extractOcrPreview(response))
-      toast && toast('OCR completed', { type: 'success' })
-    } catch (err) {
-      const message = err.message || 'OCR failed'
-      setOcrError(message)
-      toast && toast(message, { type: 'error' })
-    } finally {
-      setOcrBusy(false)
-    }
-  }
-
   const selectedFolderSummary = folderPath?.join(' / ')
-  const canRunOcr = file && isPdfFile(file)
 
   return (
     <div className="upload-panel">
@@ -514,8 +457,33 @@ export default function UploadPanel({
                 accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.csv,.png,.jpg,.jpeg"
                 onChange={handleFileChange}
               />
-              <small>Select a document file to upload. OCR runs on PDF files.</small>
+              <small>Select a document file to upload.</small>
             </label>
+            <label className="checkbox upload-panel__checkbox-row">
+              <input
+                type="checkbox"
+                checked={Boolean(form.runOcr && canRunUploadOcr)}
+                onChange={(e) => handleOcrToggle(e.target.checked)}
+                disabled={busy || !canRunUploadOcr || Boolean(form.runDataExtraction)}
+              />
+              <span>Run OCR after upload</span>
+            </label>
+            <label className="checkbox upload-panel__checkbox-row">
+              <input
+                type="checkbox"
+                checked={Boolean(form.runDataExtraction && canRunUploadOcr)}
+                onChange={(e) => handleExtractionToggle(e.target.checked)}
+                disabled={busy || !canRunUploadOcr}
+              />
+              <span>Run data extraction after upload</span>
+            </label>
+            <small className="upload-panel__hint">
+              {canRunUploadOcr
+                ? form.runDataExtraction
+                  ? 'The document uploads first. OCR runs in the backend, then data extraction updates document metadata automatically.'
+                  : 'The document uploads first. OCR then runs in the backend so the upload dialog can close immediately.'
+                : 'OCR and data extraction during upload are available for PDF files only.'}
+            </small>
             <label>
               <span>Title</span>
               <input required value={form.title} onChange={(e) => handleChange('title', e.target.value)} />
@@ -584,43 +552,6 @@ export default function UploadPanel({
               <small>Supervisor will receive reminder, retention, and rejection follow-up tasks.</small>
               {supervisorError && <p className="feedback feedback--error">{supervisorError}</p>}
             </label>
-            {file && isPdfFile(file) && (
-              <section className="metadata-input-card">
-                <label>
-                  <span>OCR prompt</span>
-                  <input
-                    value={ocrPrompt}
-                    onChange={(e) => setOcrPrompt(e.target.value)}
-                    placeholder="prompt_layout_all_en"
-                    disabled={ocrBusy || busy}
-                  />
-                </label>
-                <p className="feedback">Run OCR from the action buttons below.</p>
-                {ocrError && <p className="feedback feedback--error">{ocrError}</p>}
-                {ocrPreview && (
-                  <>
-                    <label>
-                      <span>OCR preview</span>
-                      <textarea value={ocrPreview} readOnly rows={8} />
-                    </label>
-                    <button
-                      type="button"
-                      className="ghost"
-                      disabled={busy}
-                      onClick={() => {
-                        handleChange('description', ocrPreview)
-                        toast && toast('Description filled from OCR preview', { type: 'success' })
-                      }}
-                    >
-                      Use OCR Preview As Description
-                    </button>
-                  </>
-                )}
-                {ocrRaw && !ocrPreview && (
-                  <p className="feedback">OCR returned data. The response does not include a text field to preview.</p>
-                )}
-              </section>
-            )}
           </div>
 
           <div className="upload-panel__secondary">
@@ -727,22 +658,13 @@ export default function UploadPanel({
         {error && <p className="feedback feedback--error">{error}</p>}
         <div className="upload-panel__actions">
           <button
-            type="button"
-            className="ghost upload-panel__ocr-action"
-            disabled={ocrBusy || busy || !canRunOcr}
-            onClick={handleRunOcr}
-            title={canRunOcr ? 'Run OCR on selected PDF' : 'Select a PDF file to enable OCR'}
-          >
-            {ocrBusy ? 'Running OCR...' : canRunOcr ? 'Run OCR' : 'Run OCR (PDF only)'}
-          </button>
-          <button
             type="submit"
             className="primary"
-            disabled={busy || ocrBusy || approverLoading || supervisorLoading || !approverOptions.length || !supervisorOptions.length}
+            disabled={busy || approverLoading || supervisorLoading || !approverOptions.length || !supervisorOptions.length}
             aria-label="Upload"
             title="Upload"
           >
-            <span className="icon" aria-hidden="true">⭱</span>
+            Upload
           </button>
         </div>
       </form>
