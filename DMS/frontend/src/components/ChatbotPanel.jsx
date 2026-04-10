@@ -423,7 +423,7 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
                 checked={searchMode === 'hybrid'}
                 onChange={() => setSearchMode('hybrid')}
               />
-              <span>Hybrid Search (with embeddings)</span>
+              <span>Natural Language Search</span>
             </label>
           </div>
 
