@@ -1543,12 +1543,14 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     }
   }
 
-  const handleApprovalDecision = async (documentId, note, action) => {
+  const handleApprovalDecision = async (documentId, decision, action) => {
     if (!documentId || !action) return
     setBusy(true)
     setError('')
     try {
-      const payload = note && note.trim().length ? { note: note.trim() } : {}
+      const payload = typeof decision === 'string'
+        ? (decision && decision.trim().length ? { note: decision.trim() } : {})
+        : { ...(decision || {}) }
       const updated = action === 'approve'
         ? await approveDocument(documentId, payload)
         : await rejectDocument(documentId, payload)
@@ -1638,21 +1640,22 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
         throw new Error('Topic created but topic id is missing in response')
       }
 
-      const numericDocumentId = Number(doc.id)
       const linkPayload = {
-        documentId: Number.isNaN(numericDocumentId) ? doc.id : numericDocumentId,
+        documentId: String(doc.id),
         note: 'Linked from document list quick action.',
       }
 
-      try {
-        await linkKnowledgeDocument(topicId, linkPayload)
-      } catch (linkErr) {
-        const linkMessage = String(linkErr?.message || '').toLowerCase()
-        if (linkMessage.includes('knowledge topic not found')) {
-          await delay(250)
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        try {
           await linkKnowledgeDocument(topicId, linkPayload)
-        } else {
-          throw linkErr
+          break
+        } catch (linkErr) {
+          const linkMessage = String(linkErr?.message || '').toLowerCase()
+          const shouldRetry = linkErr?.status === 404 || linkMessage.includes('knowledge topic not found')
+          if (!shouldRetry || attempt === 3) {
+            throw linkErr
+          }
+          await delay(250 * (attempt + 1))
         }
       }
 
@@ -2184,7 +2187,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
           onArchive={handleArchive}
           onSaveMetadata={handleMetadataUpdate}
           onAddApprovalNote={handleApprovalNote}
-          onApprove={(id, note) => handleApprovalDecision(id, note, 'approve')}
+          onApprove={(id, payload) => handleApprovalDecision(id, payload, 'approve')}
           onReject={(id, note) => handleApprovalDecision(id, note, 'reject')}
           onDelegate={handleDelegateApproval}
           busy={busy}
@@ -2221,7 +2224,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
                 onArchive={handleArchive}
                 onSaveMetadata={handleMetadataUpdate}
                 onAddApprovalNote={handleApprovalNote}
-                onApprove={(id, note) => handleApprovalDecision(id, note, 'approve')}
+                onApprove={(id, payload) => handleApprovalDecision(id, payload, 'approve')}
                 onReject={(id, note) => handleApprovalDecision(id, note, 'reject')}
                 onDelegate={handleDelegateApproval}
                 busy={busy}

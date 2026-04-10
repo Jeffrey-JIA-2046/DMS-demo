@@ -11,6 +11,7 @@ import org.springframework.util.StringUtils;
 
 import com.dms.document.model.DocumentFolder;
 import com.dms.document.model.DocumentFolderPermission;
+import com.dms.security.Role;
 import com.dms.user.model.AppUser;
 import com.dms.user.model.UserGroup;
 
@@ -23,6 +24,9 @@ public class FolderPermissionEvaluator {
         }
         if (folder == null) {
             return FolderPermissionSnapshot.none();
+        }
+        if (user.getRole() == Role.SYS_ADMIN || user.getRole() == Role.USER_ADMIN) {
+            return new FolderPermissionSnapshot(true, true, true);
         }
         List<DocumentFolderPermission> folderPermissions = folder.getPermissions();
         if (folderPermissions == null || folderPermissions.isEmpty()) {

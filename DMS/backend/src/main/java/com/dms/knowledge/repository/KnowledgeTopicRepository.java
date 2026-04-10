@@ -63,7 +63,7 @@ public class KnowledgeTopicRepository extends BaseOpenSearchRepository<Knowledge
     @Override
     public Optional<KnowledgeTopic> findById(String id) throws IOException {
         Query query = Query.of(q -> q.bool(b -> b
-            .must(m1 -> m1.term(t -> t.field("entity_type.keyword").value(v -> v.stringValue(ENTITY_TYPE))))
+            .must(m1 -> m1.term(t -> t.field("entity_type").value(v -> v.stringValue(ENTITY_TYPE))))
             .must(m2 -> m2.ids(i -> i.values(id)))));
 
         SearchRequest request = new SearchRequest.Builder()
@@ -78,7 +78,7 @@ public class KnowledgeTopicRepository extends BaseOpenSearchRepository<Knowledge
 
     @Override
     public Page<KnowledgeTopic> findAll(Pageable pageable) throws IOException {
-        Query query = Query.of(q -> q.term(t -> t.field("entity_type.keyword").value(v -> v.stringValue(ENTITY_TYPE))));
+        Query query = Query.of(q -> q.term(t -> t.field("entity_type").value(v -> v.stringValue(ENTITY_TYPE))));
         SearchRequest.Builder builder = new SearchRequest.Builder()
             .index(getIndexName())
             .query(query);

@@ -58,6 +58,7 @@ import com.dms.document.repository.DocumentVersionRepository;
 import com.dms.exception.InvalidDocumentException;
 import com.dms.exception.ResourceNotFoundException;
 import com.dms.ocr.service.DocumentOcrProcessingService;
+import com.dms.ocr.service.DocumentOcrResultService;
 import com.dms.security.Role;
 import com.dms.task.model.TaskPriority;
 import com.dms.task.model.TaskStatus;
@@ -85,6 +86,7 @@ public class DocumentService {
     private final UserTaskRepository userTaskRepository;
     private final FolderPermissionEvaluator folderPermissionEvaluator;
     private final DocumentOcrProcessingService documentOcrProcessingService;
+    private final DocumentOcrResultService documentOcrResultService;
     private final Clock clock;
 
     public DocumentService(
@@ -95,6 +97,7 @@ public class DocumentService {
         UserTaskRepository userTaskRepository,
         FolderPermissionEvaluator folderPermissionEvaluator,
         DocumentOcrProcessingService documentOcrProcessingService,
+        DocumentOcrResultService documentOcrResultService,
         Clock clock
     ) {
         this.documentRepository = documentRepository;
@@ -104,6 +107,7 @@ public class DocumentService {
         this.userTaskRepository = userTaskRepository;
         this.folderPermissionEvaluator = folderPermissionEvaluator;
         this.documentOcrProcessingService = documentOcrProcessingService;
+        this.documentOcrResultService = documentOcrResultService;
         this.clock = clock;
     }
 
@@ -419,7 +423,9 @@ public class DocumentService {
             Map<String, String> incomingMetadata = request.metadata();
             if (incomingMetadata != null || folderChanged) {
                 DocumentFolder folderForValidation = targetFolder != null ? targetFolder : document.getFolder();
-                Map<String, String> sourceValues = incomingMetadata != null ? incomingMetadata : document.getMetadataValues();
+                Map<String, String> sourceValues = incomingMetadata != null
+                    ? mergeSystemDateMetadata(incomingMetadata, document.getMetadataValues())
+                    : document.getMetadataValues();
                 document.setMetadataValues(resolveMetadataValues(folderForValidation, sourceValues));
                 changed = true;
             }
@@ -475,7 +481,7 @@ public class DocumentService {
             document.setStatus(DocumentStatus.ARCHIVED);
             document.setUpdatedAt(now);
             documentRepository.save(document);
-            completeApprovalTask(document, TaskStatus.CANCELLED, "Archived", now);
+            cancelLinkedTasks(document, "Archived", now);
         } catch (IOException ex) {
             throw new RuntimeException("Failed to archive document", ex);
         }
@@ -487,7 +493,8 @@ public class DocumentService {
             AppUser user = requireUser(username);
             Document document = findDocument(documentId);
             assertCanDelete(resolveFolderForAccess(document), user);
-            completeApprovalTask(document, TaskStatus.CANCELLED, "Deleted", Instant.now(clock));
+            cancelLinkedTasks(document, "Deleted", Instant.now(clock));
+            documentOcrResultService.invalidateDocumentCache(document.getId());
             documentRepository.deleteById(String.valueOf(documentId));
         } catch (IOException ex) {
             throw new RuntimeException("Failed to delete document", ex);
@@ -499,17 +506,8 @@ public class DocumentService {
         try {
             Document document = findDocument(documentId);
             Instant now = Instant.now(clock);
-            completeApprovalTask(document, TaskStatus.CANCELLED, "Disposed by retention policy", now);
-            resolveWorkflowTask(document).ifPresent(task -> {
-                try {
-                    task.setStatus(TaskStatus.CANCELLED);
-                    task.setWorkflowStep("Disposed by retention policy");
-                    task.setUpdatedAt(now);
-                    userTaskRepository.save(task);
-                } catch (IOException ex) {
-                    log.warn("Failed to cancel workflow task during retention disposal", ex);
-                }
-            });
+            cancelLinkedTasks(document, "Disposed by retention policy", now);
+            documentOcrResultService.invalidateDocumentCache(document.getId());
             documentRepository.deleteById(String.valueOf(documentId));
             log.info("Disposed document {} by retention rule {} on {}", documentId, retentionRuleId, disposalDate);
         } catch (IOException ex) {
@@ -534,6 +532,18 @@ public class DocumentService {
             .filter(version -> versionId.equals(version.getId()))
             .findFirst()
             .orElseThrow(() -> new ResourceNotFoundException("Version not found"));
+    }
+
+    @Transactional(readOnly = true)
+    public boolean existsDocument(String documentId) {
+        if (!StringUtils.hasText(documentId)) {
+            return false;
+        }
+        try {
+            return documentRepository.findById(documentId).isPresent();
+        } catch (IOException ex) {
+            throw new RuntimeException("Failed to check document existence", ex);
+        }
     }
 
     @Transactional(readOnly = true)
@@ -916,6 +926,27 @@ public class DocumentService {
             });
         } catch (IOException ex) {
             log.warn("Failed to resolve approval task", ex);
+        }
+    }
+
+    private void cancelLinkedTasks(Document document, String workflowStep, Instant timestamp) {
+        if (document == null || !StringUtils.hasText(document.getId())) {
+            return;
+        }
+
+        try {
+            for (UserTask task : userTaskRepository.findByDocumentId(document.getId())) {
+                try {
+                    task.setStatus(TaskStatus.CANCELLED);
+                    task.setWorkflowStep(workflowStep);
+                    task.setUpdatedAt(timestamp);
+                    userTaskRepository.save(task);
+                } catch (IOException ex) {
+                    log.warn("Failed to cancel linked task {} for document {}", task.getId(), document.getId(), ex);
+                }
+            }
+        } catch (IOException ex) {
+            log.warn("Failed to resolve linked tasks for document {}", document.getId(), ex);
         }
     }
 
@@ -1335,6 +1366,17 @@ public class DocumentService {
 
         copySystemDateMetadata(sanitizedInput, resolved);
         return resolved;
+    }
+
+    private Map<String, String> mergeSystemDateMetadata(Map<String, String> incomingMetadata, Map<String, String> existingMetadata) {
+        Map<String, String> merged = new LinkedHashMap<>();
+        if (incomingMetadata != null) {
+            merged.putAll(incomingMetadata);
+        }
+        if (existingMetadata != null) {
+            copySystemDateMetadata(existingMetadata, merged);
+        }
+        return merged;
     }
 
     private void copySystemDateMetadata(Map<String, String> source, Map<String, String> target) {

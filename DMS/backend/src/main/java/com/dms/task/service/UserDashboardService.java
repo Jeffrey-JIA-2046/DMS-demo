@@ -51,6 +51,7 @@ public class UserDashboardService {
             tasks = userTaskRepository
                 .findByAssigneeUsernameIgnoreCaseOrderByDueDateAsc(username)
                 .stream()
+                .filter(this::excludeOrphanedDocumentTasks)
                 .map(this::toResponse)
                 .toList();
         } catch (java.io.IOException ex) {
@@ -170,6 +171,25 @@ public class UserDashboardService {
 
     private boolean isActiveTaskStatus(TaskStatus status) {
         return status == TaskStatus.PENDING || status == TaskStatus.IN_PROGRESS || status == TaskStatus.BLOCKED;
+    }
+
+    private boolean excludeOrphanedDocumentTasks(UserTask task) {
+        if (task == null || !StringUtils.hasText(task.getDocumentId())) {
+            return true;
+        }
+
+        boolean exists = documentService.existsDocument(task.getDocumentId());
+        if (exists) {
+            return true;
+        }
+
+        if (isActiveTaskStatus(task.getStatus())) {
+            task.setStatus(TaskStatus.CANCELLED);
+            task.setWorkflowStep("Document deleted");
+            task.setUpdatedAt(Instant.now(clock));
+            saveTask(task, "Failed to cancel orphaned dashboard task");
+        }
+        return false;
     }
 
     private AppUser requireUser(String userId) {

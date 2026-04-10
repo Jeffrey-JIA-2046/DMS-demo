@@ -46,6 +46,8 @@ const parseTags = (value) => {
     .filter(Boolean)
 }
 
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
 const downloadBlob = (blob, fileName) => {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
@@ -347,7 +349,23 @@ export default function KnowledgeCollaboration({ navigationContext = null, onOpe
       // If user selected an existing document to attach/link
       if (createForm.linkDocumentId) {
         try {
-          await linkKnowledgeDocument(topic.id, { documentId: createForm.linkDocumentId, note: createForm.linkNote })
+          const linkPayload = {
+            documentId: String(createForm.linkDocumentId),
+            note: createForm.linkNote,
+          }
+          for (let attempt = 0; attempt < 4; attempt += 1) {
+            try {
+              await linkKnowledgeDocument(topic.id, linkPayload)
+              break
+            } catch (linkErr) {
+              const linkMessage = String(linkErr?.message || '').toLowerCase()
+              const shouldRetry = linkErr?.status === 404 || linkMessage.includes('knowledge topic not found')
+              if (!shouldRetry || attempt === 3) {
+                throw linkErr
+              }
+              await delay(250 * (attempt + 1))
+            }
+          }
         } catch (linkErr) {
           showBanner(linkErr.message || 'Unable to link document', 'error')
         }

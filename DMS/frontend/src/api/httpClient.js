@@ -13,9 +13,20 @@ export const authHeaders = () => {
 
 export const handleJsonResponse = async (response) => {
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}))
-    const message = body.message || body.error || 'Request failed'
-    throw new Error(message)
+    const rawBody = await response.text().catch(() => '')
+    let body = {}
+    if (rawBody) {
+      try {
+        body = JSON.parse(rawBody)
+      } catch {
+        body = { message: rawBody }
+      }
+    }
+    const message = body.message || body.error || response.statusText || 'Request failed'
+    const error = new Error(message)
+    error.status = response.status
+    error.body = body
+    throw error
   }
   if (response.status === 204) {
     return null

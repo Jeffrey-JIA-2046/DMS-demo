@@ -252,12 +252,14 @@ export default function UserDashboard() {
     }
   }
 
-  const handleDecision = async (documentId, note, action) => {
+  const handleDecision = async (documentId, decision, action) => {
     if (!documentId) return
     setReviewBusy(true)
     setReviewError('')
     try {
-      const payload = note && note.trim().length ? { note: note.trim() } : {}
+      const payload = typeof decision === 'string'
+        ? (decision && decision.trim().length ? { note: decision.trim() } : {})
+        : { ...(decision || {}) }
       const isRetentionTask = reviewTask?.taskType === RETENTION_TYPE
       const updated = isRetentionTask
         ? (action === 'approve'
@@ -524,7 +526,7 @@ export default function UserDashboard() {
               <DocumentDetails
                 document={reviewDocument}
                 taskContext={reviewTask}
-                onApprove={(id, note) => handleDecision(id, note, 'approve')}
+                onApprove={(id, payload) => handleDecision(id, payload, 'approve')}
                 onReject={(id, note) => handleDecision(id, note, 'reject')}
                 onDelegate={handleDelegate}
                 busy={reviewBusy}

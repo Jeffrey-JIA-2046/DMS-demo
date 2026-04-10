@@ -60,8 +60,8 @@ public class KnowledgeTopicShareRepository extends BaseOpenSearchRepository<Know
     public List<KnowledgeTopicShare> findByTopicId(String topicId) {
         try {
             Query termQuery = Query.of(q -> q.bool(b -> b
-                .must(m1 -> m1.term(t -> t.field("entity_type.keyword").value(v -> v.stringValue(ENTITY_TYPE))))
-                .must(m2 -> m2.term(t -> t.field("topic_id.keyword").value(v -> v.stringValue(topicId))))));
+                .must(m1 -> m1.term(t -> t.field("entity_type").value(v -> v.stringValue(ENTITY_TYPE))))
+                .must(m2 -> m2.term(t -> t.field("topic_id").value(v -> v.stringValue(topicId))))));
             SearchRequest request = new SearchRequest.Builder()
                 .index(getIndexName())
                 .query(termQuery)
@@ -77,8 +77,8 @@ public class KnowledgeTopicShareRepository extends BaseOpenSearchRepository<Know
     public List<KnowledgeTopicShare> findByTopicIdOrderBySharedAtDesc(String topicId) {
         try {
             Query termQuery = Query.of(q -> q.bool(b -> b
-                .must(m1 -> m1.term(t -> t.field("entity_type.keyword").value(v -> v.stringValue(ENTITY_TYPE))))
-                .must(m2 -> m2.term(t -> t.field("topic_id.keyword").value(v -> v.stringValue(topicId))))));
+                .must(m1 -> m1.term(t -> t.field("entity_type").value(v -> v.stringValue(ENTITY_TYPE))))
+                .must(m2 -> m2.term(t -> t.field("topic_id").value(v -> v.stringValue(topicId))))));
             SearchRequest request = new SearchRequest.Builder()
                 .index(getIndexName())
                 .query(termQuery)

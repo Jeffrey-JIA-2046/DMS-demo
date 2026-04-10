@@ -74,16 +74,23 @@ public class DocumentFolderService {
                     var parentNode = nodeMap.get(parent.getId());
                     if (parentNode != null) {
                         parentNode.children().add(node);
+                    } else {
+                        // If the parent is not visible to the current user, keep the visible child accessible.
+                        roots.add(node);
                     }
                 }
             }
 
-            roots.sort((a, b) -> a.name().compareToIgnoreCase(b.name()));
-            nodeMap.values().forEach(node -> node.children().sort((a, b) -> a.name().compareToIgnoreCase(b.name())));
+            sortTree(roots);
             return roots;
         } catch (java.io.IOException ex) {
             throw new RuntimeException("Failed to retrieve folder tree", ex);
         }
+    }
+
+    private void sortTree(List<DocumentFolderTreeNode> nodes) {
+        nodes.sort((a, b) -> a.name().compareToIgnoreCase(b.name()));
+        nodes.forEach(node -> sortTree(node.children()));
     }
 
     private AppUser requireUser(String username) {

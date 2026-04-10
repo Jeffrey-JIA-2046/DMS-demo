@@ -151,7 +151,7 @@ public class UserTaskRepository extends BaseOpenSearchRepository<UserTask> {
             return findByAssigneeUsernameFromMysql(username, false);
         }
         Query query = new Query.Builder()
-            .term(t -> t.field("assignee_username.keyword").value(ov -> ov.stringValue(username)))
+            .term(t -> t.field("assignee_username").value(ov -> ov.stringValue(username)))
             .build();
         try {
             return searchSafely(
@@ -176,7 +176,7 @@ public class UserTaskRepository extends BaseOpenSearchRepository<UserTask> {
             return findByAssigneeUsernameFromMysql(username, true);
         }
         Query query = new Query.Builder()
-            .term(t -> t.field("assignee_username.keyword").value(ov -> ov.stringValue(username)))
+            .term(t -> t.field("assignee_username").value(ov -> ov.stringValue(username)))
             .build();
         try {
             return searchSafely(
@@ -220,8 +220,8 @@ public class UserTaskRepository extends BaseOpenSearchRepository<UserTask> {
         }
         Query query = new Query.Builder()
             .bool(b -> b
-                .must(m1 -> m1.term(t -> t.field("document_id.keyword").value(ov -> ov.stringValue(documentId))))
-                .must(m2 -> m2.term(t -> t.field("task_type.keyword").value(ov -> ov.stringValue(taskType.name()))))
+                .must(m1 -> m1.term(t -> t.field("document_id").value(ov -> ov.stringValue(documentId))))
+                .must(m2 -> m2.term(t -> t.field("task_type").value(ov -> ov.stringValue(taskType.name()))))
             )
             .build();
 
@@ -260,6 +260,30 @@ public class UserTaskRepository extends BaseOpenSearchRepository<UserTask> {
         return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
     }
 
+    public List<UserTask> findByDocumentId(String documentId) throws IOException {
+        if (!openSearchEnabled && dataSource != null) {
+            return findByDocumentIdFromMysql(documentId);
+        }
+
+        Query query = new Query.Builder()
+            .term(t -> t.field("document_id").value(ov -> ov.stringValue(documentId)))
+            .build();
+
+        try {
+            return searchSafely(
+                new SearchRequest.Builder()
+                    .index(getIndexName())
+                    .query(query)
+                    .size(1000)
+                    .build());
+        } catch (OpenSearchException ex) {
+            if (dataSource != null) {
+                return findByDocumentIdFromMysql(documentId);
+            }
+            throw ex;
+        }
+    }
+
     private List<UserTask> findByAssigneeUsernameFromMysql(String username, boolean ignoreCase) throws IOException {
         if (!StringUtils.hasText(username)) {
             return List.of();
@@ -279,6 +303,28 @@ public class UserTaskRepository extends BaseOpenSearchRepository<UserTask> {
             }
         } catch (Exception ex) {
             throw new IOException("Failed to find tasks by assignee from MySQL", ex);
+        }
+    }
+
+    private List<UserTask> findByDocumentIdFromMysql(String documentId) throws IOException {
+        Long numericDocumentId = parseLong(documentId);
+        if (numericDocumentId == null) {
+            return List.of();
+        }
+
+        String sql = "SELECT id, title, description, status, priority, task_type, workflow_step, document_id, document_title, due_date, assignee_id, created_at, updated_at FROM user_tasks WHERE document_id = ? ORDER BY due_date ASC, created_at ASC";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, numericDocumentId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<UserTask> tasks = new java.util.ArrayList<>();
+                while (rs.next()) {
+                    tasks.add(mapTask(rs, conn));
+                }
+                return tasks;
+            }
+        } catch (Exception ex) {
+            throw new IOException("Failed to find tasks by document from MySQL", ex);
         }
     }
 

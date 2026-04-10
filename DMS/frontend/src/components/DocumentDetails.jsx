@@ -41,6 +41,7 @@ const formatMetadataDisplayValue = (field, rawValue, codeTableItems = {}) => {
 
 const MAX_PREVIEW_CHARS = 100000
 const MAX_PDF_PREVIEW_CHARS = 120000
+const SYSTEM_METADATA_KEYS = ['documentDate', 'approvalDate', 'expiryDate', 'archiveDate', 'reminderDate']
 
 const STATUS_TONE = {
   DRAFT: 'warning',
@@ -108,6 +109,7 @@ export default function DocumentDetails({
   const [documentCategoryOptions, setDocumentCategoryOptions] = useState([])
   const [approvalModal, setApprovalModal] = useState(null)
   const [approvalNote, setApprovalNote] = useState('')
+  const [approvalDates, setApprovalDates] = useState({ documentDate: '', expiryDate: '' })
   const [delegateApproverId, setDelegateApproverId] = useState('')
   const [delegateOptions, setDelegateOptions] = useState([])
   const [delegateLoading, setDelegateLoading] = useState(false)
@@ -141,6 +143,10 @@ export default function DocumentDetails({
   const openApprovalModal = (mode) => {
     if (!document) return
     setApprovalNote('')
+    setApprovalDates({
+      documentDate: document.metadata?.documentDate ?? '',
+      expiryDate: document.metadata?.expiryDate ?? '',
+    })
     setDelegateApproverId('')
     setDelegateError('')
     setApprovalModal(mode)
@@ -149,6 +155,7 @@ export default function DocumentDetails({
   const closeApprovalModal = () => {
     setApprovalModal(null)
     setApprovalNote('')
+    setApprovalDates({ documentDate: '', expiryDate: '' })
     setDelegateApproverId('')
     setDelegateError('')
   }
@@ -165,11 +172,22 @@ export default function DocumentDetails({
       toast && toast('Select a user to delegate to', { type: 'error' })
       return
     }
+    if (approvalModal === 'approve') {
+      if (!approvalDates.documentDate.trim() || !approvalDates.expiryDate.trim()) {
+        toast && toast('Document date and expiry date are required before approval', { type: 'error' })
+        return
+      }
+    }
     try {
       if (approvalModal === 'note' && typeof onAddApprovalNote === 'function') {
         await onAddApprovalNote(document.id, trimmed)
       } else if (approvalModal === 'approve' && typeof onApprove === 'function') {
-        await onApprove(document.id, trimmed)
+        const payload = {
+          ...(trimmed ? { note: trimmed } : {}),
+          documentDate: approvalDates.documentDate.trim(),
+          expiryDate: approvalDates.expiryDate.trim(),
+        }
+        await onApprove(document.id, payload)
       } else if (approvalModal === 'reject' && typeof onReject === 'function') {
         await onReject(document.id, trimmed)
       } else if (approvalModal === 'delegate' && typeof onDelegate === 'function') {
@@ -218,6 +236,12 @@ export default function DocumentDetails({
       return
     }
     const normalizedMetadata = normalizeMetadataValues(folderTemplate, form.metadata)
+    SYSTEM_METADATA_KEYS.forEach((key) => {
+      const value = form.metadata?.[key]
+      if (typeof value === 'string' && value.trim()) {
+        normalizedMetadata[key] = value.trim()
+      }
+    })
     onSaveMetadata && onSaveMetadata(document.id, { ...form, tags: form.tags, metadata: normalizedMetadata })
     setEditing(false)
   }
@@ -424,7 +448,6 @@ export default function DocumentDetails({
       cancelled = true
     }
   }, [])
-  const systemMetadataKeys = ['documentDate', 'approvalDate', 'expiryDate', 'archiveDate', 'reminderDate']
   const systemMetadataLabels = {
     documentDate: 'Document Date',
     approvalDate: 'Approval Date',
@@ -433,7 +456,7 @@ export default function DocumentDetails({
     reminderDate: 'Reminder Date',
   }
   const templateKeys = new Set(folderTemplate.map((field) => field.key))
-  const systemMetadataEntries = systemMetadataKeys
+  const systemMetadataEntries = SYSTEM_METADATA_KEYS
     .filter((key) => metadataValues[key] && !templateKeys.has(key))
     .map((key) => ({
       key,
@@ -464,6 +487,8 @@ export default function DocumentDetails({
   const statusTone = STATUS_TONE[document?.status] || 'neutral'
   const approvalInfo = document?.approval ?? null
   const approvalNotes = Array.isArray(document?.approvalNotes) ? document.approvalNotes : []
+  const approvalNeedsDates = approvalModal === 'approve'
+    && (!String(document?.metadata?.documentDate ?? '').trim() || !String(document?.metadata?.expiryDate ?? '').trim())
   const isApprover = approvalInfo?.approverUsername && currentUser?.username
     ? approvalInfo.approverUsername.toLowerCase() === currentUser.username.toLowerCase()
     : false
@@ -1154,6 +1179,29 @@ export default function DocumentDetails({
               </label>
             )}
             {approvalModal === 'delegate' && delegateError && <small className="feedback feedback--error">{delegateError}</small>}
+            {approvalNeedsDates && (
+              <>
+                <label>
+                  <span>Document date</span>
+                  <input
+                    type="date"
+                    value={approvalDates.documentDate}
+                    onChange={(e) => setApprovalDates((prev) => ({ ...prev, documentDate: e.target.value }))}
+                    required
+                  />
+                </label>
+                <label>
+                  <span>Expiry date</span>
+                  <input
+                    type="date"
+                    value={approvalDates.expiryDate}
+                    onChange={(e) => setApprovalDates((prev) => ({ ...prev, expiryDate: e.target.value }))}
+                    required
+                  />
+                </label>
+                <small>These dates are missing from the document metadata and must be restored before approval.</small>
+              </>
+            )}
             <label>
               <span>Notes</span>
               <textarea
