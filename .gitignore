@@ -1,3 +1,6 @@
 dots.ocr/weights/DotsOCR_1_5/model-00001-of-00002.safetensors
 dots.ocr/weights/DotsOCR_1_5/model-00002-of-00002.safetensors
 chatbot/local_models/multilingual-e5-small
+/DMS/backend/target/classes
+/DMS/backend/target/classes
+*.class

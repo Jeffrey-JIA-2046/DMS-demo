@@ -88,6 +88,21 @@ const parseIso = (value) => {
   return Number.isNaN(time) ? null : time
 }
 
+const startOfTodayMs = () => {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  return today.getTime()
+}
+
+const endOfDayMs = (baseMs, daysAhead = 0) => {
+  const date = new Date(baseMs)
+  date.setDate(date.getDate() + daysAhead)
+  date.setHours(23, 59, 59, 999)
+  return date.getTime()
+}
+
+const taskCreatedMs = (task) => parseIso(task?.createdAt) ?? parseIso(task?.updatedAt)
+
 export default function UserDashboard() {
   // Fast-refresh probe: add a lightweight debug log to detect HMR without full reload
   console.debug('UserDashboard render — fast-refresh probe', new Date().toISOString())
@@ -175,29 +190,31 @@ export default function UserDashboard() {
   const dashboardKpis = useMemo(() => {
     const storedLastLogout = typeof window !== 'undefined' ? window.localStorage.getItem(LAST_LOGOUT_KEY) : null
     const lastLogoutMs = parseIso(storedLastLogout)
-    const now = Date.now()
-    const sinceBoundary = lastLogoutMs ?? (now - (24 * 60 * 60 * 1000))
-    const upcomingBoundary = now + (7 * 24 * 60 * 60 * 1000)
+    const nowMs = Date.now()
+    const sinceBoundary = lastLogoutMs ?? (nowMs - (24 * 60 * 60 * 1000))
+    const todayStartMs = startOfTodayMs()
+    const upcomingBoundary = endOfDayMs(todayStartMs, 7)
 
-    const pendingTasks = tasks.filter((task) => TODO_STATUSES.has(task.status)).length
+    const activeTasks = tasks.filter((task) => TODO_STATUSES.has(task.status))
+    const pendingTasks = activeTasks.length
     const newTasks = tasks.filter((task) => {
-      const created = parseIso(task.createdAt)
-      return created != null && created >= sinceBoundary
+      const created = taskCreatedMs(task)
+      return created != null && created >= sinceBoundary && TODO_STATUSES.has(task.status)
     }).length
     const newDocuments = new Set(
       tasks
         .filter((task) => {
           if (!task.documentId) return false
-          if (task.taskType !== 'WORKFLOW') return false
-          const created = parseIso(task.createdAt)
+          if (task.taskType === REMINDER_TYPE) return false
+          const created = taskCreatedMs(task)
           return created != null && created >= sinceBoundary
         })
         .map((task) => task.documentId)
     ).size
-    const upcomingReminders = tasks.filter((task) => {
+    const upcomingReminders = activeTasks.filter((task) => {
       if (task.taskType !== REMINDER_TYPE || !TODO_STATUSES.has(task.status) || !task.dueDate) return false
       const dueMs = Date.parse(`${task.dueDate}T00:00:00`)
-      return !Number.isNaN(dueMs) && dueMs >= now && dueMs <= upcomingBoundary
+      return !Number.isNaN(dueMs) && dueMs >= todayStartMs && dueMs <= upcomingBoundary
     }).length
 
     const items = [
@@ -207,10 +224,14 @@ export default function UserDashboard() {
       { key: 'reminders', label: 'Upcoming Reminders', value: upcomingReminders, tone: 'rose' },
     ]
     const maxValue = Math.max(1, ...items.map((item) => item.value))
+    const ringCircumference = 2 * Math.PI * 24
     return {
       items: items.map((item) => ({
         ...item,
         widthPct: Math.max(8, Math.round((item.value / maxValue) * 100)),
+        ratioPct: Math.round((item.value / maxValue) * 100),
+        ringCircumference,
+        ringLength: Math.max(0, Math.min(ringCircumference, (item.value / maxValue) * ringCircumference)),
       })),
       sinceText: lastLogoutMs != null ? `Since ${formatTimestamp(new Date(lastLogoutMs).toISOString())}` : 'Since your last day',
     }
@@ -336,7 +357,7 @@ export default function UserDashboard() {
       <section className="dashboard-panel dashboard-panel--kpis">
         <div className="dashboard-panel__header">
           <div>
-            <p className="eyebrow">Graphic Summary</p>
+            <p className="eyebrow">Graphic View</p>
             <h3>Task and document pulse</h3>
           </div>
           <span className="dashboard__synced">{dashboardKpis.sinceText}</span>
@@ -344,10 +365,23 @@ export default function UserDashboard() {
         <div className="dashboard-kpi-grid">
           {dashboardKpis.items.map((metric) => (
             <article key={metric.key} className={`dashboard-kpi dashboard-kpi--${metric.tone}`}>
-              <p className="dashboard-kpi__label">{metric.label}</p>
-              <div className="dashboard-kpi__value-row">
-                <strong className="dashboard-kpi__value">{metric.value}</strong>
+              <div className="dashboard-kpi__top">
+                <div className="dashboard-kpi__graphic" role="img" aria-label={`${metric.label}: ${metric.value} (${metric.ratioPct}% of max)`}>
+                  <svg viewBox="0 0 64 64" className="dashboard-kpi__ring" aria-hidden="true" focusable="false">
+                    <circle cx="32" cy="32" r="24" className="dashboard-kpi__ring-track" />
+                    <circle
+                      cx="32"
+                      cy="32"
+                      r="24"
+                      className="dashboard-kpi__ring-progress"
+                      style={{ strokeDasharray: `${metric.ringLength} ${metric.ringCircumference}` }}
+                    />
+                  </svg>
+                  <strong className="dashboard-kpi__value">{metric.value}</strong>
+                </div>
+                <p className="dashboard-kpi__label">{metric.label}</p>
               </div>
+              <p className="dashboard-kpi__ratio">{metric.ratioPct}% of highest metric</p>
               <div className="dashboard-kpi__track" role="img" aria-label={`${metric.label}: ${metric.value}`}>
                 <span className="dashboard-kpi__bar" style={{ width: `${metric.widthPct}%` }} />
               </div>

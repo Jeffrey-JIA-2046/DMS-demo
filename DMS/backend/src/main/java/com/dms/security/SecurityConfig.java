@@ -24,6 +24,12 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
             .csrf(csrf -> csrf.disable())
+            .headers(headers -> headers
+                .addHeaderWriter((request, response) -> {
+                    response.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+                    response.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
+                })
+            )
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/admin/**").hasRole("SYS_ADMIN")
                 .requestMatchers("/api/audit/**").authenticated()

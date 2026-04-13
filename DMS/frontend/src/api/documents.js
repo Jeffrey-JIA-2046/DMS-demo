@@ -3,10 +3,26 @@ import { resolveApiUrl, authHeaders, handleJsonResponse } from './httpClient'
 export const listDocuments = async ({ page = 0, size = 12, filters = {} }) => {
   const params = new URLSearchParams({ page, size })
   if (filters.query) params.set('q', filters.query)
+  if (filters.searchOperator) params.set('searchOperator', filters.searchOperator)
+  if (Array.isArray(filters.searchColumns) && filters.searchColumns.length) {
+    filters.searchColumns.forEach((column) => {
+      if (column) {
+        params.append('searchColumns', column)
+      }
+    })
+  }
   if (filters.owner) params.set('owner', filters.owner)
   if (filters.category) params.set('category', filters.category)
   if (filters.status && filters.status !== 'ALL') params.set('status', filters.status)
   if (filters.folderId) params.set('folderId', filters.folderId)
+  if (filters.conditionOperator) params.set('conditionOperator', filters.conditionOperator)
+  if (Array.isArray(filters.conditions) && filters.conditions.length) {
+    filters.conditions.forEach((condition) => {
+      params.append('conditionField', condition?.field || '')
+      params.append('conditionValue', condition?.value || '')
+      params.append('conditionJoin', condition?.join || '')
+    })
+  }
   if (filters.tags && filters.tags.length) {
     filters.tags.forEach((tag) => params.append('tags', tag))
   }

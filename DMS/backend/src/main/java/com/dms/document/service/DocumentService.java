@@ -73,6 +73,17 @@ import com.dms.user.repository.AppUserRepository;
 @Service
 public class DocumentService {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(DocumentService.class);
+    private static final String SEARCH_COLUMN_TITLE = "title";
+    private static final String SEARCH_COLUMN_DESCRIPTION = "description";
+    private static final String SEARCH_COLUMN_OWNER = "owner";
+    private static final String SEARCH_COLUMN_CATEGORY = "category";
+    private static final String SEARCH_COLUMN_TAGS = "tags";
+    private static final String SEARCH_COLUMN_DOCUMENT_METADATA = "documentMetadata";
+    private static final String SEARCH_COLUMN_FOLDER_NAME = "folderName";
+    private static final String SEARCH_COLUMN_FOLDER_METADATA = "folderMetadata";
+    private static final String SEARCH_COLUMN_DOC_META_PREFIX = "docmeta:";
+    private static final String SEARCH_COLUMN_FOLDER_META_PREFIX = "foldermeta:";
+    private static final Set<String> DEFAULT_SEARCH_COLUMNS = Set.of(SEARCH_COLUMN_TITLE, SEARCH_COLUMN_DESCRIPTION);
     private static final String META_DOCUMENT_DATE = "documentDate";
     private static final String META_APPROVAL_DATE = "approvalDate";
     private static final String META_EXPIRY_DATE = "expiryDate";
@@ -117,6 +128,10 @@ public class DocumentService {
             AppUser user = requireUser(username);
 
             List<Document> allDocuments = documentRepository.findAll();
+            List<DocumentFolder> allFolders = documentFolderRepository.findAll();
+            Map<String, DocumentFolder> folderById = allFolders.stream()
+                .filter(folder -> StringUtils.hasText(folder.getId()))
+                .collect(Collectors.toMap(DocumentFolder::getId, folder -> folder, (left, right) -> left));
             Set<String> readableFolderIds = resolveReadableFolderIds(user);
             Set<String> requestedFolderScope = StringUtils.hasText(filter.folderId())
                 ? resolveFolderScope(filter.folderId())
@@ -136,9 +151,12 @@ public class DocumentService {
                     }
                     return true;
                 })
-                .filter(document -> !StringUtils.hasText(filter.query())
-                    || containsIgnoreCase(document.getTitle(), filter.query())
-                    || containsIgnoreCase(document.getDescription(), filter.query()))
+                .filter(document -> {
+                    String folderId = extractDocumentFolderId(document);
+                    DocumentFolder folder = folderId != null ? folderById.get(folderId) : null;
+                    return matchesSelectedQueryColumns(document, folder, filter)
+                        && matchesConditionRows(document, folder, filter);
+                })
                 .filter(document -> !StringUtils.hasText(filter.owner())
                     || containsIgnoreCase(document.getOwner(), filter.owner()))
                 .filter(document -> !StringUtils.hasText(filter.category())
@@ -170,6 +188,156 @@ public class DocumentService {
 
     private boolean containsIgnoreCase(String source, String query) {
         return source != null && query != null && source.toLowerCase(Locale.ROOT).contains(query.toLowerCase(Locale.ROOT));
+    }
+
+    private boolean matchesSelectedQueryColumns(Document document, DocumentFolder folder, DocumentFilter filter) {
+        if (filter == null || !StringUtils.hasText(filter.query())) {
+            return true;
+        }
+
+        Set<String> selectedColumns = resolveSelectedSearchColumns(filter.searchColumns());
+        boolean useAnd = "AND".equalsIgnoreCase(filter.searchOperator());
+
+        if (useAnd) {
+            return selectedColumns.stream().allMatch(column -> matchesQueryColumn(document, folder, filter.query(), column));
+        }
+        return selectedColumns.stream().anyMatch(column -> matchesQueryColumn(document, folder, filter.query(), column));
+    }
+
+    private boolean matchesConditionRows(Document document, DocumentFolder folder, DocumentFilter filter) {
+        if (filter == null || filter.conditionValues() == null || filter.conditionValues().isEmpty()) {
+            return true;
+        }
+
+        List<String> fields = filter.conditionFields() != null ? filter.conditionFields() : List.of();
+        List<String> values = filter.conditionValues();
+        List<String> joins = filter.conditionJoins() != null ? filter.conditionJoins() : List.of();
+        List<Boolean> rowMatches = new ArrayList<>();
+        List<String> rowJoinToNext = new ArrayList<>();
+
+        for (int i = 0; i < values.size(); i++) {
+            String value = values.get(i);
+            if (!StringUtils.hasText(value)) {
+                continue;
+            }
+            String field = i < fields.size() ? fields.get(i) : SEARCH_COLUMN_TITLE;
+            rowMatches.add(matchesQueryColumn(document, folder, value, normalizeSearchColumn(field)));
+            rowJoinToNext.add(i < joins.size() ? joins.get(i) : null);
+        }
+
+        if (rowMatches.isEmpty()) {
+            return true;
+        }
+
+        boolean result = rowMatches.get(0);
+        String fallbackJoin = "OR".equalsIgnoreCase(filter.conditionOperator()) ? "OR" : "AND";
+        for (int i = 1; i < rowMatches.size(); i++) {
+            String join = normalizeJoinOperator(rowJoinToNext.get(i - 1), fallbackJoin);
+            if ("AND".equals(join)) {
+                result = result && rowMatches.get(i);
+            } else {
+                result = result || rowMatches.get(i);
+            }
+        }
+        return result;
+    }
+
+    private String normalizeJoinOperator(String join, String fallbackJoin) {
+        if (!StringUtils.hasText(join)) {
+            return fallbackJoin;
+        }
+        return "AND".equalsIgnoreCase(join) ? "AND" : "OR";
+    }
+
+    private Set<String> resolveSelectedSearchColumns(Set<String> selectedColumns) {
+        if (selectedColumns == null || selectedColumns.isEmpty()) {
+            return DEFAULT_SEARCH_COLUMNS;
+        }
+        Set<String> normalized = selectedColumns.stream()
+            .filter(StringUtils::hasText)
+            .map(this::normalizeSearchColumn)
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (normalized.isEmpty()) {
+            return DEFAULT_SEARCH_COLUMNS;
+        }
+        if (normalized.contains("all")) {
+            return Set.of(
+                SEARCH_COLUMN_TITLE,
+                SEARCH_COLUMN_DESCRIPTION,
+                SEARCH_COLUMN_OWNER,
+                SEARCH_COLUMN_CATEGORY,
+                SEARCH_COLUMN_TAGS,
+                SEARCH_COLUMN_DOCUMENT_METADATA,
+                SEARCH_COLUMN_FOLDER_NAME,
+                SEARCH_COLUMN_FOLDER_METADATA
+            );
+        }
+        return normalized;
+    }
+
+    private boolean matchesQueryColumn(Document document, DocumentFolder folder, String query, String normalizedColumn) {
+        if (normalizedColumn != null && normalizedColumn.startsWith(SEARCH_COLUMN_DOC_META_PREFIX)) {
+            String key = normalizedColumn.substring(SEARCH_COLUMN_DOC_META_PREFIX.length());
+            String value = getMetadataValueIgnoreCase(document.getMetadataValues(), key);
+            return containsIgnoreCase(value, query);
+        }
+
+        if (normalizedColumn != null && normalizedColumn.startsWith(SEARCH_COLUMN_FOLDER_META_PREFIX)) {
+            String key = normalizedColumn.substring(SEARCH_COLUMN_FOLDER_META_PREFIX.length());
+            if (!folderHasMetadataField(folder, key)) {
+                return false;
+            }
+            String value = getMetadataValueIgnoreCase(document.getMetadataValues(), key);
+            return containsIgnoreCase(value, query);
+        }
+
+        return switch (normalizedColumn) {
+            case SEARCH_COLUMN_TITLE -> containsIgnoreCase(document.getTitle(), query);
+            case SEARCH_COLUMN_DESCRIPTION -> containsIgnoreCase(document.getDescription(), query);
+            case SEARCH_COLUMN_OWNER -> containsIgnoreCase(document.getOwner(), query);
+            case SEARCH_COLUMN_CATEGORY -> containsIgnoreCase(document.getCategory(), query);
+            case SEARCH_COLUMN_TAGS -> document.getTags() != null && document.getTags().stream().anyMatch(tag -> containsIgnoreCase(tag, query));
+            case SEARCH_COLUMN_DOCUMENT_METADATA -> document.getMetadataValues() != null && document.getMetadataValues().entrySet().stream()
+                .anyMatch(entry -> containsIgnoreCase(entry.getKey(), query) || containsIgnoreCase(entry.getValue(), query));
+            case SEARCH_COLUMN_FOLDER_NAME -> folder != null && containsIgnoreCase(folder.getName(), query);
+            case SEARCH_COLUMN_FOLDER_METADATA -> folder != null && folder.getMetadataTemplate() != null && folder.getMetadataTemplate().stream()
+                .anyMatch(field -> containsIgnoreCase(field.getKey(), query)
+                    || containsIgnoreCase(field.getLabel(), query)
+                    || containsIgnoreCase(field.getHint(), query));
+            default -> false;
+        };
+    }
+
+    private String getMetadataValueIgnoreCase(Map<String, String> metadataValues, String key) {
+        if (metadataValues == null || metadataValues.isEmpty() || !StringUtils.hasText(key)) {
+            return null;
+        }
+        for (Map.Entry<String, String> entry : metadataValues.entrySet()) {
+            if (entry.getKey() != null && entry.getKey().equalsIgnoreCase(key)) {
+                return entry.getValue();
+            }
+        }
+        return null;
+    }
+
+    private boolean folderHasMetadataField(DocumentFolder folder, String key) {
+        if (folder == null || !StringUtils.hasText(key)) {
+            return false;
+        }
+        if (folder.getMetadataTemplate() == null || folder.getMetadataTemplate().isEmpty()) {
+            return false;
+        }
+        return folder.getMetadataTemplate().stream()
+            .map(FolderMetadataField::getKey)
+            .filter(StringUtils::hasText)
+            .anyMatch(fieldKey -> fieldKey.equalsIgnoreCase(key));
+    }
+
+    private String normalizeSearchColumn(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        return value.trim().toLowerCase(Locale.ROOT);
     }
 
     private void applySort(List<Document> documents, Sort sort) {
@@ -561,17 +729,17 @@ public class DocumentService {
         AppUser requester = requireUser(username);
         Set<UserGroup> groups = requester.getGroups();
         if (groups == null || groups.isEmpty()) {
-            return List.of();
+            return listAllApproverCandidates(requester);
         }
         Set<String> groupIds = groups.stream()
             .map(UserGroup::getId)
             .filter(Objects::nonNull)
             .collect(Collectors.toSet());
         if (groupIds.isEmpty()) {
-            return List.of();
+            return listAllApproverCandidates(requester);
         }
         try {
-            return appUserRepository.findDistinctByGroupIds(groupIds).stream()
+            List<ApproverOptionResponse> sharedGroupCandidates = appUserRepository.findDistinctByGroupIds(groupIds).stream()
                 .filter(candidate -> !candidate.getId().equals(requester.getId()))
                 .sorted(Comparator.comparing(
                     candidate -> StringUtils.hasText(candidate.getDisplayName()) ? candidate.getDisplayName() : candidate.getUsername(),
@@ -579,6 +747,10 @@ public class DocumentService {
                 ))
                 .map(this::toApproverOption)
                 .toList();
+            if (!sharedGroupCandidates.isEmpty()) {
+                return sharedGroupCandidates;
+            }
+            return listAllApproverCandidates(requester);
         } catch (IOException ex) {
             throw new RuntimeException("Failed to list eligible approvers", ex);
         }
@@ -799,8 +971,28 @@ public class DocumentService {
         if (requester.getRole() == Role.SYS_ADMIN) {
             return;
         }
+        Set<UserGroup> requesterGroups = requester.getGroups();
+        if (requesterGroups == null || requesterGroups.isEmpty()) {
+            // Backward-compatible mode for setups without user-group assignments.
+            return;
+        }
         if (!sharesGroup(requester, approver)) {
             throw new InvalidDocumentException("Approver must belong to one of your groups");
+        }
+    }
+
+    private List<ApproverOptionResponse> listAllApproverCandidates(AppUser requester) {
+        try {
+            return appUserRepository.findAll().stream()
+                .filter(candidate -> candidate != null && !Objects.equals(candidate.getId(), requester.getId()))
+                .sorted(Comparator.comparing(
+                    candidate -> StringUtils.hasText(candidate.getDisplayName()) ? candidate.getDisplayName() : candidate.getUsername(),
+                    String.CASE_INSENSITIVE_ORDER
+                ))
+                .map(this::toApproverOption)
+                .toList();
+        } catch (IOException ex) {
+            throw new RuntimeException("Failed to list eligible approvers", ex);
         }
     }
 

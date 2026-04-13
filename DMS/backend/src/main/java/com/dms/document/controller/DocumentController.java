@@ -65,10 +65,29 @@ public class DocumentController {
         @RequestParam(value = "status", required = false) DocumentStatus status,
         @RequestParam(value = "tags", required = false) Set<String> tags,
         @RequestParam(value = "folderId", required = false) String folderId,
+        @RequestParam(value = "searchColumns", required = false) Set<String> searchColumns,
+        @RequestParam(value = "searchOperator", required = false) String searchOperator,
+        @RequestParam(value = "conditionField", required = false) List<String> conditionFields,
+        @RequestParam(value = "conditionValue", required = false) List<String> conditionValues,
+        @RequestParam(value = "conditionJoin", required = false) List<String> conditionJoins,
+        @RequestParam(value = "conditionOperator", required = false) String conditionOperator,
         @org.springframework.data.web.PageableDefault(size = 20, page = 0) org.springframework.data.domain.Pageable pageable,
         java.security.Principal principal
     ) {
-        var filter = new DocumentFilter(query, owner, category, status, tags, folderId);
+        var filter = new DocumentFilter(
+            query,
+            owner,
+            category,
+            status,
+            tags,
+            folderId,
+            searchColumns,
+            searchOperator,
+            conditionFields,
+            conditionValues,
+            conditionJoins,
+            conditionOperator
+        );
         return documentService.findDocuments(filter, pageable, principal != null ? principal.getName() : null);
     }
 

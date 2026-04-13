@@ -39,6 +39,12 @@ import { createKnowledgeTopic, linkKnowledgeDocument } from '../api/knowledge'
 
 const buildDefaultFilters = () => ({
   query: '',
+  searchColumns: ['title'],
+  searchOperator: 'OR',
+  conditions: [
+    { field: 'title', value: '', join: '', metadataField: '' },
+  ],
+  conditionOperator: 'OR',
   owner: '',
   category: '',
   status: 'ALL',
@@ -444,6 +450,33 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     [documents, selectedId]
   )
   const selectedDocumentFolderId = selectedDocument?.folder?.id ?? null
+  const selectedFilterFolder = useMemo(
+    () => (filters.folderId ? findFolderNode(folderTree, filters.folderId) : null),
+    [folderTree, filters.folderId]
+  )
+  const activeSearchFolderTemplate = useMemo(() => {
+    if (Array.isArray(selectedFilterFolder?.metadataTemplate) && selectedFilterFolder.metadataTemplate.length) {
+      return selectedFilterFolder.metadataTemplate
+    }
+    if (Array.isArray(selectedDocument?.folder?.metadataTemplate) && selectedDocument.folder.metadataTemplate.length) {
+      return selectedDocument.folder.metadataTemplate
+    }
+    if (Array.isArray(selectedListDocument?.folder?.metadataTemplate) && selectedListDocument.folder.metadataTemplate.length) {
+      return selectedListDocument.folder.metadataTemplate
+    }
+    return []
+  }, [selectedFilterFolder, selectedDocument?.folder?.metadataTemplate, selectedListDocument?.folder?.metadataTemplate])
+  const folderMetadataFieldOptions = useMemo(() => {
+    const template = Array.isArray(activeSearchFolderTemplate) ? activeSearchFolderTemplate : []
+    return template
+      .filter((field) => field?.key)
+      .map((field) => {
+        const key = String(field.key).trim()
+        const label = (field.label || key).trim()
+        return { key, label }
+      })
+      .filter((field) => field.key)
+  }, [activeSearchFolderTemplate])
   const activePermissionFolderId = filters.folderId ?? selectedDocumentFolderId ?? null
   const canManageFolderPermissions = role === Roles.SYS_ADMIN || role === Roles.USER_ADMIN
   const approverUsername = currentUser?.username ? currentUser.username.toLowerCase() : null
@@ -1258,6 +1291,35 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     setPageState({ ...defaultPage })
   }
 
+  const handleSearchSubmit = (nextFilters) => {
+    const normalizedConditions = Array.isArray(nextFilters?.conditions)
+      ? nextFilters.conditions
+          .filter((condition) => (condition?.value || '').trim().length > 0)
+          .map((condition) => ({
+            field: condition.field,
+            value: condition.value,
+            join: condition.join || '',
+          }))
+      : []
+
+    const hasDocColumnTokens = Array.isArray(normalizedConditions)
+      ? normalizedConditions.map((condition) => condition.field).filter(Boolean)
+      : []
+
+    // Condition-builder search should be authoritative; clear quick-text query to avoid accidental extra filtering.
+    setFilterQueryLocal('')
+
+    setFilters((prev) => ({
+      ...nextFilters,
+      folderId: prev.folderId,
+      query: '',
+      conditions: normalizedConditions,
+      searchColumns: hasDocColumnTokens,
+      conditionOperator: 'AND',
+    }))
+    setPageState({ ...defaultPage })
+  }
+
   const handlePageChange = (nextPage) => {
     setPageState((prev) => ({ ...prev, page: nextPage }))
   }
@@ -1803,7 +1865,12 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
               Hide
             </button>
           </div>
-          <DocumentFilters value={filters} onChange={handleFilterChange} onReset={() => handleFilterChange(buildDefaultFilters())} />
+          <DocumentFilters
+            value={filters}
+            onSearch={handleSearchSubmit}
+            onReset={() => handleFilterChange(buildDefaultFilters())}
+            folderMetadataFields={folderMetadataFieldOptions}
+          />
           {error && <p className="feedback feedback--error">{error}</p>}
         </div>
       </div>
