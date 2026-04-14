@@ -26,6 +26,7 @@ import {
   runStoredDocumentOcr,
   authHeaders,
   runDataExtraction,
+  saveDataExtractionResult,
 } from '../api/documents'
 import DocumentFilters from './DocumentFilters'
 import DocumentList from './DocumentList'
@@ -114,6 +115,8 @@ const EMBEDDING_STATUS_META = {
   COMPLETED: { label: 'Ready', tone: 'success' },
   FAILED: { label: 'Failed', tone: 'danger' },
 }
+
+const OCR_DEFAULT_CONFIDENCE = 95
 
 const EXTRACTION_PLACEHOLDER_VALUES = new Set(['n/a', 'na', 'not available', 'not found', 'none', 'null', 'undefined', 'unknown'])
 
@@ -372,6 +375,18 @@ const deepCloneJson = (value) => {
   }
 }
 
+const parseJsonObject = (raw) => {
+  if (!raw) return null
+  if (typeof raw === 'object') return raw
+  if (typeof raw !== 'string') return null
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
 const buildEditableRows = (node, prefix = '', level = 0, rows = []) => {
   if (!node || typeof node !== 'object' || Array.isArray(node)) {
     return rows
@@ -437,6 +452,9 @@ const mergeExtractedMetadata = (currentMetadata, extractedMetadata, metadataTemp
   return merged
 }
 
+const isJsonObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+const hasJsonObjectKeys = (value) => isJsonObject(value) && Object.keys(value).length > 0
+
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 export default function DocumentWorkspace({ currentFunction = 'Document Management', onFindRelatedTopics = null, navigationContext = null }) {
@@ -483,7 +501,6 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   const [ocrResult, setOcrResult] = useState(null)
   const [ocrPreview, setOcrPreview] = useState('')
   const [ocrPreviewMode, setOcrPreviewMode] = useState('render')
-  const [ocrConfidenceLevel, setOcrConfidenceLevel] = useState(95)
   const [ocrPageIndex, setOcrPageIndex] = useState(0)
   const [ocrRefreshKey, setOcrRefreshKey] = useState(0)
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState('')
@@ -590,6 +607,31 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     const byType = selectedContentType.toLowerCase().includes('pdf')
     return byName || byType
   }, [selectedFileName, selectedContentType])
+  const selectedDocumentHasExtraction = Boolean(
+    selectedDocument?.hasDataExtraction
+      ?? selectedDocument?.has_data_extraction
+      ?? selectedListDocument?.hasDataExtraction
+      ?? selectedListDocument?.has_data_extraction
+  )
+  const extractionPayloadAvailable = useMemo(() => {
+    const extractedFromOcr = ocrResult?.extracted_json
+    if (extractedFromOcr && typeof extractedFromOcr === 'object') {
+      return true
+    }
+    const extractedFromDocument = selectedDocument?.extractedJson ?? selectedDocument?.extracted_json
+    if (extractedFromDocument && typeof extractedFromDocument === 'object') {
+      return true
+    }
+    return false
+  }, [ocrResult?.extracted_json, selectedDocument?.extractedJson, selectedDocument?.extracted_json])
+  const extractionBackendPending =
+    selectedId
+    && selectedLooksPdf
+    && (
+      selectedDocumentOcrStatus === 'QUEUED'
+      || selectedDocumentOcrStatus === 'RUNNING'
+      || (selectedDocumentOcrStatus === 'READY' && selectedDocumentHasExtraction && !extractionPayloadAvailable)
+    )
   const ocrPages = useMemo(() => (Array.isArray(ocrResult?.results) ? ocrResult.results : []), [ocrResult])
   const currentOcrPage = ocrPages.length ? ocrPages[Math.min(Math.max(ocrPageIndex, 0), ocrPages.length - 1)] : null
   const currentOcrPagePreview = useMemo(() => extractPagePreview(currentOcrPage), [currentOcrPage])
@@ -655,14 +697,11 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
       setOcrLoadingCached(true)
       setOcrError('')
       try {
-        const cached = await getStoredDocumentOcr(selectedId, ocrPrompt, ocrConfidenceLevel)
+        const cached = await getStoredDocumentOcr(selectedId, ocrPrompt, OCR_DEFAULT_CONFIDENCE)
         if (!cancelled) {
           setOcrResult(cached)
           setOcrPreview(extractOcrPreview(cached))
           setOcrPageIndex(0)
-          if (typeof cached?.dms_confidence === 'number') {
-            setOcrConfidenceLevel(Math.min(100, Math.max(0, cached.dms_confidence)))
-          }
         }
       } catch (err) {
         if (!cancelled) {
@@ -686,7 +725,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     return () => {
       cancelled = true
     }
-  }, [selectedId, selectedLooksPdf, selectedDocumentIsOcr, ocrPrompt, ocrConfidenceLevel, ocrRefreshKey])
+  }, [selectedId, selectedLooksPdf, selectedDocumentIsOcr, ocrPrompt, ocrRefreshKey])
 
   useEffect(() => {
     setEmbeddingBusy(false)
@@ -958,6 +997,16 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   }, [selectedId])
 
   useEffect(() => {
+    if (!expandedDocumentId || !selectedDocument) {
+      return
+    }
+    if (String(expandedDocumentId) !== String(selectedDocument.id)) {
+      return
+    }
+    setExpandedDocument(selectedDocument)
+  }, [expandedDocumentId, selectedDocument])
+
+  useEffect(() => {
     if (!selectedId || !['QUEUED', 'RUNNING'].includes(selectedDocumentOcrStatus)) {
       return
     }
@@ -981,6 +1030,34 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
       window.clearInterval(intervalId)
     }
   }, [selectedId, selectedDocumentOcrStatus, expandedDocument?.id])
+
+  useEffect(() => {
+    if (ocrWorkspaceTab !== 'extraction' || !extractionBackendPending) {
+      return
+    }
+    let cancelled = false
+    const refreshExtractionState = async () => {
+      try {
+        const document = await fetchDocument(selectedId)
+        if (cancelled) {
+          return
+        }
+        setSelectedDocument(document)
+        if (expandedDocument?.id === selectedId) {
+          setExpandedDocument(document)
+        }
+        setOcrRefreshKey((value) => value + 1)
+      } catch {
+        // keep polling silent while backend extraction is still running
+      }
+    }
+    refreshExtractionState()
+    const intervalId = window.setInterval(refreshExtractionState, 3000)
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [ocrWorkspaceTab, extractionBackendPending, selectedId, expandedDocument?.id])
 
   const loadDocuments = async () => {
     console.debug('loadDocuments requested', { filters: normalizedFilters, page: pageState.page, size: pageState.size, sort })
@@ -1014,6 +1091,9 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
                 ocrStatus: matchingSummary.ocrStatus ?? matchingSummary.ocr_status ?? prev.ocrStatus ?? prev.ocr_status,
                 ocrStatusMessage: matchingSummary.ocrStatusMessage ?? matchingSummary.ocr_status_message ?? prev.ocrStatusMessage ?? prev.ocr_status_message,
                 ocrStatusUpdatedAt: matchingSummary.ocrStatusUpdatedAt ?? matchingSummary.ocr_status_updated_at ?? prev.ocrStatusUpdatedAt ?? prev.ocr_status_updated_at,
+                hasDataExtraction: matchingSummary.hasDataExtraction ?? matchingSummary.has_data_extraction ?? prev.hasDataExtraction ?? prev.has_data_extraction,
+                extractedJson: matchingSummary.extractedJson ?? matchingSummary.extracted_json ?? prev.extractedJson ?? prev.extracted_json,
+                extractionFormType: matchingSummary.extractionFormType ?? matchingSummary.extraction_form_type ?? prev.extractionFormType ?? prev.extraction_form_type,
               }
             })
           }
@@ -1078,6 +1158,8 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
 
   const handleDocumentMaximize = async (id) => {
     if (!id) return
+    setDetailsInitialTab('content')
+    setSelectedId(id)
     setExpandedDocumentId(id)
     setExpandedDocument(null)
     setExpandedLoading(true)
@@ -1161,13 +1243,10 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     } : prev))
     try {
       const effectivePrompt = selectedDocumentIsOcr ? ocrPrompt : 'prompt_ocr'
-      const response = await runStoredDocumentOcr(selectedId, effectivePrompt, ocrConfidenceLevel)
+      const response = await runStoredDocumentOcr(selectedId, effectivePrompt, OCR_DEFAULT_CONFIDENCE, true)
       setOcrResult(response)
       setOcrPreview(extractOcrPreview(response))
       setOcrPageIndex(0)
-      if (typeof response?.dms_confidence === 'number') {
-        setOcrConfidenceLevel(Math.min(100, Math.max(0, response.dms_confidence)))
-      }
       setSelectedDocument((prev) => (prev ? {
         ...prev,
         isOcr: true,
@@ -1219,6 +1298,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   const handleRunExtraction = async () => {
     const ocrText = activeOcrPreviewContent
     const metadataTemplate = selectedDocument?.folder?.metadataTemplate
+    const effectivePrompt = selectedDocumentIsOcr ? ocrPrompt : 'prompt_ocr'
 
     if (!ocrText) {
       toast && toast('Run OCR first to get text for extraction.', { type: 'info' })
@@ -1236,8 +1316,20 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     setOriginalExtractionData(null)
     try {
       const result = await runDataExtraction(ocrText, metadataTemplate)
-      setExtractionResult(result)
-      const extracted = deepCloneJson(result?.extracted_json)
+      const persisted = selectedId
+        ? await saveDataExtractionResult(selectedId, {
+            prompt: effectivePrompt,
+            formType: result?.form_type ?? 'form1',
+            extractedJson: result?.extracted_json ?? {},
+          })
+        : null
+      const mergedResult = {
+        ...(result || {}),
+        extracted_json: result?.extracted_json ?? persisted?.extracted_json ?? {},
+        form_type: result?.form_type ?? persisted?.form_type ?? 'form1',
+      }
+      setExtractionResult(mergedResult)
+      const extracted = deepCloneJson(mergedResult?.extracted_json)
       setEditableExtractionData(extracted)
       setOriginalExtractionData(deepCloneJson(extracted))
 
@@ -1338,6 +1430,14 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
       return { ...prev, extracted_json: deepCloneJson(editableExtractionData) }
     })
     try {
+      const effectivePrompt = selectedDocumentIsOcr ? ocrPrompt : 'prompt_ocr'
+      if (selectedId) {
+        await saveDataExtractionResult(selectedId, {
+          prompt: effectivePrompt,
+          formType: extractionResult?.form_type ?? 'form1',
+          extractedJson: editableExtractionData,
+        })
+      }
       const persistence = await persistExtractedMetadata(editableExtractionData, metadataTemplate, {
         successMessage: 'Edited extraction saved and document metadata updated.',
         skippedMessage: 'Edited extraction saved locally. Document metadata was not updated.',
@@ -1367,6 +1467,66 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     const stem = safeFileStem(selectedDocument?.title)
     downloadTextFile(JSON.stringify(payload, null, 2), `${stem}.edited.extracted.json`)
   }
+
+  const renderWorkspaceFilePreview = () => (
+    <>
+      <h4>File Preview</h4>
+      {pdfPreviewLoading && <p className="feedback">Loading PDF preview...</p>}
+      {!pdfPreviewLoading && pdfPreviewError && <p className="feedback feedback--error">{pdfPreviewError}</p>}
+      {!pdfPreviewLoading && !pdfPreviewError && pdfPreviewUrl && (
+        <iframe
+          title="Selected PDF preview"
+          className="workspace-ocr-card__preview-frame"
+          src={pdfPreviewUrl}
+        />
+      )}
+      {!pdfPreviewLoading && !pdfPreviewError && !pdfPreviewUrl && (
+        <p className="feedback">No PDF preview available for this selection.</p>
+      )}
+    </>
+  )
+
+  useEffect(() => {
+    if (ocrWorkspaceTab !== 'extraction') {
+      return
+    }
+    const metadata = selectedDocument?.metadata ?? {}
+    const metadataHasExtraction = String(metadata?.dms_has_data_extraction ?? '').toLowerCase() === 'true'
+    const documentHasExtraction = selectedDocument?.hasDataExtraction === true || selectedDocument?.has_data_extraction === true
+    const hasSavedExtraction = ocrResult?.has_data_extraction === true || documentHasExtraction || metadataHasExtraction
+    const parsedMetadataExtracted = parseJsonObject(metadata?.dms_extracted_json)
+    const extractionCandidates = [
+      ocrResult?.extracted_json,
+      selectedDocument?.extractedJson,
+      selectedDocument?.extracted_json,
+      parsedMetadataExtracted,
+    ]
+    const extractedWithValues = extractionCandidates.find((value) => hasJsonObjectKeys(value))
+    const extractedAnyObject = extractionCandidates.find((value) => isJsonObject(value))
+    const extracted = extractedWithValues ?? extractedAnyObject ?? {}
+    if (!hasSavedExtraction && !hasJsonObjectKeys(extracted)) {
+      return
+    }
+
+    const currentExtracted = extractionResult?.extracted_json
+    const extractedChanged = JSON.stringify(currentExtracted ?? {}) !== JSON.stringify(extracted ?? {})
+    if (extractionResult && !extractedChanged) {
+      return
+    }
+
+    const hydrated = {
+      extracted_json: deepCloneJson(extracted ?? {}),
+      form_type:
+        ocrResult?.form_type
+        ?? selectedDocument?.extractionFormType
+        ?? selectedDocument?.extraction_form_type
+        ?? metadata?.dms_extraction_form_type
+        ?? 'form1',
+    }
+    setExtractionResult(hydrated)
+    setEditableExtractionData(deepCloneJson(hydrated.extracted_json))
+    setOriginalExtractionData(deepCloneJson(hydrated.extracted_json))
+  }, [ocrWorkspaceTab, extractionResult, ocrResult, selectedDocument])
 
   const handleFilterChange = (nextFilters) => {
     setFilters((prev) => ({ ...nextFilters, folderId: prev.folderId }))
@@ -2256,22 +2416,6 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
               </select>
               {!selectedDocumentIsOcr && <small>First OCR run is fixed to prompt_ocr. Layout prompts unlock after OCR is completed.</small>}
             </label>
-            <label>
-              <span>Confidence level</span>
-              <input
-                type="number"
-                value={ocrConfidenceLevel}
-                min={0}
-                max={100}
-                step={1}
-                disabled={ocrBusy}
-                onChange={(evt) => {
-                  const next = Number(evt.target.value)
-                  if (Number.isNaN(next)) { setOcrConfidenceLevel(95); return }
-                  setOcrConfidenceLevel(Math.min(100, Math.max(0, Math.round(next))))
-                }}
-              />
-            </label>
           </div>}
           {ocrWorkspaceTab === 'ocr' && !selectedId && <p className="feedback">Select a document in the workspace list to run OCR.</p>}
           {ocrWorkspaceTab === 'ocr' && selectedId && embeddingStatus !== 'IDLE' && (
@@ -2287,92 +2431,103 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
           {ocrWorkspaceTab === 'ocr' && ocrLoadingCached && <p className="feedback">Loading cached OCR result...</p>}
           {ocrWorkspaceTab === 'ocr' && ocrError && <p className="feedback feedback--error">{ocrError}</p>}
           {ocrWorkspaceTab === 'extraction' && (
-            <div className="workspace-ocr-extraction">
-              {!activeOcrPreviewContent && (
-                <p className="feedback">Run OCR on a document first to enable data extraction.</p>
-              )}
-              {extractionError && <p className="feedback feedback--error">{extractionError}</p>}
-              {extractionResult && (
-                <div className="workspace-ocr-extraction__result">
-                  <div className="workspace-ocr-card__actions">
-                    <button type="button" className="ghost" onClick={handleLoadExtractionForEditing}>Load Data to Table</button>
-                    <button type="button" className="ghost" onClick={handleDownloadExtractionJson}>Download JSON</button>
-                  </div>
-                  <pre className="workspace-ocr-extraction__json">{JSON.stringify(extractionResult.extracted_json, null, 2)}</pre>
+            <div className="workspace-ocr-card__grid">
+              <section className="workspace-ocr-pane">
+                {renderWorkspaceFilePreview()}
+              </section>
+              <section className="workspace-ocr-pane">
+                <div className="workspace-ocr-extraction">
+                  {!activeOcrPreviewContent && (
+                    <p className="feedback">Run OCR on a document first to enable data extraction.</p>
+                  )}
+                  {selectedId && selectedLooksPdf && selectedDocumentOcrStatus === 'QUEUED' && (
+                    <p className="feedback">OCR and data extraction are queued in the backend. This tab refreshes automatically.</p>
+                  )}
+                  {selectedId && selectedLooksPdf && selectedDocumentOcrStatus === 'RUNNING' && (
+                    <p className="feedback">Backend processing is running. OCR/extraction results will appear here automatically.</p>
+                  )}
+                  {selectedId && selectedLooksPdf && selectedDocumentOcrStatus === 'READY' && selectedDocumentHasExtraction && !extractionPayloadAvailable && (
+                    <p className="feedback">Waiting for extracted JSON from backend. Refreshing automatically...</p>
+                  )}
+                  {extractionError && <p className="feedback feedback--error">{extractionError}</p>}
+                  {extractionResult && (
+                    <div className="workspace-ocr-extraction__result">
+                      <div className="workspace-ocr-card__actions">
+                        <button type="button" className="ghost" onClick={handleLoadExtractionForEditing}>Load Data to Table</button>
+                        <button type="button" className="ghost" onClick={handleDownloadExtractionJson}>Download JSON</button>
+                      </div>
+                      <pre className="workspace-ocr-extraction__json">{JSON.stringify(extractionResult.extracted_json, null, 2)}</pre>
+                    </div>
+                  )}
                 </div>
-              )}
+              </section>
             </div>
           )}
           {ocrWorkspaceTab === 'edit' && (
-            <div className="workspace-ocr-extraction workspace-ocr-edit">
-              <div className="workspace-ocr-card__actions">
-                <button type="button" className="ghost" onClick={handleLoadExtractionForEditing} disabled={!extractionResult?.extracted_json}>Load Data to Table</button>
-                <button type="button" className="ghost" onClick={handleSaveEditedExtraction} disabled={!editableExtractionData}>Save Changes</button>
-                <button type="button" className="ghost" onClick={handleDownloadEditedExtractionJson} disabled={!editableExtractionData && !extractionResult?.extracted_json}>Download Edited JSON</button>
-                <button type="button" className="ghost" onClick={handleResetEditedExtraction} disabled={!originalExtractionData}>Reset</button>
-              </div>
-              {!editableRows.length && <p className="feedback">Extract data first, then click "Load Data to Table".</p>}
-              {!!editableRows.length && (
-                <div className="workspace-ocr-edit__table-wrap">
-                  <table className="workspace-ocr-edit__table">
-                    <thead>
-                      <tr>
-                        <th>Field</th>
-                        <th>Value</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {editableRows.map((row) => (
-                        row.type === 'group' ? (
-                          <tr key={row.key} className="workspace-ocr-edit__group">
-                            <td colSpan={2}>{prettifyLabel(row.label)}</td>
+            <div className="workspace-ocr-card__grid">
+              <section className="workspace-ocr-pane">
+                {renderWorkspaceFilePreview()}
+              </section>
+              <section className="workspace-ocr-pane">
+                <div className="workspace-ocr-extraction workspace-ocr-edit">
+                  <div className="workspace-ocr-card__actions">
+                    <button type="button" className="ghost" onClick={handleLoadExtractionForEditing} disabled={!extractionResult?.extracted_json}>Load Data to Table</button>
+                    <button type="button" className="ghost" onClick={handleSaveEditedExtraction} disabled={!editableExtractionData}>Save Changes</button>
+                    <button type="button" className="ghost" onClick={handleDownloadEditedExtractionJson} disabled={!editableExtractionData && !extractionResult?.extracted_json}>Download Edited JSON</button>
+                    <button type="button" className="ghost" onClick={handleResetEditedExtraction} disabled={!originalExtractionData}>Reset</button>
+                  </div>
+                  {!editableRows.length && <p className="feedback">Extract data first, then click "Load Data to Table".</p>}
+                  {!!editableRows.length && (
+                    <div className="workspace-ocr-edit__table-wrap">
+                      <table className="workspace-ocr-edit__table">
+                        <thead>
+                          <tr>
+                            <th>Field</th>
+                            <th>Value</th>
                           </tr>
-                        ) : (
-                          <tr key={row.path}>
-                            <td style={{ paddingLeft: `${Math.min(row.level * 16, 72)}px` }}>{prettifyLabel(row.label)}</td>
-                            <td>
-                              <input
-                                type="text"
-                                value={row.value == null ? '' : String(row.value)}
-                                onChange={(evt) => handleEditableFieldChange(row.path, evt.target.value)}
-                              />
-                            </td>
-                          </tr>
-                        )
-                      ))}
-                    </tbody>
-                  </table>
+                        </thead>
+                        <tbody>
+                          {editableRows.map((row) => (
+                            row.type === 'group' ? (
+                              <tr key={row.key} className="workspace-ocr-edit__group">
+                                <td colSpan={2}>{prettifyLabel(row.label)}</td>
+                              </tr>
+                            ) : (
+                              <tr key={row.path}>
+                                <td style={{ paddingLeft: `${Math.min(row.level * 16, 72)}px` }}>{prettifyLabel(row.label)}</td>
+                                <td>
+                                  <input
+                                    type="text"
+                                    value={row.value == null ? '' : String(row.value)}
+                                    onChange={(evt) => handleEditableFieldChange(row.path, evt.target.value)}
+                                  />
+                                </td>
+                              </tr>
+                            )
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  <div className="workspace-ocr-extraction__result">
+                    <h4>Preview</h4>
+                    <pre className="workspace-ocr-extraction__json">{JSON.stringify(editableExtractionData ?? extractionResult?.extracted_json ?? {}, null, 2)}</pre>
+                  </div>
                 </div>
-              )}
-              <div className="workspace-ocr-extraction__result">
-                <h4>Preview</h4>
-                <pre className="workspace-ocr-extraction__json">{JSON.stringify(editableExtractionData ?? extractionResult?.extracted_json ?? {}, null, 2)}</pre>
-              </div>
+              </section>
             </div>
           )}
-          {ocrWorkspaceTab === 'ocr' && ocrResult && (
+          {ocrWorkspaceTab === 'ocr' && (
             <div className="workspace-ocr-card__content">
               <div className="workspace-ocr-card__actions">
-                <button type="button" className="ghost" onClick={handleDownloadOcrJson}>Download OCR JSON</button>
+                <button type="button" className="ghost" onClick={handleDownloadOcrJson} disabled={!ocrResult}>Download OCR JSON</button>
                 <button type="button" className="ghost" onClick={handleDownloadOcrMarkdown} disabled={!ocrPreview}>Download OCR Markdown</button>
                 <button type="button" className="ghost" onClick={() => setOcrPreviewMode('render')} disabled={ocrPreviewMode === 'render'}>Rendered</button>
                 <button type="button" className="ghost" onClick={() => setOcrPreviewMode('raw')} disabled={ocrPreviewMode === 'raw'}>Raw</button>
               </div>
               <div className="workspace-ocr-card__grid">
                 <section className="workspace-ocr-pane">
-                  <h4>File Preview</h4>
-                  {pdfPreviewLoading && <p className="feedback">Loading PDF preview...</p>}
-                  {!pdfPreviewLoading && pdfPreviewError && <p className="feedback feedback--error">{pdfPreviewError}</p>}
-                  {!pdfPreviewLoading && !pdfPreviewError && pdfPreviewUrl && (
-                    <iframe
-                      title="Selected PDF preview"
-                      className="workspace-ocr-card__preview-frame"
-                      src={pdfPreviewUrl}
-                    />
-                  )}
-                  {!pdfPreviewLoading && !pdfPreviewError && !pdfPreviewUrl && (
-                    <p className="feedback">No PDF preview available for this selection.</p>
-                  )}
+                  {renderWorkspaceFilePreview()}
                 </section>
                 <section className="workspace-ocr-pane">
                   <div className="workspace-ocr-pane__header">
@@ -2454,6 +2609,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
                 busy={busy}
                 downloadUrlBuilder={buildDownloadUrl}
                 initialTab="content"
+                showPdfTextPreview={false}
               />
             )}
           </div>

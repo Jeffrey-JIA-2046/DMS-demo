@@ -123,6 +123,8 @@ com\dms\DocumentManagementApplication.class
 com\dms\knowledge\dto\KnowledgeTopicUpdateRequest.class
 com\dms\knowledge\repository\KnowledgeTopicUploadRepository.class
 com\dms\document\service\FolderPermissionSnapshot.class
+com\dms\ocr\service\DocumentOcrResultService$2.class
+com\dms\ocr\service\DocumentOcrResultService$3.class
 com\dms\knowledge\dto\KnowledgeTopicDetailsResponse.class
 com\dms\reminder\controller\ReminderManagementController.class
 com\dms\chatbot\service\ChatbotService.class
@@ -175,6 +177,7 @@ com\dms\security\crypto\AesPasswordEncoder.class
 com\dms\user\model\AppUser.class
 com\dms\job\dto\JobScheduleRequest.class
 com\dms\ocr\model\DocumentOcrResult.class
+com\dms\document\dto\DocumentExtractionSaveRequest.class
 com\dms\knowledge\service\KnowledgeTopicService.class
 com\dms\document\service\DocumentService$1.class
 com\dms\reminder\dto\ReminderSweepResponse.class

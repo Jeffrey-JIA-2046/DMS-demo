@@ -20,6 +20,7 @@ public record DocumentUploadRequest(
     @NotBlank String supervisorId,
     Map<String, String> metadata,
     Boolean runOcr,
-    Boolean runDataExtraction
+    Boolean runDataExtraction,
+    Boolean runEmbedding
 ) {
 }

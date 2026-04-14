@@ -24,6 +24,7 @@ import org.springframework.web.multipart.MultipartFile;
 import com.dms.document.dto.ApproverOptionResponse;
 import com.dms.document.dto.DocumentApprovalDecisionRequest;
 import com.dms.document.dto.DocumentDetailsResponse;
+import com.dms.document.dto.DocumentExtractionSaveRequest;
 import com.dms.document.dto.DocumentFilter;
 import com.dms.document.dto.DocumentSummaryResponse;
 import com.dms.document.dto.DocumentUpdateRequest;
@@ -114,8 +115,14 @@ public class DocumentController {
     ) {
         DocumentDetailsResponse resp = documentService.createDocument(metadata, file, principal != null ? principal.getName() : null);
         auditService.record("CREATE", resp.id(), principal != null ? principal.getName() : "system", "created document");
-        if (documentOcrProcessingService.shouldQueueUploadOcr(metadata.runOcr(), metadata.runDataExtraction(), file.getOriginalFilename(), file.getContentType())) {
-            documentOcrProcessingService.queueStoredDocumentOcr(resp.id(), null, null, Boolean.TRUE.equals(metadata.runDataExtraction()));
+        if (documentOcrProcessingService.shouldQueueUploadOcr(metadata.runOcr(), metadata.runDataExtraction(), metadata.runEmbedding(), file.getOriginalFilename(), file.getContentType())) {
+            documentOcrProcessingService.queueStoredDocumentOcr(
+                resp.id(),
+                null,
+                null,
+                Boolean.TRUE.equals(metadata.runDataExtraction()),
+                Boolean.TRUE.equals(metadata.runEmbedding())
+            );
             return documentService.getDocument(resp.id(), principal != null ? principal.getName() : null);
         }
         return resp;
@@ -135,13 +142,16 @@ public class DocumentController {
         @PathVariable String id,
         @RequestParam(value = "prompt", required = false) String prompt,
         @RequestParam(value = "confidence", required = false) Integer confidence,
+        @RequestParam(value = "force", required = false, defaultValue = "false") boolean force,
         java.security.Principal principal
     ) {
         documentService.getLatestVersion(id, principal != null ? principal.getName() : null);
 
-        java.util.Optional<java.util.Map<String, Object>> cached = documentOcrResultService.findCached(id, prompt, confidence);
-        if (cached.isPresent()) {
-            return cached.get();
+        if (!force) {
+            java.util.Optional<java.util.Map<String, Object>> cached = documentOcrResultService.findCached(id, prompt, confidence);
+            if (cached.isPresent()) {
+                return cached.get();
+            }
         }
         return documentOcrProcessingService.processStoredDocumentOcr(id, prompt, confidence);
     }
@@ -156,6 +166,22 @@ public class DocumentController {
         // Validate read permission before returning cached OCR payload.
         documentService.getLatestVersion(id, principal != null ? principal.getName() : null);
         return documentOcrResultService.getCachedOrThrow(id, prompt, confidence);
+    }
+
+    @PostMapping("/{id}/extraction")
+    public java.util.Map<String, Object> saveExtraction(
+        @PathVariable String id,
+        @RequestBody(required = false) @Valid DocumentExtractionSaveRequest request,
+        java.security.Principal principal
+    ) {
+        documentService.getLatestVersion(id, principal != null ? principal.getName() : null);
+        return documentOcrResultService.saveExtractionResult(
+            id,
+            request != null ? request.prompt() : null,
+            request != null ? request.confidence() : null,
+            request != null ? request.formType() : null,
+            request != null ? request.extractedJson() : null
+        );
     }
 
     @PostMapping(value = "/{id}/versions", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
