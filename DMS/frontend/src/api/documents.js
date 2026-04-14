@@ -241,6 +241,26 @@ export const buildDownloadUrl = (documentId, versionId) => {
   return resolveApiUrl(path)
 }
 
+export const buildDocumentAccessUrl = (documentId) => {
+  if (!documentId) {
+    return ''
+  }
+
+  if (typeof window === 'undefined' || !window.location) {
+    const fallback = new URL('/', 'http://localhost:5173')
+    fallback.searchParams.set('documentId', String(documentId))
+    return fallback.toString()
+  }
+
+  const currentPath = window.location.pathname || '/'
+  const basePath = currentPath.endsWith('/')
+    ? currentPath
+    : currentPath.replace(/[^/]*$/, '') || '/'
+  const accessUrl = new URL(basePath, window.location.origin)
+  accessUrl.searchParams.set('documentId', String(documentId))
+  return accessUrl.toString()
+}
+
 export const downloadDocument = async (documentId, versionId, suggestedName, onProgress) => {
   const path = versionId
     ? `/api/documents/${documentId}/versions/${versionId}/download`

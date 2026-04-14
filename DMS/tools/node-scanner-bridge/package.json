@@ -9,6 +9,7 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.21.2",
+    "node-windows": "^1.0.0-beta.8",
     "pdf-lib": "^1.17.1",
     "pngjs": "^7.0.0",
     "sane-wasm": "^0.5.0",

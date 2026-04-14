@@ -3,6 +3,7 @@ import {
   addApprovalNote,
   approveDocument,
   archiveDocument,
+  buildDocumentAccessUrl,
   buildDownloadUrl,
   createFolder,
   deleteFolder,
@@ -10,8 +11,10 @@ import {
   fetchMyFolderPermissions,
   fetchFolderPermissions,
   fetchFolderPermissionTemplate,
+  listApproverOptions,
   listDocuments,
   listFolderTree,
+  listSupervisorOptions,
   delegateApproval,
   rejectDocument,
   updateFolder,
@@ -33,7 +36,7 @@ import ChatbotPanel from './ChatbotPanel'
 import { getEmbeddingJobStatus, startEmbeddingJob } from '../api/chatbot'
 import { AuthContext, Roles } from '../contexts/AuthContext'
 import { AnnounceContext } from '../contexts/AnnounceContext'
-import { findFolderNode, findFolderPath } from '../utils/folders'
+import { findFolderBreadcrumbs, findFolderNode } from '../utils/folders'
 import { validateMetadataValues } from '../utils/metadataTemplate'
 import { createKnowledgeTopic, linkKnowledgeDocument } from '../api/knowledge'
 
@@ -53,6 +56,48 @@ const buildDefaultFilters = () => ({
 })
 
 const defaultPage = { page: 0, size: 12 }
+const PAGE_SIZE_OPTIONS = new Set([5, 10, 12, 20, 50])
+const PAGINATION_STORAGE_KEY = 'dms.documents.pagination'
+
+const normalizePersistedPageState = (value) => {
+  if (!value || typeof value !== 'object') {
+    return defaultPage
+  }
+  const page = Number(value.page)
+  const size = Number(value.size)
+  return {
+    page: Number.isFinite(page) && page >= 0 ? Math.floor(page) : defaultPage.page,
+    size: Number.isFinite(size) && PAGE_SIZE_OPTIONS.has(size) ? size : defaultPage.size,
+  }
+}
+
+const buildPaginationStorageKey = (username) => {
+  const normalized = (username || '').toString().trim().toLowerCase()
+  return normalized ? `${PAGINATION_STORAGE_KEY}.${normalized}` : PAGINATION_STORAGE_KEY
+}
+
+const readPersistedPageState = (username) => {
+  try {
+    const raw = window.localStorage.getItem(buildPaginationStorageKey(username))
+    if (!raw) {
+      return defaultPage
+    }
+    return normalizePersistedPageState(JSON.parse(raw))
+  } catch {
+    return defaultPage
+  }
+}
+
+const persistPageState = (username, state) => {
+  try {
+    const normalizedState = normalizePersistedPageState(state)
+    window.localStorage.setItem(buildPaginationStorageKey(username), JSON.stringify(normalizedState))
+    // Keep a generic fallback for sessions before user context is available.
+    window.localStorage.setItem(PAGINATION_STORAGE_KEY, JSON.stringify(normalizedState))
+  } catch {
+    // Ignore persistence failures (e.g. storage disabled).
+  }
+}
 
 const OCR_STATUS_META = {
   NOT_STARTED: { label: 'Not Run', tone: 'neutral', description: 'OCR has not been run for this document.' },
@@ -252,6 +297,29 @@ const toTimestamp = (value) => {
   return Number.isFinite(millis) ? millis : 0
 }
 
+const toDateInputValue = (value, fallback = '') => {
+  if (!value) {
+    return fallback
+  }
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return fallback
+  }
+  return date.toISOString().slice(0, 10)
+}
+
+const normalizeReviewerOptions = (data) => {
+  if (!Array.isArray(data)) {
+    return []
+  }
+  return data
+    .map((item) => {
+      const id = item?.id ?? item?.userId ?? item?.username ?? null
+      return id != null ? String(id).trim() : ''
+    })
+    .filter(Boolean)
+}
+
 const compareText = (a, b) => {
   const left = (a ?? '').toString().toLowerCase()
   const right = (b ?? '').toString().toLowerCase()
@@ -375,7 +443,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   const { documentPermissions, role, setDocumentPermissionsOverride, currentUser, isAuthenticated } = useContext(AuthContext)
   const { toast } = useContext(AnnounceContext)
   const [filters, setFilters] = useState(buildDefaultFilters)
-  const [pageState, setPageState] = useState(defaultPage)
+  const [pageState, setPageState] = useState(() => readPersistedPageState())
   const [sort, setSort] = useState('createdAt,desc')
   const [filterQueryLocal, setFilterQueryLocal] = useState('')
   const [documents, setDocuments] = useState([])
@@ -434,6 +502,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   const [embeddingMessage, setEmbeddingMessage] = useState('')
   const [embeddingError, setEmbeddingError] = useState('')
   const [embeddingResult, setEmbeddingResult] = useState(null)
+  const paginationRestoreDoneRef = useRef(false)
 
   const normalizedFilters = useMemo(() => ({
     ...filters,
@@ -444,7 +513,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   // Request id counter and latest id for guarding stale responses
   const requestCounterRef = useRef(0)
   const latestRequestIdRef = useRef(0)
-  const workspaceSelectionPath = useMemo(() => findFolderPath(folderTree, filters.folderId), [folderTree, filters.folderId])
+  const workspaceSelectionPath = useMemo(() => findFolderBreadcrumbs(folderTree, filters.folderId), [folderTree, filters.folderId])
   const selectedListDocument = useMemo(
     () => documents.find((doc) => String(doc.id) === String(selectedId ?? '')) ?? null,
     [documents, selectedId]
@@ -738,7 +807,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   useEffect(() => {
     loadDocuments()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [normalizedFilters, pageState.page])
+  }, [normalizedFilters, pageState.page, pageState.size])
 
   useEffect(() => {
     console.debug('DocumentWorkspace mounted')
@@ -746,6 +815,19 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
       console.debug('DocumentWorkspace unmounted')
     }
   }, [])
+
+  useEffect(() => {
+    if (paginationRestoreDoneRef.current) {
+      return
+    }
+    const restoredState = readPersistedPageState(currentUser?.username)
+    setPageState(restoredState)
+    paginationRestoreDoneRef.current = true
+  }, [currentUser?.username])
+
+  useEffect(() => {
+    persistPageState(currentUser?.username, pageState)
+  }, [currentUser?.username, pageState.page, pageState.size])
 
   useEffect(() => {
     // reload when sort changes
@@ -758,7 +840,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     // debounce simple filter query locally, then apply
     const t = setTimeout(() => {
       setFilters((prev) => ({ ...prev, query: filterQueryLocal }))
-      setPageState({ ...defaultPage })
+      setPageState((prev) => ({ ...prev, page: 0 }))
     }, 300)
     return () => clearTimeout(t)
   }, [filterQueryLocal])
@@ -783,7 +865,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
         setSelectedDocument(detail)
         setFilterQueryLocal('')
         setFilters((prev) => ({ ...buildDefaultFilters(), folderId: prev.folderId }))
-        setPageState({ ...defaultPage })
+        setPageState((prev) => ({ ...prev, page: 0 }))
       } catch (err) {
         if (!cancelled) {
           setError(err.message)
@@ -1288,7 +1370,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
 
   const handleFilterChange = (nextFilters) => {
     setFilters((prev) => ({ ...nextFilters, folderId: prev.folderId }))
-    setPageState({ ...defaultPage })
+    setPageState((prev) => ({ ...prev, page: 0 }))
   }
 
   const handleSearchSubmit = (nextFilters) => {
@@ -1317,16 +1399,24 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
       searchColumns: hasDocColumnTokens,
       conditionOperator: 'AND',
     }))
-    setPageState({ ...defaultPage })
+    setPageState((prev) => ({ ...prev, page: 0 }))
   }
 
   const handlePageChange = (nextPage) => {
     setPageState((prev) => ({ ...prev, page: nextPage }))
   }
 
+  const handlePageSizeChange = (nextSize) => {
+    const size = Number(nextSize)
+    if (!Number.isFinite(size) || size <= 0) {
+      return
+    }
+    setPageState({ page: 0, size })
+  }
+
   const handleFolderSelect = (folderId) => {
     setFilters((prev) => ({ ...prev, folderId }))
-    setPageState({ ...defaultPage })
+    setPageState((prev) => ({ ...prev, page: 0 }))
     setSelectedId(null)
     setSelectedDocument(null)
   }
@@ -1909,7 +1999,13 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
                     <span className="folder-selection__icon" aria-hidden>
                       📁
                     </span>
-                    <span className="folder-selection__label">{part}</span>
+                    <button
+                      type="button"
+                      className={`folder-selection__link ${part.id === filters.folderId ? 'is-current' : ''}`}
+                      onClick={() => handleFolderSelect(part.id)}
+                    >
+                      {part.name}
+                    </button>
                     {i < workspaceSelectionPath.length - 1 && <span className="folder-selection__sep"> / </span>}
                   </span>
                 ))}
@@ -1934,6 +2030,8 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
           onHover={(id) => { setSelectedId(id); setChatbotOpen(true) }}
           pageMeta={pageMeta}
           onPageChange={handlePageChange}
+          pageSize={pageState.size}
+          onPageSizeChange={handlePageSizeChange}
           onDragStart={handleDocumentDragStart}
           onDragEnd={handleDocumentDragEnd}
           draggingId={draggedDocumentId}
@@ -1962,16 +2060,75 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
                   toast && toast('No document in clipboard to paste', { type: 'info' })
                   return
                 }
+                if (!(documentPermissions?.write ?? false)) {
+                  toast && toast('Insufficient permissions to copy documents', { type: 'error' })
+                  return
+                }
+                if (!filters.folderId) {
+                  toast && toast('Select a target folder before pasting a document', { type: 'warning' })
+                  return
+                }
+
                 const copied = JSON.parse(raw)
-                // open upload panel prefilled with metadata from copied document
-                setUploadPrefill({ title: `Copy of ${copied.title}`, description: copied.description, category: copied.category, tags: copied.tags ?? [], metadata: {} })
-                setUploadOpen(true)
+                if (!copied?.id) {
+                  toast && toast('Copied document info is invalid', { type: 'error' })
+                  return
+                }
+
+                const detail = await fetchDocument(copied.id)
+                const downloadResponse = await fetch(buildDownloadUrl(copied.id), { headers: { ...authHeaders() } })
+                if (!downloadResponse.ok) {
+                  throw new Error(`Failed to retrieve source document file (${downloadResponse.status})`)
+                }
+                const sourceBlob = await downloadResponse.blob()
+
+                const defaultFileName = detail?.latestVersion?.fileName
+                  || detail?.fileName
+                  || `${safeFileStem(detail?.title || copied.title || 'document')}.bin`
+                const sourceFile = new File([sourceBlob], defaultFileName, {
+                  type: sourceBlob.type || 'application/octet-stream',
+                })
+
+                const today = new Date()
+                const nextYear = new Date(today)
+                nextYear.setFullYear(nextYear.getFullYear() + 1)
+                const fallbackDocumentDate = toDateInputValue(today)
+                const fallbackExpiryDate = toDateInputValue(nextYear)
+
+                const copyPayload = {
+                  title: `Copy of ${detail?.title || copied.title || 'Document'}`,
+                  description: detail?.description || copied.description || '',
+                  owner: detail?.owner || currentUser?.username || '',
+                  category: detail?.category || copied.category || '',
+                  documentDate: toDateInputValue(detail?.documentDate || detail?.metadata?.documentDate, fallbackDocumentDate),
+                  expiryDate: toDateInputValue(detail?.expiryDate || detail?.metadata?.expiryDate, fallbackExpiryDate),
+                  tags: normalizeTags(detail?.tags || copied.tags || []),
+                  folderId: filters.folderId,
+                  approverId: detail?.approval?.approverId || detail?.approverId || null,
+                  supervisorId: detail?.approval?.supervisorId || detail?.supervisorId || null,
+                  metadata: detail?.metadata || {},
+                }
+
+                if (!copyPayload.approverId || !String(copyPayload.approverId).trim()) {
+                  const approverIds = normalizeReviewerOptions(await listApproverOptions())
+                  copyPayload.approverId = approverIds[0] || null
+                }
+                if (!copyPayload.supervisorId || !String(copyPayload.supervisorId).trim()) {
+                  const supervisorIds = normalizeReviewerOptions(await listSupervisorOptions())
+                  copyPayload.supervisorId = supervisorIds[0] || null
+                }
+                if (!copyPayload.approverId || !copyPayload.supervisorId) {
+                  throw new Error('Unable to paste document: approver/supervisor setup is incomplete. Please configure reviewer options and try again.')
+                }
+
+                await handleUpload(copyPayload, sourceFile)
+                toast && toast('Document copied to selected folder', { type: 'success' })
                 return
               }
               if (action === 'generateLink') {
-                const url = buildDownloadUrl(documentId)
+                const url = buildDocumentAccessUrl(documentId)
                 await navigator.clipboard.writeText(url)
-                toast && toast('Download link copied to clipboard', { type: 'success' })
+                toast && toast('Document access link copied to clipboard', { type: 'success' })
                 return
               }
               if (action === 'checkout') {
@@ -2318,58 +2475,69 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
       )}
       {topicCreateModal.open && (
         <div
-          className="modal-overlay"
+          className="upload-panel topic-create-panel topic-create-panel--compact"
           role="dialog"
           aria-modal="true"
           aria-labelledby="create-topic-from-document-title"
         >
-          <div className="modal modal--focus" onClick={(e) => e.stopPropagation()}>
-            <header className="modal__header">
-              <h3 id="create-topic-from-document-title">Create topic from document</h3>
-              <button type="button" className="ghost" onClick={closeTopicCreateModal} disabled={busy}>✕</button>
-            </header>
-            <form className="modal__body" onSubmit={handleSubmitTopicFromDocument}>
-              <div className="field">
-                <label>Source document</label>
-                <input
-                  type="text"
-                  value={topicCreateModal.document?.title || topicCreateModal.document?.description || `Document #${topicCreateModal.document?.id ?? ''}`}
-                  readOnly
-                />
+          <div className="upload-panel__backdrop" onClick={closeTopicCreateModal} />
+          <form className="upload-panel__content topic-create-panel__content" onSubmit={handleSubmitTopicFromDocument} onClick={(e) => e.stopPropagation()}>
+            <header>
+              <div>
+                <p className="eyebrow">New upload</p>
+                <h3 id="create-topic-from-document-title">Topic metadata</h3>
               </div>
-              <div className="field">
-                <label>Topic title</label>
+              <button type="button" className="ghost" onClick={closeTopicCreateModal} disabled={busy}>Close</button>
+            </header>
+            <div className="upload-panel__primary">
+              <section className="folder-section">
+                <div className="folder-section__header">
+                  <span>Source document</span>
+                </div>
+                <label>
+                  <span>Document</span>
+                  <input
+                    type="text"
+                    value={topicCreateModal.document?.title || topicCreateModal.document?.description || `Document #${topicCreateModal.document?.id ?? ''}`}
+                    readOnly
+                  />
+                </label>
+              </section>
+
+              <label>
+                <span>Title</span>
                 <input
                   type="text"
                   value={topicCreateModal.title}
                   onChange={(e) => setTopicCreateModal((prev) => ({ ...prev, title: e.target.value }))}
                   placeholder="Topic title"
                 />
-              </div>
-              <div className="field">
-                <label>Description</label>
+              </label>
+              <label>
+                <span>Description</span>
                 <textarea
-                  rows={3}
+                  rows={4}
                   value={topicCreateModal.description}
                   onChange={(e) => setTopicCreateModal((prev) => ({ ...prev, description: e.target.value }))}
                   placeholder="Topic description"
                 />
-              </div>
-              <div className="field">
-                <label>Tags</label>
+              </label>
+              <label>
+                <span>Tags</span>
                 <input
                   type="text"
                   value={topicCreateModal.tags}
                   onChange={(e) => setTopicCreateModal((prev) => ({ ...prev, tags: e.target.value }))}
                   placeholder="tag1, tag2"
                 />
-              </div>
-              <div className="modal__actions">
-                <button type="button" className="ghost" onClick={closeTopicCreateModal} disabled={busy}>Cancel</button>
-                <button className="primary" type="submit" disabled={busy}>{busy ? 'Creating…' : 'Create topic'}</button>
-              </div>
-            </form>
-          </div>
+                <small>Use comma-separated tags.</small>
+              </label>
+            </div>
+            <div className="upload-panel__actions topic-create-panel__actions">
+              <button type="button" className="ghost" onClick={closeTopicCreateModal} disabled={busy}>Close</button>
+              <button className="primary" type="submit" disabled={busy}>{busy ? 'Creating...' : 'Create'}</button>
+            </div>
+          </form>
         </div>
       )}
     </section>

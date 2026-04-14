@@ -66,8 +66,16 @@ export default function FunctionPanel({ selected, onSelect }) {
         >
           User Help Manual
         </a>
+        <a
+          className="function-panel__shortcut"
+          href="/system-admin-manual.html"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Administration Manual
+        </a>
         <div className="function-panel__divider" />
-        <small className="function-panel__copyright">Copyright (c) 2026 DMS</small>
+        <small className="function-panel__copyright">Copyright (c) 2026 Automated Smart ECM</small>
       </footer>
     </aside>
   )

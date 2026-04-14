@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Automated Smart ECM Administration Manual</title>
+    <style>
+      :root {
+        --bg: #f4f8fb;
+        --card: #ffffff;
+        --ink: #0f172a;
+        --muted: #4b5563;
+        --line: #d5e0ef;
+        --accent: #0059c9;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+        background: var(--bg);
+        color: var(--ink);
+        line-height: 1.55;
+      }
+      .page {
+        max-width: 1040px;
+        margin: 0 auto;
+        padding: 28px 18px 44px;
+      }
+      .hero {
+        background: linear-gradient(120deg, #e8f2ff, #f8fbff);
+        border: 1px solid #cadeff;
+        border-radius: 16px;
+        padding: 18px 20px;
+        margin-bottom: 18px;
+      }
+      h1 {
+        margin: 0 0 6px;
+        font-size: 1.9rem;
+      }
+      h2 {
+        margin: 20px 0 8px;
+        font-size: 1.25rem;
+      }
+      h3 {
+        margin: 14px 0 6px;
+        font-size: 1rem;
+      }
+      p { margin: 8px 0; }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 14px 16px;
+        margin-top: 12px;
+      }
+      ul, ol { margin: 8px 0 8px 20px; }
+      li { margin: 4px 0; }
+      code {
+        background: #f1f5f9;
+        border: 1px solid #e2e8f0;
+        border-radius: 6px;
+        padding: 1px 6px;
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 0.92em;
+      }
+      pre {
+        background: #0f172a;
+        color: #e2e8f0;
+        border-radius: 12px;
+        padding: 12px;
+        overflow-x: auto;
+        border: 1px solid #233452;
+      }
+      .muted { color: var(--muted); }
+      .toc a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+      .toc a:hover { text-decoration: underline; }
+      .kicker {
+        font-weight: 700;
+        color: var(--accent);
+        letter-spacing: 0.02em;
+      }
+      .note {
+        border-left: 4px solid #0ea5e9;
+        background: #f0f9ff;
+        padding: 8px 10px;
+        border-radius: 8px;
+      }
+      .warn {
+        border-left: 4px solid #f59e0b;
+        background: #fffbeb;
+        padding: 8px 10px;
+        border-radius: 8px;
+      }
+      .footer {
+        margin-top: 20px;
+        color: var(--muted);
+        border-top: 1px dashed #b8c7de;
+        padding-top: 10px;
+        font-size: 0.9rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <p class="kicker">AUTOMATED SMART ECM ADMINISTRATION GUIDE</p>
+        <h1>Automated Smart ECM Administration Manual</h1>
+        <p class="muted">Audience: System Administrators only | Version: April 2026</p>
+        <p>
+          This manual defines what system administrators can configure in Automated Smart ECM and
+          provides step-by-step installation instructions for backend, frontend,
+          MySQL, and OpenSearch.
+        </p>
+      </header>
+
+      <section class="card toc" id="toc">
+        <h2>Contents</h2>
+        <ol>
+          <li><a href="#scope">Scope and Access</a></li>
+          <li><a href="#configurable">What System Administrators Can Configure</a></li>
+          <li><a href="#install-prereq">Installation Prerequisites</a></li>
+          <li><a href="#install-steps">Installation Steps</a></li>
+          <li><a href="#scanner-bridge">Client Workstation Scanner Bridge Deployment</a></li>
+          <li><a href="#startup-order">Startup and Verification</a></li>
+          <li><a href="#post-install">Post-Installation Checklist</a></li>
+          <li><a href="#ops">Operational Administration Tasks</a></li>
+          <li><a href="#troubleshooting">Troubleshooting</a></li>
+        </ol>
+      </section>
+
+      <section class="card" id="scope">
+        <h2>1. Scope and Access</h2>
+        <ul>
+          <li>This guide is restricted to users with System Administrator privileges.</li>
+          <li>Admin-level modules include: <code>System Administration</code>, <code>User Management</code>, <code>System Auditing</code>, and <code>Reports</code>.</li>
+          <li>Only administrators should change scheduler jobs, code tables, and infrastructure configuration.</li>
+        </ul>
+      </section>
+
+      <section class="card" id="configurable">
+        <h2>2. What System Administrators Can Configure</h2>
+        <h3>2.1 Access and Identity</h3>
+        <ul>
+          <li>Create and maintain users and groups.</li>
+          <li>Assign functional permissions per module.</li>
+          <li>Map folder-level access controls (read/write/delete).</li>
+        </ul>
+        <h3>2.2 System Administration Module</h3>
+        <ul>
+          <li><strong>Retention Management:</strong> policy windows, retention periods, and disposition schedules.</li>
+          <li><strong>Reminder Management:</strong> reminder offsets and trigger timings.</li>
+          <li><strong>Job Management:</strong> background schedules and execution behavior.</li>
+          <li><strong>Code Table Management:</strong> configurable business lookup values.</li>
+        </ul>
+        <h3>2.3 Environment-Level Configuration</h3>
+        <ul>
+          <li>Backend server port (<code>SERVER_PORT</code>).</li>
+          <li>Database connection and credentials (<code>SPRING_DATASOURCE_*</code>).</li>
+          <li>OpenSearch endpoint and credentials (<code>app.opensearch.*</code> properties).</li>
+          <li>CORS allow list (<code>APP_CORS_ALLOWED_ORIGINS</code>).</li>
+          <li>Optional AI/OCR integrations (<code>DEEPSEEK_*</code>, <code>DOTSOCR_*</code>, <code>EXTRACTION_API_*</code>).</li>
+        </ul>
+      </section>
+
+      <section class="card" id="install-prereq">
+        <h2>3. Installation Prerequisites</h2>
+        <ul>
+          <li>Windows 10/11 (or equivalent Linux/macOS environment).</li>
+          <li>Node.js 20.19+ and npm 10+.</li>
+          <li>Java JDK 21.</li>
+          <li>MySQL 8+ (local or remote).</li>
+          <li>OpenSearch (default endpoint: <code>https://localhost:9200</code>).</li>
+          <li>Network access for any optional AI/OCR services used by your deployment.</li>
+        </ul>
+        <div class="note">
+          Keep service credentials and encryption keys in secured environment variables. Do not commit secrets to source control.
+        </div>
+      </section>
+
+      <section class="card" id="install-steps">
+        <h2>4. Installation Steps</h2>
+
+        <h3>Step 1: Prepare the Workspace</h3>
+        <ol>
+          <li>Open a terminal in the project workspace root.</li>
+          <li>Confirm the folders exist: <code>backend</code> and <code>frontend</code>.</li>
+        </ol>
+
+        <h3>Step 2: Configure Backend Properties</h3>
+        <ol>
+          <li>Open <code>backend/src/main/resources/application.properties</code>.</li>
+          <li>Set or override database and service values for your environment.</li>
+          <li>Recommended: use environment variables for secrets and per-environment values.</li>
+        </ol>
+        <pre><code>SPRING_DATASOURCE_URL=jdbc:mysql://localhost:3306/dms?createDatabaseIfNotExist=true&amp;useSSL=false&amp;allowPublicKeyRetrieval=true&amp;serverTimezone=UTC
+SPRING_DATASOURCE_USERNAME=root
+SPRING_DATASOURCE_PASSWORD=******
+APP_CORS_ALLOWED_ORIGINS=http://localhost:5173
+SERVER_PORT=8080</code></pre>
+
+        <h3>Step 3: Start MySQL</h3>
+        <ol>
+          <li>Start your MySQL server service or container.</li>
+          <li>Create database <code>dms</code> if it is not auto-created by your JDBC URL.</li>
+          <li>Verify connectivity with the configured user/password.</li>
+        </ol>
+
+        <h3>Step 4: Start OpenSearch</h3>
+        <ol>
+          <li>Start OpenSearch with HTTPS enabled if using default backend settings.</li>
+          <li>Confirm endpoint/credentials match backend config:</li>
+        </ol>
+        <pre><code>app.opensearch.host=localhost
+app.opensearch.port=9200
+app.opensearch.username=admin
+app.opensearch.password=&lt;password&gt;
+app.opensearch.https=true</code></pre>
+
+        <h3>Step 5: Build and Start Backend</h3>
+        <ol>
+          <li>Open terminal in <code>backend</code>.</li>
+          <li>Run:</li>
+        </ol>
+        <pre><code>./mvnw spring-boot:run</code></pre>
+        <p class="muted">On Windows PowerShell, use <code>.\mvnw.cmd spring-boot:run</code>.</p>
+
+        <h3>Step 6: Install and Start Frontend</h3>
+        <ol>
+          <li>Open terminal in <code>frontend</code>.</li>
+          <li>Run:</li>
+        </ol>
+        <pre><code>npm install
+npm run dev</code></pre>
+        <p class="muted">Default frontend URL: <code>http://localhost:5173</code>.</p>
+      </section>
+
+      <section class="card" id="scanner-bridge">
+        <h2>5. Client Workstation Scanner Bridge Deployment</h2>
+
+        <h3>5.1 Purpose</h3>
+        <p>
+          The Node Scanner Bridge runs on each client workstation and exposes local scanner operations to the Automated Smart ECM frontend.
+          Default local endpoint: <code>http://localhost:8787</code>.
+        </p>
+
+        <h3>5.2 Prerequisites (Client Workstation)</h3>
+        <ul>
+          <li>Windows workstation with scanner connected by USB.</li>
+          <li>Scanner driver installed and verified in Windows.</li>
+          <li>Node.js 18+ installed (Node.js 20 LTS recommended for consistency).</li>
+          <li>Access to folder <code>DMS/tools/node-scanner-bridge</code>.</li>
+        </ul>
+
+        <h3>5.3 Install Steps</h3>
+        <ol>
+          <li>Open PowerShell on the client workstation.</li>
+          <li>Navigate to the scanner bridge folder:</li>
+        </ol>
+        <pre><code>cd DMS/tools/node-scanner-bridge</code></pre>
+        <ol start="3">
+          <li>Install dependencies:</li>
+        </ol>
+        <pre><code>npm install</code></pre>
+        <ol start="4">
+          <li>Start the service:</li>
+        </ol>
+        <pre><code>npm start</code></pre>
+
+        <h3>5.4 Validation Steps</h3>
+        <ol>
+          <li>Confirm health endpoint returns success:</li>
+        </ol>
+        <pre><code>Invoke-WebRequest http://localhost:8787/health -UseBasicParsing</code></pre>
+        <ol start="2">
+          <li>Confirm scanner enumeration returns devices:</li>
+        </ol>
+        <pre><code>Invoke-WebRequest http://localhost:8787/scanners -UseBasicParsing</code></pre>
+        <ol start="3">
+          <li>Open the Automated Smart ECM upload panel and click <code>Scan</code> to verify the workstation scanner appears.</li>
+        </ol>
+
+        <h3>5.5 Auto-start at User Logon (Recommended)</h3>
+        <p>Create a Task Scheduler task on each scanner workstation:</p>
+        <ol>
+          <li>Task Scheduler - Create Task.</li>
+          <li>Trigger: <code>At log on</code> for the workstation user.</li>
+          <li>Action: <code>Start a program</code> using <code>powershell.exe</code>.</li>
+          <li>Arguments example:</li>
+        </ol>
+        <pre><code>-NoProfile -ExecutionPolicy Bypass -Command "cd 'D:\\POC\\DMS2\\DMS\\tools\\node-scanner-bridge'; npm start"</code></pre>
+        <ol start="5">
+          <li>Save task and run it once to confirm the bridge comes up on port <code>8787</code>.</li>
+        </ol>
+
+        <h3>5.6 Operational Notes</h3>
+        <ul>
+          <li>Keep the bridge local to workstation (<code>localhost</code>); do not expose it externally.</li>
+          <li>If multiple scanner users share one PC, run bridge under the active desktop user session.</li>
+          <li>If the bridge fails to enumerate scanners, reinstall/update scanner driver and restart bridge.</li>
+          <li>Supported API endpoints: <code>GET /health</code>, <code>GET /scanners</code>, <code>POST /scan</code>.</li>
+        </ul>
+      </section>
+
+      <section class="card" id="startup-order">
+        <h2>6. Startup and Verification</h2>
+        <ol>
+          <li>Start MySQL.</li>
+          <li>Start OpenSearch.</li>
+          <li>Start backend and wait for <code>Tomcat started on port 8080</code>.</li>
+          <li>Start frontend and verify Vite reports local URL.</li>
+          <li>Open the application and sign in with an administrator account.</li>
+        </ol>
+        <pre><code># Quick checks
+http://localhost:8080
+http://localhost:5173</code></pre>
+      </section>
+
+      <section class="card" id="post-install">
+        <h2>7. Post-Installation Checklist</h2>
+        <ul>
+          <li>Confirm role-based access is enforced by logging in as non-admin and admin users.</li>
+          <li>Verify document upload, versioning, and folder permission behavior.</li>
+          <li>Verify OpenSearch-backed features (search, indexing, and relevant modules).</li>
+          <li>Review scheduler entries and ensure expected jobs are enabled.</li>
+          <li>Set backup/restore plans for MySQL and OpenSearch data.</li>
+        </ul>
+      </section>
+
+      <section class="card" id="ops">
+        <h2>8. Operational Administration Tasks</h2>
+        <h3>8.1 Routine Tasks</h3>
+        <ul>
+          <li>Onboard/offboard users and maintain group membership.</li>
+          <li>Review audit logs for security and compliance checks.</li>
+          <li>Maintain code tables and business reference values.</li>
+          <li>Review reminder and retention execution results.</li>
+        </ul>
+        <h3>8.2 Change Management</h3>
+        <ul>
+          <li>Apply configuration changes in lower environments first.</li>
+          <li>Capture before/after values for each admin-level setting update.</li>
+          <li>Schedule high-impact changes during maintenance windows.</li>
+        </ul>
+      </section>
+
+      <section class="card" id="troubleshooting">
+        <h2>9. Troubleshooting</h2>
+        <ul>
+          <li><strong>Backend fails on startup:</strong> verify MySQL/OpenSearch availability, URLs, credentials, and ports.</li>
+          <li><strong>Login or authorization issues:</strong> verify role mappings and function permissions.</li>
+          <li><strong>Search/index issues:</strong> verify OpenSearch endpoint and index permissions.</li>
+          <li><strong>CORS errors in browser:</strong> update <code>APP_CORS_ALLOWED_ORIGINS</code> for frontend origin.</li>
+          <li><strong>File operation failures:</strong> validate user permissions and payload size constraints.</li>
+          <li><strong>Scanner not detected:</strong> confirm bridge is running on <code>http://localhost:8787</code>, scanner driver is installed, and <code>/scanners</code> returns devices.</li>
+        </ul>
+        <div class="warn">
+          If a production incident occurs, preserve logs and configuration snapshots before applying emergency fixes.
+        </div>
+      </section>
+
+      <p class="footer">Copyright (c) 2026 Automated Smart ECM. Internal manual for system administration.</p>
+    </main>
+  </body>
+</html>

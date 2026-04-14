@@ -87,6 +87,23 @@ export default function App() {
     } catch (e) {}
   }, [theme])
 
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+    const params = new URLSearchParams(window.location.search || '')
+    const linkedDocumentId = (params.get('documentId') || '').trim()
+    if (!linkedDocumentId) {
+      return
+    }
+
+    setDocumentNavigationContext({
+      documentId: linkedDocumentId,
+      stamp: Date.now(),
+    })
+    setSelected('Document Management')
+  }, [])
+
   const previewThemes = async () => {
     const original = theme
     for (const t of themeOptions) {
@@ -164,7 +181,7 @@ export default function App() {
                   )}
                   <div>
                     <p className="eyebrow">Document Operations</p>
-                    <h1>Knowledge Base</h1>
+                    <h1>Automated Smart ECM</h1>
                     <p className="hero__copy">
                       AI driven, centralize documents and team knowledge in one secure workspace
                     </p>

@@ -28,6 +28,22 @@ export const findFolderPath = (nodes = [], targetId, trail = []) => {
   return null
 }
 
+export const findFolderBreadcrumbs = (nodes = [], targetId, trail = []) => {
+  for (const node of nodes) {
+    const nextTrail = [...trail, { id: node.id, name: node.name }]
+    if (node.id === targetId) {
+      return nextTrail
+    }
+    if (node.children?.length) {
+      const result = findFolderBreadcrumbs(node.children, targetId, nextTrail)
+      if (result) {
+        return result
+      }
+    }
+  }
+  return null
+}
+
 export const findFolderNode = (nodes = [], targetId) => {
   for (const node of nodes) {
     if (node.id === targetId) {

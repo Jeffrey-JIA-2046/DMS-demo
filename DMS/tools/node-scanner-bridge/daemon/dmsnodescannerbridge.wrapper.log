@@ -1,0 +1,4 @@
+2026-04-14 18:12:59 - Starting D:\Program Files\nodejs\node.exe  --harmony D:\POC\DMS2\DMS\tools\node-scanner-bridge\node_modules\node-windows\lib\wrapper.js --file D:\POC\DMS2\DMS\tools\node-scanner-bridge\server.js --scriptoptions= --log "DMS Node Scanner Bridge wrapper" --grow 0 --wait 2 --maxrestarts 3 --abortonerror n --stopparentfirst undefined --maxretries 3
+2026-04-14 18:12:59 - Started 28028
+2026-04-14 18:17:39 - Starting D:\Program Files\nodejs\node.exe  --harmony D:\POC\DMS2\DMS\tools\node-scanner-bridge\node_modules\node-windows\lib\wrapper.js --file D:\POC\DMS2\DMS\tools\node-scanner-bridge\server.js --scriptoptions= --log "DMS Node Scanner Bridge wrapper" --grow 0 --wait 2 --maxrestarts 3 --abortonerror n --stopparentfirst undefined --maxretries 3
+2026-04-14 18:17:39 - Started 29892

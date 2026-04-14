@@ -662,92 +662,126 @@ export default function KnowledgeCollaboration({ navigationContext = null, onOpe
 
           {createModalOpen && (
             <div
-              className="modal-overlay"
+              className="upload-panel topic-create-panel"
               role="dialog"
               aria-modal="true"
               aria-labelledby="topic-create-modal-title"
             >
-              <div className="modal modal--focus" onClick={(e) => e.stopPropagation()}>
-                <header className="modal__header">
-                  <h3 id="topic-create-modal-title">{editingTopicId ? 'Edit topic' : 'Create topic'}</h3>
-                  <button className="ghost" onClick={() => { setCreateModalOpen(false); setEditingTopicId(null) }}>✕</button>
+              <div className="upload-panel__backdrop" onClick={() => { setCreateModalOpen(false); setEditingTopicId(null) }} />
+              <form className="upload-panel__content topic-create-panel__content" onSubmit={handleCreateTopic} onClick={(e) => e.stopPropagation()}>
+                <header>
+                  <div>
+                    <p className="eyebrow">New upload</p>
+                    <h3 id="topic-create-modal-title">Topic metadata</h3>
+                  </div>
+                  <button type="button" className="ghost" onClick={() => { setCreateModalOpen(false); setEditingTopicId(null) }}>Close</button>
                 </header>
-                <form className="modal__body" onSubmit={handleCreateTopic}>
-                  <div className="field">
-                    <label>Title</label>
-                    <input
-                      type="text"
-                      value={createForm.title}
-                      onChange={(e) => setCreateForm((prev) => ({ ...prev, title: e.target.value }))}
-                      placeholder="Zero-trust onboarding"
-                    />
-                  </div>
-                  <div className="field">
-                    <label>Description</label>
-                    <textarea
-                      rows={3}
-                      value={createForm.description}
-                      onChange={(e) => setCreateForm((prev) => ({ ...prev, description: e.target.value }))}
-                      placeholder="What problem are we solving?"
-                    />
-                  </div>
-                  <div className="field">
-                    <label>Tags</label>
-                    <input
-                      type="text"
-                      value={createForm.tags}
-                      onChange={(e) => setCreateForm((prev) => ({ ...prev, tags: e.target.value }))}
-                      placeholder="compliance, onboarding"
-                    />
-                  </div>
-                  <div className="field">
-                    <label>Attach existing document (optional)</label>
-                    <input
-                      type="search"
-                      placeholder="Search documents by title, owner"
-                      value={documentQuery}
-                      onChange={(e) => setDocumentQuery(e.target.value)}
-                    />
-                    <select
-                      value={createForm.linkDocumentId}
-                      onChange={(e) => setCreateForm((prev) => ({ ...prev, linkDocumentId: e.target.value }))}
-                    >
-                      <option value="">Choose a document to link</option>
-                      {documentOptions.map((doc) => (
-                        <option key={doc.id} value={doc.id}>{describeDocumentOption(doc)}</option>
-                      ))}
-                    </select>
-                    <input
-                      type="text"
-                      placeholder="Note about link (optional)"
-                      value={createForm.linkNote}
-                      onChange={(e) => setCreateForm((prev) => ({ ...prev, linkNote: e.target.value }))}
-                    />
+
+                <div className="upload-panel__layout topic-create-panel__layout">
+                  <div className="upload-panel__primary">
+                    <label>
+                      <span>Title</span>
+                      <input
+                        type="text"
+                        value={createForm.title}
+                        onChange={(e) => setCreateForm((prev) => ({ ...prev, title: e.target.value }))}
+                        placeholder="Zero-trust onboarding"
+                      />
+                    </label>
+                    <label>
+                      <span>Description</span>
+                      <textarea
+                        rows={4}
+                        value={createForm.description}
+                        onChange={(e) => setCreateForm((prev) => ({ ...prev, description: e.target.value }))}
+                        placeholder="What problem are we solving?"
+                      />
+                    </label>
+                    <label>
+                      <span>Tags</span>
+                      <input
+                        type="text"
+                        value={createForm.tags}
+                        onChange={(e) => setCreateForm((prev) => ({ ...prev, tags: e.target.value }))}
+                        placeholder="compliance, onboarding"
+                      />
+                      <small>Use comma-separated tags.</small>
+                    </label>
                   </div>
 
-                  <div className="field">
-                    <label>Or upload new document (optional)</label>
-                    <input
-                      type="file"
-                      onChange={(e) => setCreateForm((prev) => ({ ...prev, uploadFile: e.target.files?.[0] ?? null }))}
-                    />
-                    <input
-                      type="text"
-                      placeholder="File notes (optional)"
-                      value={createForm.uploadDescription}
-                      onChange={(e) => setCreateForm((prev) => ({ ...prev, uploadDescription: e.target.value }))}
-                    />
+                  <div className="upload-panel__secondary topic-create-panel__secondary">
+                    <section className="folder-section">
+                      <div className="folder-section__header">
+                        <span>Attach document</span>
+                      </div>
+                      <label>
+                        <span>Search documents</span>
+                        <input
+                          type="search"
+                          placeholder="Search documents by title, owner"
+                          value={documentQuery}
+                          onChange={(e) => setDocumentQuery(e.target.value)}
+                        />
+                      </label>
+                      <label>
+                        <span>Select document</span>
+                        <select
+                          value={createForm.linkDocumentId}
+                          onChange={(e) => setCreateForm((prev) => ({ ...prev, linkDocumentId: e.target.value }))}
+                        >
+                          <option value="">Choose a document to link</option>
+                          {documentOptions.map((doc) => (
+                            <option key={doc.id} value={doc.id}>{describeDocumentOption(doc)}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        <span>Link note (optional)</span>
+                        <input
+                          type="text"
+                          placeholder="Why is this document relevant?"
+                          value={createForm.linkNote}
+                          onChange={(e) => setCreateForm((prev) => ({ ...prev, linkNote: e.target.value }))}
+                        />
+                      </label>
+                      {docOptionsLoading && <p className="feedback">Loading documents...</p>}
+                      {docOptionsError && <p className="feedback feedback--error">{docOptionsError}</p>}
+                    </section>
+
+                    <section className="folder-section">
+                      <div className="folder-section__header">
+                        <span>Upload document</span>
+                      </div>
+                      <label>
+                        <span>Attachment</span>
+                        <input
+                          type="file"
+                          onChange={(e) => setCreateForm((prev) => ({ ...prev, uploadFile: e.target.files?.[0] ?? null }))}
+                        />
+                        <small>{createForm.uploadFile ? `Selected: ${createForm.uploadFile.name}` : 'Optional file to include in this topic.'}</small>
+                      </label>
+                      <label>
+                        <span>Attachment note (optional)</span>
+                        <input
+                          type="text"
+                          placeholder="File notes"
+                          value={createForm.uploadDescription}
+                          onChange={(e) => setCreateForm((prev) => ({ ...prev, uploadDescription: e.target.value }))}
+                        />
+                      </label>
+                    </section>
                   </div>
-                  <div className="modal__actions">
-                    <button type="button" className="ghost" onClick={() => { setCreateModalOpen(false); setEditingTopicId(null) }}>
-                      Cancel
-                    </button>
-                    <button className="primary" type="submit" disabled={creating}>
-                      {creating ? 'Saving…' : editingTopicId ? 'Save changes' : 'Create topic'}
-                    </button>
-                  </div>
-                </form>
-              </div>
+                </div>
+
+                <div className="upload-panel__actions topic-create-panel__actions">
+                  <button type="button" className="ghost" onClick={() => { setCreateModalOpen(false); setEditingTopicId(null) }}>
+                    Close
+                  </button>
+                  <button className="primary" type="submit" disabled={creating}>
+                    {creating ? 'Saving...' : editingTopicId ? 'Save' : 'Create'}
+                  </button>
+                </div>
+              </form>
             </div>
           )}
 

@@ -54,6 +54,8 @@ function DocumentList({
   loading,
   pageMeta,
   onPageChange,
+  pageSize = 12,
+  onPageSizeChange,
   sort,
   onSortChange,
   filterQuery,
@@ -111,6 +113,28 @@ function DocumentList({
     setContextMenu({ open: true, x: event.clientX, y: event.clientY, docId: id })
   }
 
+  const handleListContextMenu = (event) => {
+    if (event.target?.closest?.('.document-list__item-row')) {
+      return
+    }
+    handleContextMenu(event, null)
+  }
+
+  const hasDocumentSelection = contextMenu.docId != null
+  const currentPage = Number(pageMeta?.page ?? 0)
+  const totalPages = Number(pageMeta?.totalPages ?? 0)
+  const totalItems = Number(pageMeta?.totalElements ?? 0)
+  const pageNumbers = (() => {
+    if (!totalPages || totalPages <= 1) {
+      return []
+    }
+    const windowSize = 5
+    const start = Math.max(0, currentPage - Math.floor(windowSize / 2))
+    const end = Math.min(totalPages - 1, start + windowSize - 1)
+    const adjustedStart = Math.max(0, end - windowSize + 1)
+    return Array.from({ length: end - adjustedStart + 1 }, (_, index) => adjustedStart + index)
+  })()
+
   return (
     <div className="card list-card">
       <div className="list-card__header">
@@ -166,7 +190,7 @@ function DocumentList({
           )}
         </div>
       </div>
-      <div className="document-list">
+      <div className="document-list" onContextMenu={handleListContextMenu}>
         {items.map((doc) => (
           <div key={doc.id} className="document-list__item-row">
             <button
@@ -177,11 +201,14 @@ function DocumentList({
                 event.preventDefault()
                 onMaximize(doc.id)
               }}
-              onContextMenu={(e) => handleContextMenu(e, doc.id)}
-              draggable={false}
-              onDragStart={undefined}
-              onDragEnd={undefined}
-              aria-grabbed={false}
+              onContextMenu={(e) => {
+                e.stopPropagation()
+                handleContextMenu(e, doc.id)
+              }}
+              draggable={documentPermissions?.write ?? false}
+              onDragStart={(event) => handleDragStart(event, doc.id)}
+              onDragEnd={onDragEnd}
+              aria-grabbed={draggingId === doc.id}
               aria-pressed={doc.id === selectedId}
               data-document-id={doc.id}
               onMouseEnter={() => {
@@ -260,28 +287,54 @@ function DocumentList({
           style={{ top: contextMenu.y, left: contextMenu.x, position: 'fixed', zIndex: 1200 }}
           onMouseLeave={closeContextMenu}
         >
-          <button type="button" onClick={() => { onContextAction(contextMenu.docId, 'copy'); closeContextMenu() }}>Copy</button>
-          <button type="button" onClick={() => { onContextAction(contextMenu.docId, 'paste'); closeContextMenu() }}>Paste</button>
-          <button type="button" onClick={() => { onContextAction(contextMenu.docId, 'generateLink'); closeContextMenu() }}>Generate link</button>
-          <button type="button" onClick={() => { onContextAction(contextMenu.docId, 'checkout'); closeContextMenu() }}>Check out</button>
+          <button type="button" disabled={!hasDocumentSelection} onClick={() => { onContextAction(contextMenu.docId, 'copy'); closeContextMenu() }}>Copy</button>
+          <button type="button" onClick={() => { onContextAction(contextMenu.docId, 'paste'); closeContextMenu() }}>Paste to selected folder</button>
+          <button type="button" disabled={!hasDocumentSelection} onClick={() => { onContextAction(contextMenu.docId, 'generateLink'); closeContextMenu() }}>Generate link</button>
+          <button type="button" disabled={!hasDocumentSelection} onClick={() => { onContextAction(contextMenu.docId, 'checkout'); closeContextMenu() }}>Check out</button>
         </div>
       )}
-      {pageMeta && pageMeta.totalPages > 1 && (
+      {pageMeta && (
         <div className="pagination">
-          <button type="button" className="ghost" disabled={pageMeta.page === 0} onClick={() => onPageChange(pageMeta.page - 1)}>
+          <div className="pagination__left">
+            <span>{totalItems} document{totalItems === 1 ? '' : 's'}</span>
+            <label>
+              <span className="sr-only">Page size</span>
+              <select value={pageSize} onChange={(e) => onPageSizeChange && onPageSizeChange(Number(e.target.value))}>
+                <option value={5}>5 / page</option>
+                <option value={10}>10 / page</option>
+                <option value={12}>12 / page</option>
+                <option value={20}>20 / page</option>
+                <option value={50}>50 / page</option>
+              </select>
+            </label>
+          </div>
+          <div className="pagination__right">
+            <button type="button" className="ghost" disabled={currentPage === 0} onClick={() => onPageChange(currentPage - 1)}>
             Previous
-          </button>
-          <span>
-            Page {pageMeta.page + 1} of {pageMeta.totalPages}
-          </span>
-          <button
-            type="button"
-            className="ghost"
-            disabled={pageMeta.last}
-            onClick={() => onPageChange(pageMeta.page + 1)}
-          >
+            </button>
+            {pageNumbers.map((page) => (
+              <button
+                key={page}
+                type="button"
+                className={`ghost ${page === currentPage ? 'is-current' : ''}`}
+                onClick={() => onPageChange(page)}
+                aria-current={page === currentPage ? 'page' : undefined}
+              >
+                {page + 1}
+              </button>
+            ))}
+            <span>
+              Page {currentPage + 1} of {Math.max(totalPages, 1)}
+            </span>
+            <button
+              type="button"
+              className="ghost"
+              disabled={Boolean(pageMeta.last) || totalPages <= 1}
+              onClick={() => onPageChange(currentPage + 1)}
+            >
             Next
-          </button>
+            </button>
+          </div>
         </div>
       )}
     </div>
