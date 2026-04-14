@@ -62,6 +62,18 @@ public class Document {
     @JsonProperty("ocr_status_updated_at")
     private Instant ocrStatusUpdatedAt;
 
+    @JsonProperty("has_data_extraction")
+    private Boolean hasDataExtraction = false;
+
+    @JsonProperty("extracted_json")
+    private Map<String, Object> extractedJson = new LinkedHashMap<>();
+
+    @JsonProperty("extraction_form_type")
+    private String extractionFormType;
+
+    @JsonProperty("extraction_saved_at")
+    private Instant extractionSavedAt;
+
     public String getId() {
         return id;
     }
@@ -213,6 +225,38 @@ public class Document {
 
     public void setOcrStatusUpdatedAt(Instant ocrStatusUpdatedAt) {
         this.ocrStatusUpdatedAt = ocrStatusUpdatedAt;
+    }
+
+    public Boolean getHasDataExtraction() {
+        return hasDataExtraction;
+    }
+
+    public void setHasDataExtraction(Boolean hasDataExtraction) {
+        this.hasDataExtraction = hasDataExtraction;
+    }
+
+    public Map<String, Object> getExtractedJson() {
+        return extractedJson;
+    }
+
+    public void setExtractedJson(Map<String, Object> extractedJson) {
+        this.extractedJson = extractedJson != null ? new LinkedHashMap<>(extractedJson) : new LinkedHashMap<>();
+    }
+
+    public String getExtractionFormType() {
+        return extractionFormType;
+    }
+
+    public void setExtractionFormType(String extractionFormType) {
+        this.extractionFormType = extractionFormType;
+    }
+
+    public Instant getExtractionSavedAt() {
+        return extractionSavedAt;
+    }
+
+    public void setExtractionSavedAt(Instant extractionSavedAt) {
+        this.extractionSavedAt = extractionSavedAt;
     }
 
     public Map<String, String> getMetadataValues() {

@@ -92,6 +92,7 @@ export default function DocumentDetails({
   busy,
   downloadUrlBuilder,
   initialTab = 'content',
+  showPdfTextPreview = true,
 }) {
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState(() => buildFormState(document))
@@ -504,7 +505,7 @@ export default function DocumentDetails({
   const canDelegateApproval =
     ((isApprover && awaitingApproval) || isRetentionTask)
     && typeof onDelegate === 'function'
-  const canPdfNavigate = previewState.status === 'ready' && previewState.mode === 'pdf' && pdfPager.status === 'ready' && pdfPager.pageCount > 1
+  const canPdfNavigate = previewState.status === 'ready' && previewState.mode === 'pdf' && pdfPager.status === 'ready' && !pdfPager.nativeViewer && pdfPager.pageCount > 1
   const documentDateValue = form.metadata?.documentDate ?? ''
   const expiryDateValue = form.metadata?.expiryDate ?? ''
 
@@ -1020,6 +1021,7 @@ export default function DocumentDetails({
                     data={previewState.pdfData}
                     requestedPage={requestedPdfPage}
                     onPagerStateChange={setPdfPager}
+                    showTextPreview={showPdfTextPreview}
                   />
                 )}
                 {previewState.status === 'empty' && <p className="empty-state">No versions available for preview.</p>}
@@ -1233,16 +1235,18 @@ export default function DocumentDetails({
   )
 }
 
-function PdfPreview({ data, requestedPage = 1, onPagerStateChange }) {
+function PdfPreview({ data, requestedPage = 1, onPagerStateChange, showTextPreview = true }) {
   const canvasRef = useRef(null)
   const pdfRef = useRef(null)
   const renderTaskRef = useRef(null)
+  const pdfObjectUrlRef = useRef('')
   const [status, setStatus] = useState('idle')
   const [error, setError] = useState('')
   const [pageCount, setPageCount] = useState(0)
   const [pageNumber, setPageNumber] = useState(1)
   const [scale, setScale] = useState(1.2)
   const [renderingPage, setRenderingPage] = useState(false)
+  const [nativePdfUrl, setNativePdfUrl] = useState('')
   const [selectableText, setSelectableText] = useState('')
   const [textTruncated, setTextTruncated] = useState(false)
 
@@ -1287,6 +1291,27 @@ function PdfPreview({ data, requestedPage = 1, onPagerStateChange }) {
   }
 
   useEffect(() => {
+    if (pdfObjectUrlRef.current) {
+      URL.revokeObjectURL(pdfObjectUrlRef.current)
+      pdfObjectUrlRef.current = ''
+    }
+    if (!data?.length) {
+      setNativePdfUrl('')
+      return
+    }
+    const blob = new Blob([data], { type: 'application/pdf' })
+    const url = URL.createObjectURL(blob)
+    pdfObjectUrlRef.current = url
+    setNativePdfUrl(url)
+    return () => {
+      if (pdfObjectUrlRef.current) {
+        URL.revokeObjectURL(pdfObjectUrlRef.current)
+        pdfObjectUrlRef.current = ''
+      }
+    }
+  }, [data])
+
+  useEffect(() => {
     if (!data?.length) {
       setStatus('idle')
       setError('')
@@ -1320,18 +1345,23 @@ function PdfPreview({ data, requestedPage = 1, onPagerStateChange }) {
         pdfRef.current = pdf
         setPageCount(pdf.numPages)
         setStatus('ready')
-        extractPdfText(pdf)
-          .then(({ text, truncated }) => {
-            if (cancelled) return
-            setSelectableText(text)
-            setTextTruncated(truncated)
-          })
-          .catch((err) => {
-            if (cancelled) return
-            console.debug('[PdfPreview] text extraction error', err)
-            setSelectableText('')
-            setTextTruncated(false)
-          })
+        if (showTextPreview) {
+          extractPdfText(pdf)
+            .then(({ text, truncated }) => {
+              if (cancelled) return
+              setSelectableText(text)
+              setTextTruncated(truncated)
+            })
+            .catch((err) => {
+              if (cancelled) return
+              console.debug('[PdfPreview] text extraction error', err)
+              setSelectableText('')
+              setTextTruncated(false)
+            })
+        } else {
+          setSelectableText('')
+          setTextTruncated(false)
+        }
       })
       .catch((err) => {
         if (cancelled) {
@@ -1351,7 +1381,7 @@ function PdfPreview({ data, requestedPage = 1, onPagerStateChange }) {
       pdfRef.current = null
       loadingTask.destroy()
     }
-  }, [data])
+  }, [data, showTextPreview])
 
   useEffect(() => {
     if (!pageCount) {
@@ -1376,12 +1406,18 @@ function PdfPreview({ data, requestedPage = 1, onPagerStateChange }) {
   }, [requestedPage, pageCount])
 
   useEffect(() => {
-    onPagerStateChange && onPagerStateChange({ pageNumber, pageCount, renderingPage, status })
-  }, [pageNumber, pageCount, renderingPage, status, onPagerStateChange])
+    onPagerStateChange && onPagerStateChange({
+      pageNumber,
+      pageCount,
+      renderingPage,
+      status: nativePdfUrl ? 'native' : status,
+      nativeViewer: Boolean(nativePdfUrl),
+    })
+  }, [pageNumber, pageCount, renderingPage, status, nativePdfUrl, onPagerStateChange])
 
   useEffect(() => {
     const pdf = pdfRef.current
-    if (!pdf || status !== 'ready') {
+    if (!pdf || status !== 'ready' || nativePdfUrl) {
       return
     }
     let cancelled = false
@@ -1422,18 +1458,28 @@ function PdfPreview({ data, requestedPage = 1, onPagerStateChange }) {
       renderTaskRef.current = null
       setRenderingPage(false)
     }
-  }, [pageNumber, scale, status])
+  }, [pageNumber, scale, status, nativePdfUrl])
 
   return (
     <div className="pdf-preview">
       {status === 'loading' && <span className="pill pill--info">Rendering PDF…</span>}
       {status === 'error' && <div className="feedback feedback--error">{error}</div>}
-      <canvas ref={canvasRef} className="pdf-preview__canvas" aria-label="PDF preview" />
-      {renderingPage && status === 'ready' && <small className="content-panel__hint">Rendering page {pageNumber}…</small>}
-      {status === 'ready' && pageCount > 1 && !renderingPage && (
-        <small className="content-panel__hint">Viewing page {pageNumber} of {pageCount}.</small>
+      {nativePdfUrl ? (
+        <iframe
+          className="pdf-preview__iframe"
+          title="PDF preview"
+          src={nativePdfUrl}
+        />
+      ) : (
+        <>
+          <canvas ref={canvasRef} className="pdf-preview__canvas" aria-label="PDF preview" />
+          {renderingPage && status === 'ready' && <small className="content-panel__hint">Rendering page {pageNumber}…</small>}
+          {status === 'ready' && pageCount > 1 && !renderingPage && (
+            <small className="content-panel__hint">Viewing page {pageNumber} of {pageCount}.</small>
+          )}
+        </>
       )}
-      {status === 'ready' && selectableText && (
+      {showTextPreview && status === 'ready' && selectableText && (
         <div className="pdf-preview__text-panel">
           <div className="pdf-preview__text-header">
             <strong>Selectable text preview</strong>

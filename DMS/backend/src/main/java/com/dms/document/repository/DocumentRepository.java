@@ -11,6 +11,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -31,6 +32,8 @@ import com.dms.user.model.UserGroup;
 import com.dms.repository.BaseOpenSearchRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.opensearch.client.opensearch.OpenSearchClient;
+import org.opensearch.client.opensearch._types.Refresh;
+import org.opensearch.client.opensearch.core.UpdateRequest;
 
 @Repository
 public class DocumentRepository extends BaseOpenSearchRepository<Document> {
@@ -55,6 +58,37 @@ public class DocumentRepository extends BaseOpenSearchRepository<Document> {
     @Override
     protected String getIndexName() {
         return documentsIndex;
+    }
+
+    /**
+     * Always writes extraction fields directly to OpenSearch, regardless of the
+     * openSearchEnabled flag. These fields do not exist as MySQL columns so they
+     * must never go through the MySQL save path.
+     */
+    public void updateExtractionFields(
+        String documentId,
+        boolean hasDataExtraction,
+        Map<String, Object> extractedJson,
+        String extractionFormType,
+        Instant extractionSavedAt
+    ) throws IOException {
+        Map<String, Object> doc = new LinkedHashMap<>();
+        doc.put("has_data_extraction", hasDataExtraction);
+        doc.put("extracted_json", extractedJson != null ? extractedJson : Map.of());
+        doc.put("extraction_form_type", extractionFormType);
+        doc.put("extraction_saved_at", extractionSavedAt != null ? extractionSavedAt.toString() : null);
+
+        UpdateRequest<Map<String, Object>, Map<String, Object>> request =
+            new UpdateRequest.Builder<Map<String, Object>, Map<String, Object>>()
+                .index(documentsIndex)
+                .id(documentId)
+                .doc(doc)
+                .refresh(Refresh.WaitFor)
+                .build();
+
+        @SuppressWarnings("unchecked")
+        Class<Map<String, Object>> mapClass = (Class<Map<String, Object>>) (Class<?>) Map.class;
+        openSearchClient.update(request, mapClass);
     }
 
     @Override

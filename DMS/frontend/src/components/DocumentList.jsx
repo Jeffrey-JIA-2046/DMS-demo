@@ -175,6 +175,7 @@ function DocumentList({
               onClick={() => onSelect(doc.id)}
               onDoubleClick={(event) => {
                 event.preventDefault()
+                onSelect(doc.id)
                 onMaximize(doc.id)
               }}
               onContextMenu={(e) => handleContextMenu(e, doc.id)}

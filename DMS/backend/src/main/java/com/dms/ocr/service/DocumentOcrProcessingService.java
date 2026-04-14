@@ -50,10 +50,14 @@ public class DocumentOcrProcessingService {
     }
 
     public void queueStoredDocumentOcr(String documentId, String prompt, Integer confidence, boolean runDataExtraction) {
+        queueStoredDocumentOcr(documentId, prompt, confidence, runDataExtraction, false);
+    }
+
+    public void queueStoredDocumentOcr(String documentId, String prompt, Integer confidence, boolean runDataExtraction, boolean runEmbedding) {
         markQueued(documentId);
         CompletableFuture.runAsync(() -> {
             try {
-                processStoredDocumentOcr(documentId, prompt, confidence, runDataExtraction);
+                processStoredDocumentOcr(documentId, prompt, confidence, runDataExtraction, runEmbedding);
             } catch (Exception ex) {
                 markFailed(documentId, ex.getMessage());
                 log.warn("Background OCR failed for document {}", documentId, ex);
@@ -68,6 +72,11 @@ public class DocumentOcrProcessingService {
 
     @Transactional
     public Map<String, Object> processStoredDocumentOcr(String documentId, String prompt, Integer confidence, boolean runDataExtraction) {
+        return processStoredDocumentOcr(documentId, prompt, confidence, runDataExtraction, false);
+    }
+
+    @Transactional
+    public Map<String, Object> processStoredDocumentOcr(String documentId, String prompt, Integer confidence, boolean runDataExtraction, boolean runEmbedding) {
         try {
             Document document = documentRepository.findById(documentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Document not found"));
@@ -93,6 +102,7 @@ public class DocumentOcrProcessingService {
             if (runDataExtraction) {
                 documentExtractionProcessingService.extractAndApplyMetadata(documentId, saved);
             }
+            // Embedding is triggered from frontend after OCR is ready.
             return saved;
         } catch (IOException ex) {
             throw new RuntimeException("Failed to process OCR for stored document", ex);
@@ -148,7 +158,11 @@ public class DocumentOcrProcessingService {
     }
 
     public boolean shouldQueueUploadOcr(Boolean runOcr, Boolean runDataExtraction, String fileName, String contentType) {
-        if (!Boolean.TRUE.equals(runOcr) && !Boolean.TRUE.equals(runDataExtraction)) {
+        return shouldQueueUploadOcr(runOcr, runDataExtraction, false, fileName, contentType);
+    }
+
+    public boolean shouldQueueUploadOcr(Boolean runOcr, Boolean runDataExtraction, Boolean runEmbedding, String fileName, String contentType) {
+        if (!Boolean.TRUE.equals(runOcr) && !Boolean.TRUE.equals(runDataExtraction) && !Boolean.TRUE.equals(runEmbedding)) {
             return false;
         }
         boolean byName = StringUtils.hasText(fileName) && fileName.toLowerCase().endsWith(".pdf");

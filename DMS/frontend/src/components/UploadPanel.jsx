@@ -323,6 +323,7 @@ const initialState = {
   supervisorId: null,
   runOcr: false,
   runDataExtraction: false,
+  runEmbedding: false,
 }
 
 const normalizeApproverOptions = (data) => {
@@ -658,8 +659,9 @@ export default function UploadPanel({
       owner: currentOwner,
       approverId: normalizedApproverId,
       supervisorId: normalizedSupervisorId,
-      runOcr: Boolean((form.runOcr || form.runDataExtraction) && fileLooksPdf(file)),
+      runOcr: Boolean((form.runOcr || form.runDataExtraction || form.runEmbedding) && fileLooksPdf(file)),
       runDataExtraction: Boolean(form.runDataExtraction && fileLooksPdf(file)),
+      runEmbedding: Boolean(form.runEmbedding && fileLooksPdf(file)),
       tags: form.tags,
       metadata: normalizedMetadata,
     }, file)
@@ -673,7 +675,7 @@ export default function UploadPanel({
     const nextFile = event.target.files?.[0] ?? null
     setFile(nextFile)
     if (!fileLooksPdf(nextFile)) {
-      setForm((prev) => ({ ...prev, runOcr: false, runDataExtraction: false }))
+      setForm((prev) => ({ ...prev, runOcr: false, runDataExtraction: false, runEmbedding: false }))
     }
     if (!nextFile) {
       return
@@ -884,6 +886,7 @@ export default function UploadPanel({
       title: prev.title?.trim() ? prev.title : suggestedTitle,
       runOcr: false,
       runDataExtraction: false,
+      runEmbedding: false,
     }))
 
     const successMessage = scanOutputFormat === 'pdf'
@@ -939,6 +942,7 @@ export default function UploadPanel({
           title: prev.title?.trim() ? prev.title : suggestedTitle,
           runOcr: false,
           runDataExtraction: false,
+          runEmbedding: false,
         }))
         const doneMessage = `Scan complete: PDF attached (${detectedPages} page(s)).`
         setScanStatus(doneMessage)
@@ -1115,6 +1119,14 @@ export default function UploadPanel({
     setForm((prev) => ({
       ...prev,
       runDataExtraction: checked,
+      runOcr: checked ? true : prev.runOcr,
+    }))
+  }
+
+  const handleEmbeddingToggle = (checked) => {
+    setForm((prev) => ({
+      ...prev,
+      runEmbedding: checked,
       runOcr: checked ? true : prev.runOcr,
     }))
   }
@@ -1368,12 +1380,23 @@ export default function UploadPanel({
               />
               <span>Run data extraction after upload</span>
             </label>
+            <label className="checkbox upload-panel__checkbox-row">
+              <input
+                type="checkbox"
+                checked={Boolean(form.runEmbedding && canRunUploadOcr)}
+                onChange={(e) => handleEmbeddingToggle(e.target.checked)}
+                disabled={busy || !canRunUploadOcr}
+              />
+              <span>Embed for search</span>
+            </label>
             <small className="upload-panel__hint">
               {canRunUploadOcr
-                ? form.runDataExtraction
-                  ? 'The document uploads first. OCR runs in the backend, then data extraction updates document metadata automatically.'
-                  : 'The document uploads first. OCR then runs in the backend so the upload dialog can close immediately.'
-                : 'OCR and data extraction during upload are available for PDF files only.'}
+                ? form.runEmbedding
+                  ? 'The document uploads first. OCR runs in the backend, then chunking and embedding updates the search index.'
+                  : form.runDataExtraction
+                    ? 'The document uploads first. OCR runs in the backend, then data extraction updates document metadata automatically.'
+                    : 'The document uploads first. OCR then runs in the backend so the upload dialog can close immediately.'
+                : 'OCR and backend operations during upload are available for PDF files only.'}
             </small>
             <label>
               <span>Title</span>

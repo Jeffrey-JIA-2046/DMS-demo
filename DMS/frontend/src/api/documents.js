@@ -155,12 +155,15 @@ export const runPdfOcr = async (file, prompt = 'prompt_ocr', confidence = 95) =>
   return handleJsonResponse(response)
 }
 
-export const runStoredDocumentOcr = async (documentId, prompt = 'prompt_ocr', confidence = 95) => {
+export const runStoredDocumentOcr = async (documentId, prompt = 'prompt_ocr', confidence = 95, force = false) => {
   const params = new URLSearchParams()
   if (prompt) {
     params.set('prompt', prompt)
   }
   params.set('confidence', String(confidence))
+  if (force) {
+    params.set('force', 'true')
+  }
   const response = await fetch(resolveApiUrl(`/api/documents/${documentId}/ocr/pdf?${params.toString()}`), {
     method: 'POST',
     headers: { ...authHeaders() },
@@ -324,4 +327,13 @@ export const runDataExtraction = async (ocrText, metadataTemplate, formType = 'f
     throw new Error(body.detail || body.message || `Extraction service error (${response.status})`)
   }
   return response.json()
+}
+
+export const saveDataExtractionResult = async (documentId, payload) => {
+  const response = await fetch(resolveApiUrl(`/api/documents/${documentId}/extraction`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(payload ?? {}),
+  })
+  return handleJsonResponse(response)
 }
