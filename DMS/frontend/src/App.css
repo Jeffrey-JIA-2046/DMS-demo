@@ -2855,6 +2855,27 @@
   background: rgba(191, 219, 254, 0.45);
 }
 
+.ocr-workspace-modal__content {
+  width: min(1280px, 96vw);
+  max-height: 94vh;
+  padding: 1.5rem;
+}
+
+.ocr-workspace-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.ocr-workspace-modal__content .workspace-ocr-card {
+  margin-top: 0;
+  padding: 0;
+  border: none;
+  box-shadow: none;
+  background: transparent;
+}
+
 .workspace-ocr-card {
   margin-top: 1rem;
   display: flex;
@@ -3066,6 +3087,11 @@
 @media (max-width: 1080px) {
   .workspace-ocr-card__grid {
     grid-template-columns: 1fr;
+  }
+
+  .ocr-workspace-modal__content {
+    width: min(100%, 96vw);
+    padding: 1rem;
   }
 }
 

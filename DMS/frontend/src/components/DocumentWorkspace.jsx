@@ -472,6 +472,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [uploadOpen, setUploadOpen] = useState(false)
+  const [ocrWorkspaceOpen, setOcrWorkspaceOpen] = useState(false)
   const [uploadPrefill, setUploadPrefill] = useState(null)
   const [topicCreateModal, setTopicCreateModal] = useState({
     open: false,
@@ -1156,6 +1157,20 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     }
   }
 
+  const handleOpenOcrWorkspace = () => {
+    if (!selectedId) {
+      toast && toast('Select a document first', { type: 'info' })
+      return
+    }
+    if (!selectedLooksPdf) {
+      setOcrError('Selected document is not a PDF')
+      toast && toast('OCR currently supports PDF documents only', { type: 'warning' })
+      return
+    }
+    setOcrWorkspaceTab('ocr')
+    setOcrWorkspaceOpen(true)
+  }
+
   const handleDocumentMaximize = async (id) => {
     if (!id) return
     setDetailsInitialTab('content')
@@ -1484,6 +1499,256 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
         <p className="feedback">No PDF preview available for this selection.</p>
       )}
     </>
+  )
+
+  const renderOcrWorkspace = () => (
+    <section className="card workspace-ocr-card">
+      <div className="workspace-ocr-card__header">
+        <div>
+          <p className="eyebrow">OCR Output</p>
+          <h3>Selected Document OCR</h3>
+          {selectedId && (
+            <div className="workspace-ocr-card__status">
+              <span className={`pill pill--${selectedDocumentOcrStatusMeta.tone}`}>
+                {selectedDocumentOcrStatusMeta.label}
+              </span>
+              <small>{selectedDocumentOcrStatusMessage}</small>
+              {selectedDocumentOcrStatusUpdatedAt && (
+                <small>Updated {new Date(selectedDocumentOcrStatusUpdatedAt).toLocaleString()}</small>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="workspace-ocr-card__header-actions">
+          <button
+            type="button"
+            className="ghost"
+            onClick={handleRefreshOcrWorkspace}
+            disabled={!selectedId || ocrBusy || ocrLoadingCached}
+            title={!selectedId ? 'Select a document first' : 'Refresh OCR status and output'}
+          >
+            {ocrLoadingCached ? 'Refreshing...' : 'Refresh'}
+          </button>
+          <button type="button" className="ghost" onClick={() => setOcrWorkspaceOpen(false)}>
+            Close
+          </button>
+          {ocrWorkspaceTab === 'ocr' ? (
+            <>
+              <button
+                type="button"
+                className="ghost"
+                onClick={handleRunEmbedding}
+                disabled={embeddingBusy || !selectedId || !activeOcrPreviewContent}
+                title={!selectedId ? 'Select a document first' : !activeOcrPreviewContent ? 'Run OCR first to obtain text for chunking and embedding' : undefined}
+              >
+                {embeddingBusy ? 'Embedding...' : 'Embed for Search'}
+              </button>
+              <button
+                type="button"
+                className="primary"
+                onClick={handleRunSelectedOcr}
+                disabled={ocrBusy || !(documentPermissions?.write ?? false) || !selectedId || !selectedLooksPdf}
+                title={!selectedId ? 'Select a document first' : !selectedLooksPdf ? 'OCR currently supports PDF documents only' : undefined}
+              >
+                {ocrBusy ? 'Running OCR...' : 'Run OCR'}
+              </button>
+            </>
+          ) : ocrWorkspaceTab === 'extraction' ? (
+            <button
+              type="button"
+              className="primary"
+              onClick={handleRunExtraction}
+              disabled={extractionBusy || !activeOcrPreviewContent}
+              title={!activeOcrPreviewContent ? 'Run OCR first to obtain text for extraction' : undefined}
+            >
+              {extractionBusy ? 'Extracting...' : 'Extract Data'}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="primary"
+              onClick={handleSaveEditedExtraction}
+              disabled={!editableExtractionData}
+            >
+              Save Changes
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="workspace-ocr-tabs">
+        <button
+          type="button"
+          className={`workspace-ocr-tab ${ocrWorkspaceTab === 'ocr' ? 'is-active' : ''}`}
+          onClick={() => setOcrWorkspaceTab('ocr')}
+        >
+          OCR Output
+        </button>
+        <button
+          type="button"
+          className={`workspace-ocr-tab ${ocrWorkspaceTab === 'extraction' ? 'is-active' : ''}`}
+          onClick={() => setOcrWorkspaceTab('extraction')}
+        >
+          Data Extraction
+        </button>
+        <button
+          type="button"
+          className={`workspace-ocr-tab ${ocrWorkspaceTab === 'edit' ? 'is-active' : ''}`}
+          onClick={() => setOcrWorkspaceTab('edit')}
+        >
+          Edit Data
+        </button>
+      </div>
+      {ocrWorkspaceTab === 'ocr' && <div className="workspace-ocr-card__settings">
+        <label>
+          <span>OCR prompt</span>
+          <select value={ocrPrompt} onChange={(evt) => setOcrPrompt(evt.target.value)} disabled={ocrBusy || !selectedDocumentIsOcr}>
+            <option value="prompt_ocr">prompt_ocr</option>
+            {selectedDocumentIsOcr && <option value="prompt_layout_all_en">prompt_layout_all_en</option>}
+            {selectedDocumentIsOcr && <option value="prompt_layout_only_en">prompt_layout_only_en</option>}
+          </select>
+          {!selectedDocumentIsOcr && <small>First OCR run is fixed to prompt_ocr. Layout prompts unlock after OCR is completed.</small>}
+        </label>
+      </div>}
+      {ocrWorkspaceTab === 'ocr' && !selectedId && <p className="feedback">Select a document in the workspace list to run OCR.</p>}
+      {ocrWorkspaceTab === 'ocr' && selectedId && embeddingStatus !== 'IDLE' && (
+        <p className={`feedback${embeddingStatus === 'FAILED' ? ' feedback--error' : ''}`}>
+          <span className={`pill pill--${embeddingStatusMeta.tone}`}>{embeddingStatusMeta.label}</span>{' '}
+          {embeddingError || embeddingMessage || 'Embedding status unavailable.'}
+          {embeddingResult?.chunk_count ? ` Chunks: ${embeddingResult.chunk_count}.` : ''}
+        </p>
+      )}
+      {ocrWorkspaceTab === 'ocr' && selectedId && !selectedLooksPdf && <p className="feedback">Selected document is not a PDF. OCR supports PDF only.</p>}
+      {ocrWorkspaceTab === 'ocr' && selectedId && selectedLooksPdf && selectedDocumentOcrStatus === 'QUEUED' && <p className="feedback">OCR is queued and will start in the backend shortly.</p>}
+      {ocrWorkspaceTab === 'ocr' && selectedId && selectedLooksPdf && selectedDocumentOcrStatus === 'RUNNING' && <p className="feedback">OCR is running in the backend. This panel refreshes automatically.</p>}
+      {ocrWorkspaceTab === 'ocr' && ocrLoadingCached && <p className="feedback">Loading cached OCR result...</p>}
+      {ocrWorkspaceTab === 'ocr' && ocrError && <p className="feedback feedback--error">{ocrError}</p>}
+      {ocrWorkspaceTab === 'extraction' && (
+        <div className="workspace-ocr-card__grid">
+          <section className="workspace-ocr-pane">
+            {renderWorkspaceFilePreview()}
+          </section>
+          <section className="workspace-ocr-pane">
+            <div className="workspace-ocr-extraction">
+              {!activeOcrPreviewContent && (
+                <p className="feedback">Run OCR on a document first to enable data extraction.</p>
+              )}
+              {selectedId && selectedLooksPdf && selectedDocumentOcrStatus === 'QUEUED' && (
+                <p className="feedback">OCR and data extraction are queued in the backend. This tab refreshes automatically.</p>
+              )}
+              {selectedId && selectedLooksPdf && selectedDocumentOcrStatus === 'RUNNING' && (
+                <p className="feedback">Backend processing is running. OCR/extraction results will appear here automatically.</p>
+              )}
+              {selectedId && selectedLooksPdf && selectedDocumentOcrStatus === 'READY' && selectedDocumentHasExtraction && !extractionPayloadAvailable && (
+                <p className="feedback">Waiting for extracted JSON from backend. Refreshing automatically...</p>
+              )}
+              {extractionError && <p className="feedback feedback--error">{extractionError}</p>}
+              {extractionResult && (
+                <div className="workspace-ocr-extraction__result">
+                  <div className="workspace-ocr-card__actions">
+                    <button type="button" className="ghost" onClick={handleLoadExtractionForEditing}>Load Data to Table</button>
+                    <button type="button" className="ghost" onClick={handleDownloadExtractionJson}>Download JSON</button>
+                  </div>
+                  <pre className="workspace-ocr-extraction__json">{JSON.stringify(extractionResult.extracted_json, null, 2)}</pre>
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
+      {ocrWorkspaceTab === 'edit' && (
+        <div className="workspace-ocr-card__grid">
+          <section className="workspace-ocr-pane">
+            {renderWorkspaceFilePreview()}
+          </section>
+          <section className="workspace-ocr-pane">
+            <div className="workspace-ocr-extraction workspace-ocr-edit">
+              <div className="workspace-ocr-card__actions">
+                <button type="button" className="ghost" onClick={handleLoadExtractionForEditing} disabled={!extractionResult?.extracted_json}>Load Data to Table</button>
+                <button type="button" className="ghost" onClick={handleSaveEditedExtraction} disabled={!editableExtractionData}>Save Changes</button>
+                <button type="button" className="ghost" onClick={handleDownloadEditedExtractionJson} disabled={!editableExtractionData && !extractionResult?.extracted_json}>Download Edited JSON</button>
+                <button type="button" className="ghost" onClick={handleResetEditedExtraction} disabled={!originalExtractionData}>Reset</button>
+              </div>
+              {!editableRows.length && <p className="feedback">Extract data first, then click "Load Data to Table".</p>}
+              {!!editableRows.length && (
+                <div className="workspace-ocr-edit__table-wrap">
+                  <table className="workspace-ocr-edit__table">
+                    <thead>
+                      <tr>
+                        <th>Field</th>
+                        <th>Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {editableRows.map((row) => (
+                        row.type === 'group' ? (
+                          <tr key={row.key} className="workspace-ocr-edit__group">
+                            <td colSpan={2}>{prettifyLabel(row.label)}</td>
+                          </tr>
+                        ) : (
+                          <tr key={row.path}>
+                            <td style={{ paddingLeft: `${Math.min(row.level * 16, 72)}px` }}>{prettifyLabel(row.label)}</td>
+                            <td>
+                              <input
+                                type="text"
+                                value={row.value == null ? '' : String(row.value)}
+                                onChange={(evt) => handleEditableFieldChange(row.path, evt.target.value)}
+                              />
+                            </td>
+                          </tr>
+                        )
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <div className="workspace-ocr-extraction__result">
+                <h4>Preview</h4>
+                <pre className="workspace-ocr-extraction__json">{JSON.stringify(editableExtractionData ?? extractionResult?.extracted_json ?? {}, null, 2)}</pre>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
+      {ocrWorkspaceTab === 'ocr' && (
+        <div className="workspace-ocr-card__content">
+          <div className="workspace-ocr-card__actions">
+            <button type="button" className="ghost" onClick={handleDownloadOcrJson} disabled={!ocrResult}>Download OCR JSON</button>
+            <button type="button" className="ghost" onClick={handleDownloadOcrMarkdown} disabled={!ocrPreview}>Download OCR Markdown</button>
+            <button type="button" className="ghost" onClick={() => setOcrPreviewMode('render')} disabled={ocrPreviewMode === 'render'}>Rendered</button>
+            <button type="button" className="ghost" onClick={() => setOcrPreviewMode('raw')} disabled={ocrPreviewMode === 'raw'}>Raw</button>
+          </div>
+          <div className="workspace-ocr-card__grid">
+            <section className="workspace-ocr-pane">
+              {renderWorkspaceFilePreview()}
+            </section>
+            <section className="workspace-ocr-pane">
+              <div className="workspace-ocr-pane__header">
+                <h4>Result Display</h4>
+                <div className="workspace-ocr-page-nav">
+                  <button type="button" className="ghost" disabled={!ocrPages.length || ocrPageIndex <= 0} onClick={() => setOcrPageIndex((prev) => Math.max(prev - 1, 0))}>Prev</button>
+                  <span>{ocrPages.length ? `${ocrPageIndex + 1} / ${ocrPages.length}` : '0 / 0'}</span>
+                  <button type="button" className="ghost" disabled={!ocrPages.length || ocrPageIndex >= ocrPages.length - 1} onClick={() => setOcrPageIndex((prev) => Math.min(prev + 1, ocrPages.length - 1))}>Next</button>
+                </div>
+              </div>
+              {activeOcrPreviewContent ? (
+                ocrPreviewMode === 'render' ? (
+                  <iframe
+                    title="OCR rendered preview"
+                    className="workspace-ocr-card__preview-frame"
+                    sandbox=""
+                    srcDoc={buildPreviewDocument(activeOcrPreviewContent)}
+                  />
+                ) : (
+                  <textarea className="workspace-ocr-result-raw" value={activeOcrPreviewContent} readOnly rows={20} />
+                )
+              ) : (
+                <textarea className="workspace-ocr-result-raw" value={'OCR completed. No preview text extracted from response.'} readOnly rows={6} />
+              )}
+            </section>
+          </div>
+        </div>
+      )}
+    </section>
   )
 
   useEffect(() => {
@@ -2198,7 +2463,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
           movingId={movingDocumentId}
           onMaximize={handleDocumentMaximize}
           onUpload={() => { if (documentPermissions?.write) setUploadOpen(true) }}
-          onOcrSelected={handleRunSelectedOcr}
+          onOcrSelected={handleOpenOcrWorkspace}
           canRunOcrOnSelected={!!selectedId && selectedLooksPdf}
           canUpload={documentPermissions?.write ?? false}
           onCreateTopicFromDocument={handleCreateTopicFromDocument}
@@ -2312,251 +2577,6 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
           }}
         />
         {error && <p className="feedback feedback--error">{error}</p>}
-        <section className="card workspace-ocr-card">
-          <div className="workspace-ocr-card__header">
-            <div>
-              <p className="eyebrow">OCR Output</p>
-              <h3>Selected Document OCR</h3>
-              {selectedId && (
-                <div className="workspace-ocr-card__status">
-                  <span className={`pill pill--${selectedDocumentOcrStatusMeta.tone}`}>
-                    {selectedDocumentOcrStatusMeta.label}
-                  </span>
-                  <small>{selectedDocumentOcrStatusMessage}</small>
-                  {selectedDocumentOcrStatusUpdatedAt && (
-                    <small>Updated {new Date(selectedDocumentOcrStatusUpdatedAt).toLocaleString()}</small>
-                  )}
-                </div>
-              )}
-            </div>
-            <div className="workspace-ocr-card__header-actions">
-              <button
-                type="button"
-                className="ghost"
-                onClick={handleRefreshOcrWorkspace}
-                disabled={!selectedId || ocrBusy || ocrLoadingCached}
-                title={!selectedId ? 'Select a document first' : 'Refresh OCR status and output'}
-              >
-                {ocrLoadingCached ? 'Refreshing...' : 'Refresh'}
-              </button>
-              {ocrWorkspaceTab === 'ocr' ? (
-                <>
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={handleRunEmbedding}
-                    disabled={embeddingBusy || !selectedId || !activeOcrPreviewContent}
-                    title={!selectedId ? 'Select a document first' : !activeOcrPreviewContent ? 'Run OCR first to obtain text for chunking and embedding' : undefined}
-                  >
-                    {embeddingBusy ? 'Embedding...' : 'Embed for Search'}
-                  </button>
-                  <button
-                    type="button"
-                    className="primary"
-                    onClick={handleRunSelectedOcr}
-                    disabled={ocrBusy || !(documentPermissions?.write ?? false) || !selectedId || !selectedLooksPdf}
-                    title={!selectedId ? 'Select a document first' : !selectedLooksPdf ? 'OCR currently supports PDF documents only' : undefined}
-                  >
-                    {ocrBusy ? 'Running OCR...' : 'Run OCR'}
-                  </button>
-                </>
-              ) : ocrWorkspaceTab === 'extraction' ? (
-                <button
-                  type="button"
-                  className="primary"
-                  onClick={handleRunExtraction}
-                  disabled={extractionBusy || !activeOcrPreviewContent}
-                  title={!activeOcrPreviewContent ? 'Run OCR first to obtain text for extraction' : undefined}
-                >
-                  {extractionBusy ? 'Extracting...' : 'Extract Data'}
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="primary"
-                  onClick={handleSaveEditedExtraction}
-                  disabled={!editableExtractionData}
-                >
-                  Save Changes
-                </button>
-              )}
-            </div>
-          </div>
-          {/* Nav-tabs */}
-          <div className="workspace-ocr-tabs">
-            <button
-              type="button"
-              className={`workspace-ocr-tab ${ocrWorkspaceTab === 'ocr' ? 'is-active' : ''}`}
-              onClick={() => setOcrWorkspaceTab('ocr')}
-            >
-              OCR Output
-            </button>
-            <button
-              type="button"
-              className={`workspace-ocr-tab ${ocrWorkspaceTab === 'extraction' ? 'is-active' : ''}`}
-              onClick={() => setOcrWorkspaceTab('extraction')}
-            >
-              Data Extraction
-            </button>
-            <button
-              type="button"
-              className={`workspace-ocr-tab ${ocrWorkspaceTab === 'edit' ? 'is-active' : ''}`}
-              onClick={() => setOcrWorkspaceTab('edit')}
-            >
-              Edit Data
-            </button>
-          </div>
-          {ocrWorkspaceTab === 'ocr' && <div className="workspace-ocr-card__settings">
-            <label>
-              <span>OCR prompt</span>
-              <select value={ocrPrompt} onChange={(evt) => setOcrPrompt(evt.target.value)} disabled={ocrBusy || !selectedDocumentIsOcr}>
-                <option value="prompt_ocr">prompt_ocr</option>
-                {selectedDocumentIsOcr && <option value="prompt_layout_all_en">prompt_layout_all_en</option>}
-                {selectedDocumentIsOcr && <option value="prompt_layout_only_en">prompt_layout_only_en</option>}
-              </select>
-              {!selectedDocumentIsOcr && <small>First OCR run is fixed to prompt_ocr. Layout prompts unlock after OCR is completed.</small>}
-            </label>
-          </div>}
-          {ocrWorkspaceTab === 'ocr' && !selectedId && <p className="feedback">Select a document in the workspace list to run OCR.</p>}
-          {ocrWorkspaceTab === 'ocr' && selectedId && embeddingStatus !== 'IDLE' && (
-            <p className={`feedback${embeddingStatus === 'FAILED' ? ' feedback--error' : ''}`}>
-              <span className={`pill pill--${embeddingStatusMeta.tone}`}>{embeddingStatusMeta.label}</span>{' '}
-              {embeddingError || embeddingMessage || 'Embedding status unavailable.'}
-              {embeddingResult?.chunk_count ? ` Chunks: ${embeddingResult.chunk_count}.` : ''}
-            </p>
-          )}
-          {ocrWorkspaceTab === 'ocr' && selectedId && !selectedLooksPdf && <p className="feedback">Selected document is not a PDF. OCR supports PDF only.</p>}
-          {ocrWorkspaceTab === 'ocr' && selectedId && selectedLooksPdf && selectedDocumentOcrStatus === 'QUEUED' && <p className="feedback">OCR is queued and will start in the backend shortly.</p>}
-          {ocrWorkspaceTab === 'ocr' && selectedId && selectedLooksPdf && selectedDocumentOcrStatus === 'RUNNING' && <p className="feedback">OCR is running in the backend. This panel refreshes automatically.</p>}
-          {ocrWorkspaceTab === 'ocr' && ocrLoadingCached && <p className="feedback">Loading cached OCR result...</p>}
-          {ocrWorkspaceTab === 'ocr' && ocrError && <p className="feedback feedback--error">{ocrError}</p>}
-          {ocrWorkspaceTab === 'extraction' && (
-            <div className="workspace-ocr-card__grid">
-              <section className="workspace-ocr-pane">
-                {renderWorkspaceFilePreview()}
-              </section>
-              <section className="workspace-ocr-pane">
-                <div className="workspace-ocr-extraction">
-                  {!activeOcrPreviewContent && (
-                    <p className="feedback">Run OCR on a document first to enable data extraction.</p>
-                  )}
-                  {selectedId && selectedLooksPdf && selectedDocumentOcrStatus === 'QUEUED' && (
-                    <p className="feedback">OCR and data extraction are queued in the backend. This tab refreshes automatically.</p>
-                  )}
-                  {selectedId && selectedLooksPdf && selectedDocumentOcrStatus === 'RUNNING' && (
-                    <p className="feedback">Backend processing is running. OCR/extraction results will appear here automatically.</p>
-                  )}
-                  {selectedId && selectedLooksPdf && selectedDocumentOcrStatus === 'READY' && selectedDocumentHasExtraction && !extractionPayloadAvailable && (
-                    <p className="feedback">Waiting for extracted JSON from backend. Refreshing automatically...</p>
-                  )}
-                  {extractionError && <p className="feedback feedback--error">{extractionError}</p>}
-                  {extractionResult && (
-                    <div className="workspace-ocr-extraction__result">
-                      <div className="workspace-ocr-card__actions">
-                        <button type="button" className="ghost" onClick={handleLoadExtractionForEditing}>Load Data to Table</button>
-                        <button type="button" className="ghost" onClick={handleDownloadExtractionJson}>Download JSON</button>
-                      </div>
-                      <pre className="workspace-ocr-extraction__json">{JSON.stringify(extractionResult.extracted_json, null, 2)}</pre>
-                    </div>
-                  )}
-                </div>
-              </section>
-            </div>
-          )}
-          {ocrWorkspaceTab === 'edit' && (
-            <div className="workspace-ocr-card__grid">
-              <section className="workspace-ocr-pane">
-                {renderWorkspaceFilePreview()}
-              </section>
-              <section className="workspace-ocr-pane">
-                <div className="workspace-ocr-extraction workspace-ocr-edit">
-                  <div className="workspace-ocr-card__actions">
-                    <button type="button" className="ghost" onClick={handleLoadExtractionForEditing} disabled={!extractionResult?.extracted_json}>Load Data to Table</button>
-                    <button type="button" className="ghost" onClick={handleSaveEditedExtraction} disabled={!editableExtractionData}>Save Changes</button>
-                    <button type="button" className="ghost" onClick={handleDownloadEditedExtractionJson} disabled={!editableExtractionData && !extractionResult?.extracted_json}>Download Edited JSON</button>
-                    <button type="button" className="ghost" onClick={handleResetEditedExtraction} disabled={!originalExtractionData}>Reset</button>
-                  </div>
-                  {!editableRows.length && <p className="feedback">Extract data first, then click "Load Data to Table".</p>}
-                  {!!editableRows.length && (
-                    <div className="workspace-ocr-edit__table-wrap">
-                      <table className="workspace-ocr-edit__table">
-                        <thead>
-                          <tr>
-                            <th>Field</th>
-                            <th>Value</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {editableRows.map((row) => (
-                            row.type === 'group' ? (
-                              <tr key={row.key} className="workspace-ocr-edit__group">
-                                <td colSpan={2}>{prettifyLabel(row.label)}</td>
-                              </tr>
-                            ) : (
-                              <tr key={row.path}>
-                                <td style={{ paddingLeft: `${Math.min(row.level * 16, 72)}px` }}>{prettifyLabel(row.label)}</td>
-                                <td>
-                                  <input
-                                    type="text"
-                                    value={row.value == null ? '' : String(row.value)}
-                                    onChange={(evt) => handleEditableFieldChange(row.path, evt.target.value)}
-                                  />
-                                </td>
-                              </tr>
-                            )
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                  <div className="workspace-ocr-extraction__result">
-                    <h4>Preview</h4>
-                    <pre className="workspace-ocr-extraction__json">{JSON.stringify(editableExtractionData ?? extractionResult?.extracted_json ?? {}, null, 2)}</pre>
-                  </div>
-                </div>
-              </section>
-            </div>
-          )}
-          {ocrWorkspaceTab === 'ocr' && (
-            <div className="workspace-ocr-card__content">
-              <div className="workspace-ocr-card__actions">
-                <button type="button" className="ghost" onClick={handleDownloadOcrJson} disabled={!ocrResult}>Download OCR JSON</button>
-                <button type="button" className="ghost" onClick={handleDownloadOcrMarkdown} disabled={!ocrPreview}>Download OCR Markdown</button>
-                <button type="button" className="ghost" onClick={() => setOcrPreviewMode('render')} disabled={ocrPreviewMode === 'render'}>Rendered</button>
-                <button type="button" className="ghost" onClick={() => setOcrPreviewMode('raw')} disabled={ocrPreviewMode === 'raw'}>Raw</button>
-              </div>
-              <div className="workspace-ocr-card__grid">
-                <section className="workspace-ocr-pane">
-                  {renderWorkspaceFilePreview()}
-                </section>
-                <section className="workspace-ocr-pane">
-                  <div className="workspace-ocr-pane__header">
-                    <h4>Result Display</h4>
-                    <div className="workspace-ocr-page-nav">
-                      <button type="button" className="ghost" disabled={!ocrPages.length || ocrPageIndex <= 0} onClick={() => setOcrPageIndex((prev) => Math.max(prev - 1, 0))}>Prev</button>
-                      <span>{ocrPages.length ? `${ocrPageIndex + 1} / ${ocrPages.length}` : '0 / 0'}</span>
-                      <button type="button" className="ghost" disabled={!ocrPages.length || ocrPageIndex >= ocrPages.length - 1} onClick={() => setOcrPageIndex((prev) => Math.min(prev + 1, ocrPages.length - 1))}>Next</button>
-                    </div>
-                  </div>
-                  {activeOcrPreviewContent ? (
-                    ocrPreviewMode === 'render' ? (
-                      <iframe
-                        title="OCR rendered preview"
-                        className="workspace-ocr-card__preview-frame"
-                        sandbox=""
-                        srcDoc={buildPreviewDocument(activeOcrPreviewContent)}
-                      />
-                    ) : (
-                      <textarea className="workspace-ocr-result-raw" value={activeOcrPreviewContent} readOnly rows={20} />
-                    )
-                  ) : (
-                    <textarea className="workspace-ocr-result-raw" value={'OCR completed. No preview text extracted from response.'} readOnly rows={6} />
-                  )}
-                </section>
-              </div>
-            </div>
-          )}
-        </section>
       </div>
       <div className="workspace__details">
         <DocumentDetails
@@ -2628,6 +2648,19 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
           onCreateFolder={handleFolderCreate}
           initial={uploadPrefill}
         />
+      )}
+      {ocrWorkspaceOpen && (
+        <div
+          className="upload-panel ocr-workspace-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label="OCR Workspace"
+        >
+          <div className="upload-panel__backdrop" onClick={() => setOcrWorkspaceOpen(false)} />
+          <div className="upload-panel__content ocr-workspace-modal__content" onClick={(e) => e.stopPropagation()}>
+            {renderOcrWorkspace()}
+          </div>
+        </div>
       )}
       {topicCreateModal.open && (
         <div
