@@ -4,6 +4,7 @@ export const keys = {
   auth: 'dms_auth',
   role: 'dms_role',
   me: 'dms_me',
+  lastLogoutAt: 'dms_last_logout_at',
 }
 
 export const readJson = async (key, fallback = null) => {

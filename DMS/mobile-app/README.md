@@ -3,6 +3,7 @@
 This mobile application mirrors the DMS web frontend look and workflows, covering:
 
 - Login and logout
+- My Dashboard (mobile responsive)
 - Folder and document browsing
 - Document online viewing
 - Document upload from mobile device
