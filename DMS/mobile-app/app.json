@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "Automated Smart ECM",
+    "slug": "dms-mobile-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#f8fafc"
+      }
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "extra": {
+      "apiBaseUrl": "http://localhost:8080",
+      "chatbotApiUrl": "http://localhost:5100",
+      "embeddingApiUrl": "http://localhost:5101"
+    }
+  }
+}
