@@ -65,6 +65,7 @@ export function AuthProvider({ children }) {
   }, [])
 
   const logout = useCallback(async () => {
+    await writeJson(keys.lastLogoutAt, new Date().toISOString())
     await clearMany([keys.auth, keys.me, keys.role])
     setAuthToken(null)
     setProfile(null)

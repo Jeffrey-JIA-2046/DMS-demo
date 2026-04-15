@@ -3,6 +3,7 @@ import { ActivityIndicator, Text, View } from 'react-native'
 import { NavigationContainer, DefaultTheme } from '@react-navigation/native'
 import { createNativeStackNavigator } from '@react-navigation/native-stack'
 import HomeHubScreen from '../screens/HomeHubScreen'
+import DashboardScreen from '../screens/DashboardScreen'
 import DocumentsScreen from '../screens/DocumentsScreen'
 import DocumentDetailScreen from '../screens/DocumentDetailScreen'
 import AIAssistantScreen from '../screens/AIAssistantScreen'
@@ -46,6 +47,7 @@ export default function AppNavigator() {
         ) : isAuthenticated ? (
           <>
             <Stack.Screen name="Home" component={HomeHubScreen} options={{ headerShown: false }} />
+            <Stack.Screen name="My Dashboard" component={DashboardScreen} options={{ title: 'My Dashboard' }} />
             <Stack.Screen name="Documents" component={DocumentsScreen} options={{ title: 'Documents' }} />
             <Stack.Screen name="AI Assistant" component={AIAssistantScreen} options={{ title: 'AI Assistant' }} />
             <Stack.Screen name="Knowledge" component={KnowledgeScreen} options={{ title: 'Knowledge' }} />

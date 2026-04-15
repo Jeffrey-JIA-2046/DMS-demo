@@ -27,6 +27,49 @@ export const fetchDocument = async (token, id) => {
   return handleJsonResponse(response)
 }
 
+export const listApproverOptions = async (token) => {
+  const response = await fetch(resolveApiUrl('/api/documents/approvers'), {
+    headers: { ...authHeader(token) },
+  })
+  return handleJsonResponse(response)
+}
+
+export const approveDocument = async (token, documentId, payload = {}) => {
+  const response = await fetch(resolveApiUrl(`/api/documents/${documentId}/approval/approve`), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeader(token),
+    },
+    body: JSON.stringify(payload),
+  })
+  return handleJsonResponse(response)
+}
+
+export const rejectDocument = async (token, documentId, payload = {}) => {
+  const response = await fetch(resolveApiUrl(`/api/documents/${documentId}/approval/reject`), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeader(token),
+    },
+    body: JSON.stringify(payload),
+  })
+  return handleJsonResponse(response)
+}
+
+export const delegateApproval = async (token, documentId, payload) => {
+  const response = await fetch(resolveApiUrl(`/api/documents/${documentId}/approval/delegate`), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeader(token),
+    },
+    body: JSON.stringify(payload),
+  })
+  return handleJsonResponse(response)
+}
+
 export const buildOnlineViewUrl = (documentId) => resolveApiUrl(`/api/documents/${documentId}/download`)
 
 export const uploadDocument = async (token, { file, metadata }) => {

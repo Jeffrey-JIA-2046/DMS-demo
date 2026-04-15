@@ -19,6 +19,7 @@ export default function HomeHubScreen({ navigation }) {
       <Card style={styles.menu}>
         <Text style={styles.sectionTitle}>Modules</Text>
         <View style={styles.actions}>
+          <PrimaryButton title="My Dashboard" onPress={() => navigation.navigate('My Dashboard')} />
           <PrimaryButton title="Documents" onPress={() => navigation.navigate('Documents')} />
           <PrimaryButton title="AI Assistant" onPress={() => navigation.navigate('AI Assistant')} />
           <PrimaryButton title="Knowledge" onPress={() => navigation.navigate('Knowledge')} />
