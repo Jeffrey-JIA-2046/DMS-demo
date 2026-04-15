@@ -16,6 +16,15 @@ const formatBytes = (bytes) => {
   return `${value.toFixed(1)} ${units[exponent]}`
 }
 
+const formatDocumentTime = (value) => {
+  if (!value) return null
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime())) {
+    return null
+  }
+  return date.toLocaleString()
+}
+
 const getIconForFileName = (fileName = '') => {
   if (!fileName || typeof fileName !== 'string') return '📄'
   const name = fileName.split(/[?#]/)[0]
@@ -140,7 +149,15 @@ function DocumentList({
       <div className="list-card__header">
         <div>
           <p className="eyebrow">Workspace</p>
-          <h3>Documents</h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <h3 style={{ margin: 0 }}>Documents</h3>
+            {loading && (
+              <span className="document-list__loading-badge" aria-live="polite" aria-label="Loading documents">
+                <span className="document-list__loading-spinner" aria-hidden="true" />
+                <span>Loading…</span>
+              </span>
+            )}
+          </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <div style={{display:'flex',alignItems:'center',gap:8}}>
@@ -164,7 +181,6 @@ function DocumentList({
               <option value="status,asc">Status</option>
             </select>
           </label>
-          {loading && <span className="pill pill--info">Loading…</span>}
           {onOcrSelected && (
             <button
               type="button"
@@ -248,6 +264,9 @@ function DocumentList({
                 ) : (
                     <>
                       <small>v{doc.latestVersion} · {formatBytes(doc.latestSizeBytes)}</small>
+                      <small className="document-list__time">
+                        {formatDocumentTime(doc.createdAt ?? doc.created_at) ? `Created ${formatDocumentTime(doc.createdAt ?? doc.created_at)}` : `Updated ${formatDocumentTime(doc.updatedAt ?? doc.updated_at) || '—'}`}
+                      </small>
                       <small>Confidence {Number.isFinite(doc.confidenceScore) ? doc.confidenceScore : 0}%</small>
                       {!(documentPermissions?.write ?? false) && <small className="action-lock"> 🔒</small>}
                     </>
