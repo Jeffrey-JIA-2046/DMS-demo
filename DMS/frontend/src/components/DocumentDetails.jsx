@@ -1239,16 +1239,19 @@ function PdfPreview({ data, requestedPage = 1, onPagerStateChange, showTextPrevi
   const canvasRef = useRef(null)
   const pdfRef = useRef(null)
   const renderTaskRef = useRef(null)
-  const pdfObjectUrlRef = useRef('')
   const [status, setStatus] = useState('idle')
   const [error, setError] = useState('')
   const [pageCount, setPageCount] = useState(0)
   const [pageNumber, setPageNumber] = useState(1)
   const [scale, setScale] = useState(1.2)
   const [renderingPage, setRenderingPage] = useState(false)
-  const [nativePdfUrl, setNativePdfUrl] = useState('')
   const [selectableText, setSelectableText] = useState('')
   const [textTruncated, setTextTruncated] = useState(false)
+  const MIN_SCALE = 0.6
+  const MAX_SCALE = 3
+  const SCALE_STEP = 0.2
+
+  const clampScale = (value) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, value))
 
   const extractPdfText = async (pdf) => {
     let chunks = []
@@ -1289,27 +1292,6 @@ function PdfPreview({ data, requestedPage = 1, onPagerStateChange, showTextPrevi
       console.debug('[PdfPreview] clipboard copy failed', err)
     }
   }
-
-  useEffect(() => {
-    if (pdfObjectUrlRef.current) {
-      URL.revokeObjectURL(pdfObjectUrlRef.current)
-      pdfObjectUrlRef.current = ''
-    }
-    if (!data?.length) {
-      setNativePdfUrl('')
-      return
-    }
-    const blob = new Blob([data], { type: 'application/pdf' })
-    const url = URL.createObjectURL(blob)
-    pdfObjectUrlRef.current = url
-    setNativePdfUrl(url)
-    return () => {
-      if (pdfObjectUrlRef.current) {
-        URL.revokeObjectURL(pdfObjectUrlRef.current)
-        pdfObjectUrlRef.current = ''
-      }
-    }
-  }, [data])
 
   useEffect(() => {
     if (!data?.length) {
@@ -1410,14 +1392,14 @@ function PdfPreview({ data, requestedPage = 1, onPagerStateChange, showTextPrevi
       pageNumber,
       pageCount,
       renderingPage,
-      status: nativePdfUrl ? 'native' : status,
-      nativeViewer: Boolean(nativePdfUrl),
+      status,
+      nativeViewer: false,
     })
-  }, [pageNumber, pageCount, renderingPage, status, nativePdfUrl, onPagerStateChange])
+  }, [pageNumber, pageCount, renderingPage, status, onPagerStateChange])
 
   useEffect(() => {
     const pdf = pdfRef.current
-    if (!pdf || status !== 'ready' || nativePdfUrl) {
+    if (!pdf || status !== 'ready') {
       return
     }
     let cancelled = false
@@ -1458,26 +1440,39 @@ function PdfPreview({ data, requestedPage = 1, onPagerStateChange, showTextPrevi
       renderTaskRef.current = null
       setRenderingPage(false)
     }
-  }, [pageNumber, scale, status, nativePdfUrl])
+  }, [pageNumber, scale, status])
 
   return (
     <div className="pdf-preview">
       {status === 'loading' && <span className="pill pill--info">Rendering PDF…</span>}
       {status === 'error' && <div className="feedback feedback--error">{error}</div>}
-      {nativePdfUrl ? (
-        <iframe
-          className="pdf-preview__iframe"
-          title="PDF preview"
-          src={nativePdfUrl}
-        />
-      ) : (
-        <>
-          <canvas ref={canvasRef} className="pdf-preview__canvas" aria-label="PDF preview" />
-          {renderingPage && status === 'ready' && <small className="content-panel__hint">Rendering page {pageNumber}…</small>}
-          {status === 'ready' && pageCount > 1 && !renderingPage && (
-            <small className="content-panel__hint">Viewing page {pageNumber} of {pageCount}.</small>
-          )}
-        </>
+      {status === 'ready' && (
+        <div className="pdf-preview__toolbar" role="group" aria-label="PDF zoom controls">
+          <button
+            type="button"
+            className="ghost ghost--small"
+            onClick={() => setScale((prev) => clampScale(prev - SCALE_STEP))}
+            disabled={scale <= MIN_SCALE || renderingPage}
+          >
+            Zoom out
+          </button>
+          <span className="pdf-preview__zoom">{Math.round(scale * 100)}%</span>
+          <button
+            type="button"
+            className="ghost ghost--small"
+            onClick={() => setScale((prev) => clampScale(prev + SCALE_STEP))}
+            disabled={scale >= MAX_SCALE || renderingPage}
+          >
+            Zoom in
+          </button>
+        </div>
+      )}
+      <div className="pdf-preview__viewport" aria-label="PDF preview viewport">
+        <canvas ref={canvasRef} className="pdf-preview__canvas" aria-label="PDF preview" />
+      </div>
+      {renderingPage && status === 'ready' && <small className="content-panel__hint">Rendering page {pageNumber}…</small>}
+      {status === 'ready' && pageCount > 1 && !renderingPage && (
+        <small className="content-panel__hint">Viewing page {pageNumber} of {pageCount}.</small>
       )}
       {showTextPreview && status === 'ready' && selectableText && (
         <div className="pdf-preview__text-panel">
