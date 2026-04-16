@@ -116,6 +116,13 @@ export const fetchDocument = async (id) => {
   return handleJsonResponse(response)
 }
 
+export const fetchDocumentPreview = async (documentId, versionId) => {
+  const response = await fetch(resolveApiUrl(`/api/documents/${documentId}/versions/${versionId}/preview`), {
+    headers: { ...authHeaders() },
+  })
+  return handleJsonResponse(response)
+}
+
 export const uploadDocument = async (metadata, file) => {
   const formData = new FormData()
   formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }), 'metadata.json')

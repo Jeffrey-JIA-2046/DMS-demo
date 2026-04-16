@@ -3,7 +3,7 @@ import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist/build/pdf'
 import pdfjsWorkerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { AuthContext } from '../contexts/AuthContext'
 import { AnnounceContext } from '../contexts/AnnounceContext'
-import { authHeaders, downloadDocument, listApproverOptions } from '../api/documents'
+import { authHeaders, downloadDocument, fetchDocumentPreview, listApproverOptions } from '../api/documents'
 import MetadataFieldInputs from './MetadataFieldInputs'
 import DocumentWorkflowPanel from './DocumentWorkflowPanel'
 import { describeMetadataField, normalizeMetadataValues, validateMetadataValues } from '../utils/metadataTemplate'
@@ -59,6 +59,12 @@ const isTextLikeContent = (type = '') => {
 
 const isPdfContent = (type = '') => type.toLowerCase().includes('pdf')
 
+const isPdfVersion = (version) => {
+  const contentType = version?.contentType ?? ''
+  const fileName = version?.fileName ?? ''
+  return isPdfContent(contentType) || fileName.toLowerCase().endsWith('.pdf')
+}
+
 const createPreviewState = () => ({
   status: 'idle',
   mode: 'text',
@@ -80,6 +86,9 @@ const buildFormState = (doc) => ({
 })
 
 const normalizeInitialTab = (value) => (value === 'details' ? 'details' : 'content')
+const DETAIL_SECTION_TABS = new Set(['requirements', 'approval', 'metadata', 'versions'])
+const normalizeDetailsSectionTab = (value) => (DETAIL_SECTION_TABS.has(value) ? value : 'metadata')
+
 export default function DocumentDetails({
   document,
   taskContext,
@@ -99,6 +108,7 @@ export default function DocumentDetails({
   const [form, setForm] = useState(() => buildFormState(document))
   const [fileInputKey, setFileInputKey] = useState(0)
   const [activeTab, setActiveTab] = useState(normalizeInitialTab(initialTab))
+  const [activeDetailsSection, setActiveDetailsSection] = useState(normalizeDetailsSectionTab('metadata'))
   const [previewState, setPreviewState] = useState(createPreviewState)
   const [previewReloadKey, setPreviewReloadKey] = useState(0)
   const [pdfPager, setPdfPager] = useState({ pageNumber: 1, pageCount: 0, renderingPage: false, status: 'idle' })
@@ -275,6 +285,7 @@ export default function DocumentDetails({
     setEditing(false)
     setFileInputKey((prev) => prev + 1)
     setActiveTab(resolvedInitialTab)
+    setActiveDetailsSection(normalizeDetailsSectionTab('metadata'))
     setPreviewState(createPreviewState())
     setPdfPager({ pageNumber: 1, pageCount: 0, renderingPage: false, status: 'idle' })
     setRequestedPdfPage(1)
@@ -331,12 +342,12 @@ export default function DocumentDetails({
         truncated: false,
       })
       try {
-        const response = await fetch(downloadUrlBuilder(document.id, latestVersion.id), { signal: controller.signal, headers: { ...authHeaders() } })
-        if (!response.ok) {
-          throw new Error('Failed to load document content')
-        }
-        const contentType = response.headers.get('Content-Type') || ''
-        if (isPdfContent(contentType)) {
+        if (isPdfVersion(latestVersion)) {
+          const response = await fetch(downloadUrlBuilder(document.id, latestVersion.id), { signal: controller.signal, headers: { ...authHeaders() } })
+          if (!response.ok) {
+            throw new Error('Failed to load document content')
+          }
+          const contentType = response.headers.get('Content-Type') || latestVersion?.contentType || ''
           const pdfBuffer = await response.arrayBuffer()
           console.debug('[DocumentDetails] loaded pdf buffer, size=', pdfBuffer.byteLength)
           setPreviewState({
@@ -352,36 +363,34 @@ export default function DocumentDetails({
           })
           return
         }
-        if (!isTextLikeContent(contentType)) {
+
+        const preview = await fetchDocumentPreview(document.id, latestVersion.id)
+        if (preview?.status !== 'ready' || preview?.supported === false) {
           setPreviewState({
             status: 'unsupported',
             mode: 'text',
             text: '',
             pdfData: null,
             error: '',
-            contentType,
+            contentType: preview?.contentType || latestVersion?.contentType || '',
             versionId: latestVersion.id,
             supported: false,
             truncated: false,
           })
           return
         }
-        const blob = await response.blob()
-        const rawText = await blob.text()
-        const truncated = rawText.length > MAX_PREVIEW_CHARS
-        const text = truncated
-          ? `${rawText.slice(0, MAX_PREVIEW_CHARS)}\n\n--- Preview truncated after ${MAX_PREVIEW_CHARS.toLocaleString()} characters ---`
-          : rawText
         setPreviewState({
           status: 'ready',
           mode: 'text',
-          text,
+          text: preview?.truncated
+            ? `${preview?.text || ''}\n\n--- Preview truncated after ${MAX_PREVIEW_CHARS.toLocaleString()} characters ---`
+            : (preview?.text || ''),
           pdfData: null,
           error: '',
-          contentType,
+          contentType: preview?.contentType || latestVersion?.contentType || '',
           versionId: latestVersion.id,
           supported: true,
-          truncated,
+          truncated: !!preview?.truncated,
         })
       } catch (err) {
         if (controller.signal.aborted) {
@@ -739,154 +748,203 @@ export default function DocumentDetails({
                 <dd>{formatDate(document.updatedAt)}</dd>
               </div>
             </dl>
-            {folderTemplate.length > 0 && (
-              <div className="metadata-template-summary">
-                <p className="metadata-template-summary__title">Folder metadata requirements</p>
-                <ul className="metadata-template-summary__list">
-                  {folderTemplate.map((field) => (
-                    <li key={field.key}>
-                      <strong>{field.label}</strong>
-                      <span>{describeMetadataField(field)}</span>
-                    </li>
-                  ))}
-                </ul>
+            <div className="details-subtabs" role="tablist" aria-label="Document detail sections">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeDetailsSection === 'requirements'}
+                className={`details-subtabs__btn ${activeDetailsSection === 'requirements' ? 'is-active' : ''}`}
+                onClick={() => setActiveDetailsSection('requirements')}
+              >
+                Requirements
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeDetailsSection === 'approval'}
+                className={`details-subtabs__btn ${activeDetailsSection === 'approval' ? 'is-active' : ''}`}
+                onClick={() => setActiveDetailsSection('approval')}
+              >
+                Approval
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeDetailsSection === 'metadata'}
+                className={`details-subtabs__btn ${activeDetailsSection === 'metadata' ? 'is-active' : ''}`}
+                onClick={() => setActiveDetailsSection('metadata')}
+              >
+                Metadata
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeDetailsSection === 'versions'}
+                className={`details-subtabs__btn ${activeDetailsSection === 'versions' ? 'is-active' : ''}`}
+                onClick={() => setActiveDetailsSection('versions')}
+              >
+                Versions
+              </button>
+            </div>
+            {activeDetailsSection === 'requirements' && (
+              <div className="details-card__section">
+                {folderTemplate.length > 0 ? (
+                  <div className="metadata-template-summary">
+                    <p className="metadata-template-summary__title">Folder metadata requirements</p>
+                    <ul className="metadata-template-summary__list">
+                      {folderTemplate.map((field) => (
+                        <li key={field.key}>
+                          <strong>{field.label}</strong>
+                          <span>{describeMetadataField(field)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <p className="metadata-template-summary__empty">No metadata requirements are defined for this folder.</p>
+                )}
               </div>
             )}
-            <div className="details-card__section approval-card">
-              <div className="section-header">
-                <h4>{isRetentionTask ? 'Retention disposition' : 'Approval workflow'}</h4>
-                {(canAddApprovalNote || canDecideApproval) && (
-                  <div className="approval-card__actions">
-                    {canAddApprovalNote && (
-                      <button type="button" className="ghost ghost--small" onClick={() => openApprovalModal('note')} disabled={busy}>
-                        Add note
-                      </button>
-                    )}
-                    {canDecideApproval && (
-                      <>
-                        <button type="button" className="ghost ghost--small ghost--danger" onClick={() => openApprovalModal('reject')} disabled={busy}>
-                          Reject
+            {activeDetailsSection === 'approval' && (
+              <div className="details-card__section approval-card">
+                <div className="section-header">
+                  <h4>{isRetentionTask ? 'Retention disposition' : 'Approval workflow'}</h4>
+                  {(canAddApprovalNote || canDecideApproval) && (
+                    <div className="approval-card__actions">
+                      {canAddApprovalNote && (
+                        <button type="button" className="ghost ghost--small" onClick={() => openApprovalModal('note')} disabled={busy}>
+                          Add note
                         </button>
-                        {canDelegateApproval && (
-                          <button type="button" className="ghost ghost--small" onClick={() => openApprovalModal('delegate')} disabled={busy}>
-                            Delegate
+                      )}
+                      {canDecideApproval && (
+                        <>
+                          <button type="button" className="ghost ghost--small ghost--danger" onClick={() => openApprovalModal('reject')} disabled={busy}>
+                            Reject
                           </button>
-                        )}
-                        <button type="button" className="primary" onClick={() => openApprovalModal('approve')} disabled={busy}>
-                          Approve
-                        </button>
-                      </>
-                    )}
+                          {canDelegateApproval && (
+                            <button type="button" className="ghost ghost--small" onClick={() => openApprovalModal('delegate')} disabled={busy}>
+                              Delegate
+                            </button>
+                          )}
+                          <button type="button" className="primary" onClick={() => openApprovalModal('approve')} disabled={busy}>
+                            Approve
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <dl className="metadata metadata--compact">
+                  <div>
+                    <dt>Approver</dt>
+                    <dd>{approvalInfo ? `${approvalInfo.approverDisplayName || approvalInfo.approverUsername}` : 'Not assigned'}</dd>
                   </div>
-                )}
-              </div>
-              <dl className="metadata metadata--compact">
-                <div>
-                  <dt>Approver</dt>
-                  <dd>{approvalInfo ? `${approvalInfo.approverDisplayName || approvalInfo.approverUsername}` : 'Not assigned'}</dd>
-                </div>
-                <div>
-                  <dt>Requested</dt>
-                  <dd>{formatInstant(approvalInfo?.requestedAt)}</dd>
-                </div>
-                <div>
-                  <dt>Decision</dt>
-                  <dd>{approvalInfo?.decidedAt ? formatInstant(approvalInfo.decidedAt) : awaitingApproval ? 'Pending' : '—'}</dd>
-                </div>
-              </dl>
-              <div className="approval-notes">
-                {approvalNotes.length ? (
-                  approvalNotes.map((note) => (
-                    <article key={note.id ?? `${note.createdAt}-${note.authorUsername}`} className="approval-note">
-                      <div className="approval-note__header">
-                        <strong>{note.authorDisplayName || note.authorUsername || 'Approver'}</strong>
-                        <small>{formatInstant(note.createdAt)}</small>
-                      </div>
-                      <p>{note.note}</p>
-                    </article>
-                  ))
-                ) : (
-                  <p className="empty-state">No notes yet.</p>
-                )}
-              </div>
-            </div>
-            <DocumentWorkflowPanel documentId={document.id} toast={toast} />
-            <div className="details-card__section">
-              <div className="section-header">
-                <h4>Metadata</h4>
-                {canEditMetadata ? (
-                  <button type="button" className="ghost" onClick={beginEdit} disabled={busy}>
-                    Edit
-                  </button>
-                ) : null}
-              </div>
-              <p className="details-description">{document.description || 'No description yet.'}</p>
-              <div className="tag-list">
-                {document.tags?.length ? (
-                  document.tags.map((tag) => (
-                    <span key={tag} className="pill pill--neutral">
-                      {tag}
-                    </span>
-                  ))
-                ) : (
-                  <span className="tag-list__empty">No tags</span>
-                )}
-              </div>
-              {metadataDisplay.length ? (
-                <dl className="metadata metadata--compact metadata-display-grid">
-                  {metadataDisplay.map((entry) => (
-                    <div key={entry.key} className="metadata-display-grid__item">
-                      <dt>
-                        {entry.label}
-                        {entry.required ? <span className="metadata-display-grid__required"> *</span> : null}
-                      </dt>
-                      <dd>{entry.displayValue}</dd>
-                      {entry.note ? <small className="metadata-display-grid__note">{entry.note}</small> : null}
-                    </div>
-                  ))}
+                  <div>
+                    <dt>Requested</dt>
+                    <dd>{formatInstant(approvalInfo?.requestedAt)}</dd>
+                  </div>
+                  <div>
+                    <dt>Decision</dt>
+                    <dd>{approvalInfo?.decidedAt ? formatInstant(approvalInfo.decidedAt) : awaitingApproval ? 'Pending' : '—'}</dd>
+                  </div>
                 </dl>
-              ) : (
-                <p className="metadata-template-summary__empty">No metadata fields are defined for this document.</p>
-              )}
-            </div>
-            <div className="details-card__section">
-              <div className="section-header">
-                <h4>Versions</h4>
-              </div>
-              <div className="versions">
-                {document.versions?.map((version) => (
-                  <article key={version.id} className="version-row">
-                    <div>
-                      <p>v{version.version}</p>
-                      <small>{formatDate(version.createdAt)}</small>
-                    </div>
-                    <div>
-                      <p>{version.fileName}</p>
-                      <small>{formatBytes(version.sizeBytes)}</small>
-                    </div>
-                    <button className="ghost" onClick={() => handleDownload(version)} disabled={!!downloadingMap[version.id]?.active}>
-                      Download
-                    </button>
-                    {downloadingMap[version.id] && (
-                      <div className="download-progress" style={{ marginLeft: 8 }}>
-                        <div
-                          className="download-progress__track"
-                          role="progressbar"
-                          aria-valuemin={0}
-                          aria-valuemax={100}
-                          aria-valuenow={downloadingMap[version.id].percent ?? undefined}
-                          aria-valuetext={downloadingMap[version.id].percent == null ? 'Downloading' : undefined}
-                          aria-label={`Download progress for ${version.fileName}`}
-                        >
-                          <div className="download-progress__bar" style={{ width: `${downloadingMap[version.id].percent || 0}%` }} />
+                <div className="approval-notes">
+                  {approvalNotes.length ? (
+                    approvalNotes.map((note) => (
+                      <article key={note.id ?? `${note.createdAt}-${note.authorUsername}`} className="approval-note">
+                        <div className="approval-note__header">
+                          <strong>{note.authorDisplayName || note.authorUsername || 'Approver'}</strong>
+                          <small>{formatInstant(note.createdAt)}</small>
                         </div>
-                      </div>
-                    )}
-                  </article>
-                ))}
-                {!document.versions?.length && <p className="empty-state">No versions yet.</p>}
+                        <p>{note.note}</p>
+                      </article>
+                    ))
+                  ) : (
+                    <p className="empty-state">No notes yet.</p>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
+            {activeDetailsSection === 'metadata' && (
+              <div className="details-card__section">
+                <div className="section-header">
+                  <h4>Metadata</h4>
+                  {canEditMetadata ? (
+                    <button type="button" className="ghost" onClick={beginEdit} disabled={busy}>
+                      Edit
+                    </button>
+                  ) : null}
+                </div>
+                <p className="details-description">{document.description || 'No description yet.'}</p>
+                <div className="tag-list">
+                  {document.tags?.length ? (
+                    document.tags.map((tag) => (
+                      <span key={tag} className="pill pill--neutral">
+                        {tag}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="tag-list__empty">No tags</span>
+                  )}
+                </div>
+                {metadataDisplay.length ? (
+                  <dl className="metadata metadata--compact metadata-display-grid">
+                    {metadataDisplay.map((entry) => (
+                      <div key={entry.key} className="metadata-display-grid__item">
+                        <dt>
+                          {entry.label}
+                          {entry.required ? <span className="metadata-display-grid__required"> *</span> : null}
+                        </dt>
+                        <dd>{entry.displayValue}</dd>
+                        {entry.note ? <small className="metadata-display-grid__note">{entry.note}</small> : null}
+                      </div>
+                    ))}
+                  </dl>
+                ) : (
+                  <p className="metadata-template-summary__empty">No metadata fields are defined for this document.</p>
+                )}
+              </div>
+            )}
+            {activeDetailsSection === 'versions' && (
+              <div className="details-card__section">
+                <div className="section-header">
+                  <h4>Versions</h4>
+                </div>
+                <div className="versions">
+                  {document.versions?.map((version) => (
+                    <article key={version.id} className="version-row">
+                      <div>
+                        <p>v{version.version}</p>
+                        <small>{formatDate(version.createdAt)}</small>
+                      </div>
+                      <div>
+                        <p>{version.fileName}</p>
+                        <small>{formatBytes(version.sizeBytes)}</small>
+                      </div>
+                      <button className="ghost" onClick={() => handleDownload(version)} disabled={!!downloadingMap[version.id]?.active}>
+                        Download
+                      </button>
+                      {downloadingMap[version.id] && (
+                        <div className="download-progress" style={{ marginLeft: 8 }}>
+                          <div
+                            className="download-progress__track"
+                            role="progressbar"
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                            aria-valuenow={downloadingMap[version.id].percent ?? undefined}
+                            aria-valuetext={downloadingMap[version.id].percent == null ? 'Downloading' : undefined}
+                            aria-label={`Download progress for ${version.fileName}`}
+                          >
+                            <div className="download-progress__bar" style={{ width: `${downloadingMap[version.id].percent || 0}%` }} />
+                          </div>
+                        </div>
+                      )}
+                    </article>
+                  ))}
+                  {!document.versions?.length && <p className="empty-state">No versions yet.</p>}
+                </div>
+              </div>
+            )}
           </>
         ) : (
           <div className="content-panel">

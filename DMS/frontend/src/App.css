@@ -2786,6 +2786,30 @@
   border-color: transparent;
 }
 
+.details-subtabs {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0 0 1rem;
+  flex-wrap: wrap;
+}
+
+.details-subtabs__btn {
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 12px;
+  padding: 0.45rem 0.85rem;
+  background: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--ink-muted);
+  transition: background 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+
+.details-subtabs__btn.is-active {
+  background: rgba(0, 128, 255, 0.12);
+  color: var(--accent);
+  border-color: rgba(0, 128, 255, 0.12);
+}
+
 .metadata {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -3210,6 +3234,27 @@
   background: rgba(191, 219, 254, 0.45);
 }
 
+.ocr-workspace-modal__content {
+  width: min(1280px, 96vw);
+  max-height: 94vh;
+  padding: 1.5rem;
+}
+
+.ocr-workspace-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.ocr-workspace-modal__content .workspace-ocr-card {
+  margin-top: 0;
+  padding: 0;
+  border: none;
+  box-shadow: none;
+  background: transparent;
+}
+
 .workspace-ocr-card {
   margin-top: 1rem;
   display: flex;
@@ -3421,6 +3466,11 @@
 @media (max-width: 1080px) {
   .workspace-ocr-card__grid {
     grid-template-columns: 1fr;
+  }
+
+  .ocr-workspace-modal__content {
+    width: min(100%, 96vw);
+    padding: 1rem;
   }
 }
 
