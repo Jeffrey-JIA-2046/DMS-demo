@@ -60,6 +60,7 @@ com\dms\document\dto\FolderMetadataFieldDto.class
 com\dms\document\model\DocumentStatus.class
 com\dms\chatbot\service\ChatbotService$StreamAccumulator.class
 com\dms\retention\repository\RetentionRuleRepository.class
+com\dms\document\dto\DocumentContentPreviewResponse.class
 com\dms\security\Role.class
 com\dms\user\dto\GroupResponse.class
 com\dms\config\WebConfig.class
@@ -129,6 +130,7 @@ com\dms\knowledge\dto\KnowledgeTopicDetailsResponse.class
 com\dms\reminder\controller\ReminderManagementController.class
 com\dms\chatbot\service\ChatbotService.class
 com\dms\chatbot\dto\ChatSearchResponse.class
+com\dms\document\service\DocumentAttachmentIndexingService.class
 com\dms\user\repository\AppUserRepository.class
 com\dms\reminder\model\ReminderOffsetUnit.class
 com\dms\knowledge\dto\KnowledgeTopicRequest.class

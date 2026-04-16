@@ -96,6 +96,7 @@ public class DocumentService {
     private final AppUserRepository appUserRepository;
     private final UserTaskRepository userTaskRepository;
     private final FolderPermissionEvaluator folderPermissionEvaluator;
+    private final DocumentAttachmentIndexingService documentAttachmentIndexingService;
     private final DocumentOcrProcessingService documentOcrProcessingService;
     private final DocumentOcrResultService documentOcrResultService;
     private final Clock clock;
@@ -107,6 +108,7 @@ public class DocumentService {
         AppUserRepository appUserRepository,
         UserTaskRepository userTaskRepository,
         FolderPermissionEvaluator folderPermissionEvaluator,
+        DocumentAttachmentIndexingService documentAttachmentIndexingService,
         DocumentOcrProcessingService documentOcrProcessingService,
         DocumentOcrResultService documentOcrResultService,
         Clock clock
@@ -117,6 +119,7 @@ public class DocumentService {
         this.appUserRepository = appUserRepository;
         this.userTaskRepository = userTaskRepository;
         this.folderPermissionEvaluator = folderPermissionEvaluator;
+        this.documentAttachmentIndexingService = documentAttachmentIndexingService;
         this.documentOcrProcessingService = documentOcrProcessingService;
         this.documentOcrResultService = documentOcrResultService;
         this.clock = clock;
@@ -512,6 +515,7 @@ public class DocumentService {
             document.addVersion(buildVersion(document, safeFile, now, 1));
 
             Document saved = documentRepository.save(document);
+            indexLatestAttachment(saved);
             createApprovalTask(saved, approver, now);
             return toDetails(saved);
         } catch (IOException ex) {
@@ -539,6 +543,7 @@ public class DocumentService {
             document.setOcrStatusUpdatedAt(now);
             document.setUpdatedAt(now);
             Document saved = documentRepository.save(document);
+            indexLatestAttachment(saved);
             documentOcrProcessingService.markDocumentOcrUnavailable(saved.getId());
             return toDetails(saved);
         } catch (IOException ex) {
@@ -663,6 +668,7 @@ public class DocumentService {
             assertCanDelete(resolveFolderForAccess(document), user);
             cancelLinkedTasks(document, "Deleted", Instant.now(clock));
             documentOcrResultService.invalidateDocumentCache(document.getId());
+            removeIndexedAttachments(document);
             documentRepository.deleteById(String.valueOf(documentId));
         } catch (IOException ex) {
             throw new RuntimeException("Failed to delete document", ex);
@@ -676,6 +682,7 @@ public class DocumentService {
             Instant now = Instant.now(clock);
             cancelLinkedTasks(document, "Disposed by retention policy", now);
             documentOcrResultService.invalidateDocumentCache(document.getId());
+            removeIndexedAttachments(document);
             documentRepository.deleteById(String.valueOf(documentId));
             log.info("Disposed document {} by retention rule {} on {}", documentId, retentionRuleId, disposalDate);
         } catch (IOException ex) {
@@ -1290,6 +1297,29 @@ public class DocumentService {
             throw new InvalidDocumentException("Failed to read document content");
         }
         return version;
+    }
+
+    private void indexLatestAttachment(Document document) {
+        if (document == null || document.getVersions() == null || document.getVersions().isEmpty()) {
+            return;
+        }
+        DocumentVersion latestVersion = document.getVersions().stream()
+            .max(Comparator.comparingInt(DocumentVersion::getVersionNumber))
+            .orElse(null);
+        if (latestVersion != null) {
+            documentAttachmentIndexingService.indexAttachment(document, latestVersion);
+        }
+    }
+
+    private void removeIndexedAttachments(Document document) {
+        if (document == null || document.getVersions() == null || document.getVersions().isEmpty()) {
+            return;
+        }
+        for (DocumentVersion version : document.getVersions()) {
+            if (version != null && StringUtils.hasText(version.getId())) {
+                documentAttachmentIndexingService.deleteAttachmentByVersionId(version.getId());
+            }
+        }
     }
 
     private boolean repairDocumentIdentifiers(Document document) {

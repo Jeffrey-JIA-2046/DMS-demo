@@ -32,6 +32,7 @@ C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\dto\ApproverOptionRe
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\dto\DocumentApprovalDecisionRequest.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\dto\DocumentApprovalInfo.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\dto\DocumentApprovalNoteResponse.java
+C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\dto\DocumentContentPreviewResponse.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\dto\DocumentDetailsResponse.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\dto\DocumentExtractionSaveRequest.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\dto\DocumentFilter.java
@@ -60,6 +61,7 @@ C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\model\MetadataFieldT
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\repository\DocumentFolderRepository.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\repository\DocumentRepository.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\repository\DocumentVersionRepository.java
+C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\service\DocumentAttachmentIndexingService.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\service\DocumentFolderPermissionService.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\service\DocumentFolderService.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\service\DocumentService.java

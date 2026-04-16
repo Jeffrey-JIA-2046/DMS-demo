@@ -24,6 +24,7 @@ import org.springframework.web.multipart.MultipartFile;
 import com.dms.document.dto.ApproverOptionResponse;
 import com.dms.document.dto.DocumentApprovalDecisionRequest;
 import com.dms.document.dto.DocumentDetailsResponse;
+import com.dms.document.dto.DocumentContentPreviewResponse;
 import com.dms.document.dto.DocumentExtractionSaveRequest;
 import com.dms.document.dto.DocumentFilter;
 import com.dms.document.dto.DocumentSummaryResponse;
@@ -33,6 +34,7 @@ import com.dms.document.dto.PageResponse;
 import com.dms.document.model.DocumentStatus;
 import com.dms.document.model.DocumentVersion;
 import com.dms.document.service.DocumentService;
+import com.dms.document.service.DocumentAttachmentIndexingService;
 import com.dms.ocr.client.DotsOcrClient;
 import com.dms.ocr.service.DocumentOcrProcessingService;
 import com.dms.ocr.service.DocumentOcrResultService;
@@ -49,13 +51,15 @@ public class DocumentController {
     private final DotsOcrClient dotsOcrClient;
     private final DocumentOcrResultService documentOcrResultService;
     private final DocumentOcrProcessingService documentOcrProcessingService;
+    private final DocumentAttachmentIndexingService documentAttachmentIndexingService;
 
-    public DocumentController(DocumentService documentService, AuditService auditService, DotsOcrClient dotsOcrClient, DocumentOcrResultService documentOcrResultService, DocumentOcrProcessingService documentOcrProcessingService) {
+    public DocumentController(DocumentService documentService, AuditService auditService, DotsOcrClient dotsOcrClient, DocumentOcrResultService documentOcrResultService, DocumentOcrProcessingService documentOcrProcessingService, DocumentAttachmentIndexingService documentAttachmentIndexingService) {
         this.documentService = documentService;
         this.auditService = auditService;
         this.dotsOcrClient = dotsOcrClient;
         this.documentOcrResultService = documentOcrResultService;
         this.documentOcrProcessingService = documentOcrProcessingService;
+        this.documentAttachmentIndexingService = documentAttachmentIndexingService;
     }
 
     @GetMapping
@@ -226,6 +230,12 @@ public class DocumentController {
     public ResponseEntity<byte[]> downloadVersion(@PathVariable String id, @PathVariable String versionId, java.security.Principal principal) {
         DocumentVersion version = documentService.getVersion(id, versionId, principal != null ? principal.getName() : null);
         return toFileResponse(version);
+    }
+
+    @GetMapping("/{id}/versions/{versionId}/preview")
+    public DocumentContentPreviewResponse previewVersion(@PathVariable String id, @PathVariable String versionId, java.security.Principal principal) {
+        DocumentVersion version = documentService.getVersion(id, versionId, principal != null ? principal.getName() : null);
+        return documentAttachmentIndexingService.buildPreview(version, 100000);
     }
 
     @PostMapping("/{id}/approval/notes")

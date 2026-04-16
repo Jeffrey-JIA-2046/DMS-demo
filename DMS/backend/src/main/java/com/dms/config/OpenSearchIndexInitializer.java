@@ -4,9 +4,13 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import javax.sql.DataSource;
 
+import org.opensearch.client.opensearch._types.mapping.Property;
+import org.opensearch.client.opensearch.ingest.Processor;
 import org.opensearch.client.opensearch.OpenSearchClient;
 import org.opensearch.client.opensearch.indices.CreateIndexRequest;
 import org.opensearch.client.opensearch.indices.ExistsRequest;
@@ -62,6 +66,12 @@ public class OpenSearchIndexInitializer implements ApplicationRunner {
     @Value("${app.opensearch.ocr-documents-index:dms-ocr-document}")
     private String ocrDocumentsIndex;
 
+    @Value("${app.opensearch.attachments-index:dms-attachments}")
+    private String attachmentsIndex;
+
+    @Value("${app.opensearch.attachments-pipeline:dms-attachments-pipeline}")
+    private String attachmentsPipeline;
+
     @Value("${app.opensearch.enabled:false}")
     private boolean openSearchEnabled;
 
@@ -83,12 +93,18 @@ public class OpenSearchIndexInitializer implements ApplicationRunner {
         List<String> indices = List.of(
             usersIndex, groupsIndex, auditIndex, documentsIndex,
             foldersIndex, userTasksIndex, knowledgeIndex, ocrDocumentsIndex,
-            "document-versions"
+            attachmentsIndex, "document-versions"
         );
 
         for (String index : indices) {
-            ensureIndexExists(index);
+            if (attachmentsIndex.equals(index)) {
+                ensureAttachmentsIndexExists(index);
+            } else {
+                ensureIndexExists(index);
+            }
         }
+
+        ensureAttachmentPipelineExists();
 
         if (dataSource != null) {
             seedUsersFromMysql();
@@ -110,6 +126,71 @@ public class OpenSearchIndexInitializer implements ApplicationRunner {
             }
         } catch (Exception ex) {
             log.warn("Could not ensure OpenSearch index '{}': {}", indexName, ex.getMessage());
+        }
+    }
+
+    private void ensureAttachmentsIndexExists(String indexName) {
+        try {
+            boolean exists = openSearchClient.indices()
+                .exists(new ExistsRequest.Builder().index(indexName).build())
+                .value();
+            if (!exists) {
+                Map<String, Property> attachmentProperties = new LinkedHashMap<>();
+                attachmentProperties.put("content", Property.of(ap -> ap.text(t -> t)));
+                attachmentProperties.put("title", Property.of(ap -> ap.text(t -> t)));
+                attachmentProperties.put("author", Property.of(ap -> ap.text(t -> t)));
+                attachmentProperties.put("content_type", Property.of(ap -> ap.keyword(k -> k)));
+                attachmentProperties.put("content_length", Property.of(ap -> ap.long_(l -> l)));
+                attachmentProperties.put("language", Property.of(ap -> ap.keyword(k -> k)));
+
+                Map<String, Property> indexProperties = new LinkedHashMap<>();
+                indexProperties.put("document_id", Property.of(p -> p.keyword(k -> k)));
+                indexProperties.put("document_version_id", Property.of(p -> p.keyword(k -> k)));
+                indexProperties.put("title", Property.of(p -> p.text(t -> t)));
+                indexProperties.put("description", Property.of(p -> p.text(t -> t)));
+                indexProperties.put("owner", Property.of(p -> p.keyword(k -> k)));
+                indexProperties.put("category", Property.of(p -> p.keyword(k -> k)));
+                indexProperties.put("folder_id", Property.of(p -> p.keyword(k -> k)));
+                indexProperties.put("file_name", Property.of(p -> p.keyword(k -> k)));
+                indexProperties.put("content_type", Property.of(p -> p.keyword(k -> k)));
+                indexProperties.put("size_bytes", Property.of(p -> p.long_(l -> l)));
+                indexProperties.put("created_at", Property.of(p -> p.date(d -> d)));
+                indexProperties.put("data", Property.of(p -> p.binary(b -> b)));
+                indexProperties.put("max_chars", Property.of(p -> p.integer(i -> i)));
+                indexProperties.put("attachment", Property.of(p -> p.object(o -> o.properties(attachmentProperties))));
+
+                openSearchClient.indices().create(
+                    new CreateIndexRequest.Builder()
+                        .index(indexName)
+                        .mappings(m -> m.properties(indexProperties))
+                        .build()
+                );
+                log.info("Created OpenSearch attachment index: {}", indexName);
+            }
+        } catch (Exception ex) {
+            log.warn("Could not ensure OpenSearch attachment index '{}': {}", indexName, ex.getMessage());
+        }
+    }
+
+    private void ensureAttachmentPipelineExists() {
+        try {
+            openSearchClient.ingest().putPipeline(p -> p
+                .id(attachmentsPipeline)
+                .description("Extract attachment content for DMS uploads")
+                .processors(List.of(
+                    Processor.of(pr -> pr.attachment(a -> a
+                        .field("data")
+                        .targetField("attachment")
+                        .properties(List.of("content", "title", "author", "content_type", "content_length", "language"))
+                        .indexedChars(100000L)
+                        .indexedCharsField("max_chars")
+                        .ignoreMissing(true)
+                    ))
+                ))
+            );
+            log.info("Ensured OpenSearch ingest pipeline: {}", attachmentsPipeline);
+        } catch (Exception ex) {
+            log.warn("Could not ensure OpenSearch attachment pipeline '{}': {}", attachmentsPipeline, ex.getMessage());
         }
     }
 

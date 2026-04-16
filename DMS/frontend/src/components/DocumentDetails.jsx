@@ -3,7 +3,7 @@ import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist/build/pdf'
 import pdfjsWorkerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { AuthContext } from '../contexts/AuthContext'
 import { AnnounceContext } from '../contexts/AnnounceContext'
-import { authHeaders, downloadDocument, listApproverOptions } from '../api/documents'
+import { authHeaders, downloadDocument, fetchDocumentPreview, listApproverOptions } from '../api/documents'
 import MetadataFieldInputs from './MetadataFieldInputs'
 import { describeMetadataField, normalizeMetadataValues, validateMetadataValues } from '../utils/metadataTemplate'
 import { fetchActiveCodeTableItems } from '../api/codeTable'
@@ -57,6 +57,12 @@ const isTextLikeContent = (type = '') => {
 }
 
 const isPdfContent = (type = '') => type.toLowerCase().includes('pdf')
+
+const isPdfVersion = (version) => {
+  const contentType = version?.contentType ?? ''
+  const fileName = version?.fileName ?? ''
+  return isPdfContent(contentType) || fileName.toLowerCase().endsWith('.pdf')
+}
 
 const createPreviewState = () => ({
   status: 'idle',
@@ -335,12 +341,12 @@ export default function DocumentDetails({
         truncated: false,
       })
       try {
-        const response = await fetch(downloadUrlBuilder(document.id, latestVersion.id), { signal: controller.signal, headers: { ...authHeaders() } })
-        if (!response.ok) {
-          throw new Error('Failed to load document content')
-        }
-        const contentType = response.headers.get('Content-Type') || ''
-        if (isPdfContent(contentType)) {
+        if (isPdfVersion(latestVersion)) {
+          const response = await fetch(downloadUrlBuilder(document.id, latestVersion.id), { signal: controller.signal, headers: { ...authHeaders() } })
+          if (!response.ok) {
+            throw new Error('Failed to load document content')
+          }
+          const contentType = response.headers.get('Content-Type') || latestVersion?.contentType || ''
           const pdfBuffer = await response.arrayBuffer()
           console.debug('[DocumentDetails] loaded pdf buffer, size=', pdfBuffer.byteLength)
           setPreviewState({
@@ -356,36 +362,34 @@ export default function DocumentDetails({
           })
           return
         }
-        if (!isTextLikeContent(contentType)) {
+
+        const preview = await fetchDocumentPreview(document.id, latestVersion.id)
+        if (preview?.status !== 'ready' || preview?.supported === false) {
           setPreviewState({
             status: 'unsupported',
             mode: 'text',
             text: '',
             pdfData: null,
             error: '',
-            contentType,
+            contentType: preview?.contentType || latestVersion?.contentType || '',
             versionId: latestVersion.id,
             supported: false,
             truncated: false,
           })
           return
         }
-        const blob = await response.blob()
-        const rawText = await blob.text()
-        const truncated = rawText.length > MAX_PREVIEW_CHARS
-        const text = truncated
-          ? `${rawText.slice(0, MAX_PREVIEW_CHARS)}\n\n--- Preview truncated after ${MAX_PREVIEW_CHARS.toLocaleString()} characters ---`
-          : rawText
         setPreviewState({
           status: 'ready',
           mode: 'text',
-          text,
+          text: preview?.truncated
+            ? `${preview?.text || ''}\n\n--- Preview truncated after ${MAX_PREVIEW_CHARS.toLocaleString()} characters ---`
+            : (preview?.text || ''),
           pdfData: null,
           error: '',
-          contentType,
+          contentType: preview?.contentType || latestVersion?.contentType || '',
           versionId: latestVersion.id,
           supported: true,
-          truncated,
+          truncated: !!preview?.truncated,
         })
       } catch (err) {
         if (controller.signal.aborted) {
