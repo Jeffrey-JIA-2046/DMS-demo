@@ -14,6 +14,7 @@ export default function LoginScreen() {
   const { settings, saveSettings, resetSettings } = useAppSettings()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [keepMeLogin, setKeepMeLogin] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -73,7 +74,7 @@ export default function LoginScreen() {
     try {
       setError('')
       setLoading(true)
-      await login(username.trim(), password)
+      await login(username.trim(), password, keepMeLogin)
     } catch (err) {
       setError(err.message || 'Login failed')
     } finally {
@@ -96,6 +97,12 @@ export default function LoginScreen() {
           <View style={styles.form}>
             <LabeledInput label="Username" value={username} onChangeText={setUsername} placeholder="domain\\username" />
             <LabeledInput label="Password" value={password} onChangeText={setPassword} placeholder="Password" secureTextEntry />
+            <Pressable style={styles.keepLoginRow} onPress={() => setKeepMeLogin((prev) => !prev)}>
+              <View style={[styles.checkbox, keepMeLogin && styles.checkboxChecked]}>
+                {keepMeLogin ? <Text style={styles.checkboxMark}>x</Text> : null}
+              </View>
+              <Text style={styles.keepLoginText}>Keep me login</Text>
+            </Pressable>
             {!!error && <Text style={styles.error}>{error}</Text>}
             <PrimaryButton title="Login" onPress={handleLogin} loading={loading} />
           </View>
@@ -170,6 +177,36 @@ const styles = StyleSheet.create({
   },
   form: {
     gap: 12,
+  },
+  keepLoginRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: -2,
+  },
+  checkbox: {
+    width: 18,
+    height: 18,
+    borderWidth: 1,
+    borderColor: '#94a3b8',
+    borderRadius: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff',
+  },
+  checkboxChecked: {
+    borderColor: colors.accent,
+    backgroundColor: '#dbeafe',
+  },
+  checkboxMark: {
+    color: colors.accent,
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 14,
+  },
+  keepLoginText: {
+    color: colors.inkStrong,
+    fontSize: 13,
   },
   error: {
     color: colors.danger,

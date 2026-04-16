@@ -14,7 +14,8 @@
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#f8fafc"
-      }
+      },
+      "package": "com.asl.dms.ecm"
     },
     "web": {
       "bundler": "metro"
@@ -22,7 +23,13 @@
     "extra": {
       "apiBaseUrl": "http://localhost:8080",
       "chatbotApiUrl": "http://localhost:5100",
-      "embeddingApiUrl": "http://localhost:5101"
-    }
+      "embeddingApiUrl": "http://localhost:5101",
+      "eas": {
+        "projectId": "e5d7720a-80dd-4789-b0d7-e6fcae42abcb"
+      }
+    },
+    "plugins": [
+      "expo-font"
+    ]
   }
 }

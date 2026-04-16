@@ -69,6 +69,7 @@ import com.dms.user.dto.GroupSummary;
 import com.dms.user.model.AppUser;
 import com.dms.user.model.UserGroup;
 import com.dms.user.repository.AppUserRepository;
+import com.dms.workflow.service.WorkflowService;
 
 @Service
 public class DocumentService {
@@ -98,6 +99,7 @@ public class DocumentService {
     private final FolderPermissionEvaluator folderPermissionEvaluator;
     private final DocumentOcrProcessingService documentOcrProcessingService;
     private final DocumentOcrResultService documentOcrResultService;
+    private final WorkflowService workflowService;
     private final Clock clock;
 
     public DocumentService(
@@ -109,6 +111,7 @@ public class DocumentService {
         FolderPermissionEvaluator folderPermissionEvaluator,
         DocumentOcrProcessingService documentOcrProcessingService,
         DocumentOcrResultService documentOcrResultService,
+        WorkflowService workflowService,
         Clock clock
     ) {
         this.documentRepository = documentRepository;
@@ -119,6 +122,7 @@ public class DocumentService {
         this.folderPermissionEvaluator = folderPermissionEvaluator;
         this.documentOcrProcessingService = documentOcrProcessingService;
         this.documentOcrResultService = documentOcrResultService;
+        this.workflowService = workflowService;
         this.clock = clock;
     }
 
@@ -513,6 +517,7 @@ public class DocumentService {
 
             Document saved = documentRepository.save(document);
             createApprovalTask(saved, approver, now);
+            workflowService.startWorkflowForDocument(saved, username);
             return toDetails(saved);
         } catch (IOException ex) {
             throw new RuntimeException("Failed to create document", ex);

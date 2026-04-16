@@ -4,6 +4,7 @@ export const keys = {
   auth: 'dms_auth',
   role: 'dms_role',
   me: 'dms_me',
+  rememberLogin: 'dms_remember_login',
   lastLogoutAt: 'dms_last_logout_at',
 }
 

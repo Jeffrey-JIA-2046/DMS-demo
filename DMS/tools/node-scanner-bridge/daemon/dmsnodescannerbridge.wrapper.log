@@ -2,3 +2,19 @@
 2026-04-14 18:12:59 - Started 28028
 2026-04-14 18:17:39 - Starting D:\Program Files\nodejs\node.exe  --harmony D:\POC\DMS2\DMS\tools\node-scanner-bridge\node_modules\node-windows\lib\wrapper.js --file D:\POC\DMS2\DMS\tools\node-scanner-bridge\server.js --scriptoptions= --log "DMS Node Scanner Bridge wrapper" --grow 0 --wait 2 --maxrestarts 3 --abortonerror n --stopparentfirst undefined --maxretries 3
 2026-04-14 18:17:39 - Started 29892
+2026-04-15 18:29:30 - Stopping dmsnodescannerbridge.exe
+2026-04-15 18:29:30 - ProcessKill 29892
+2026-04-15 18:29:31 - Shutdown exception
+Message:Class not registered
+
+Stacktrace:   at System.Runtime.InteropServices.Marshal.ThrowExceptionForHRInternal(Int32 errorCode, IntPtr errorInfo)
+   at System.Management.ManagementScope.InitializeGuts(Object o)
+   at System.Management.ManagementScope.Initialize()
+   at System.Management.ManagementObjectSearcher.Initialize()
+   at System.Management.ManagementObjectSearcher.Get()
+   at winsw.WrapperService.GetChildPids(Int32 pid)
+   at winsw.WrapperService.StopProcessAndChildren(Int32 pid)
+   at winsw.WrapperService.StopIt()
+   at winsw.WrapperService.OnShutdown()
+2026-04-16 09:37:18 - Starting D:\Program Files\nodejs\node.exe  --harmony D:\POC\DMS2\DMS\tools\node-scanner-bridge\node_modules\node-windows\lib\wrapper.js --file D:\POC\DMS2\DMS\tools\node-scanner-bridge\server.js --scriptoptions= --log "DMS Node Scanner Bridge wrapper" --grow 0 --wait 2 --maxrestarts 3 --abortonerror n --stopparentfirst undefined --maxretries 3
+2026-04-16 09:37:18 - Started 5292

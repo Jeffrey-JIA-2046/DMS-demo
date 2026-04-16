@@ -23,6 +23,15 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true)
 
   const bootstrap = useCallback(async () => {
+    const rememberLogin = await readJson(keys.rememberLogin, false)
+    if (!rememberLogin) {
+      await clearMany([keys.auth, keys.me, keys.role])
+      setAuthToken(null)
+      setProfile(null)
+      setLoading(false)
+      return
+    }
+
     const token = await readJson(keys.auth)
     const me = await readJson(keys.me)
     if (token) {
@@ -51,22 +60,29 @@ export function AuthProvider({ children }) {
     bootstrap()
   }, [bootstrap])
 
-  const login = useCallback(async (username, password) => {
+  const login = useCallback(async (username, password, rememberLogin = false) => {
     const token = Buffer.from(`${username}:${password}`).toString('base64')
     const response = await fetch(resolveApiUrl('/api/me'), {
       headers: { Authorization: `Basic ${token}` },
     })
     const data = await handleJsonResponse(response)
-    await writeJson(keys.auth, token)
-    await writeJson(keys.me, data)
-    await writeJson(keys.role, invertRoleLabel(data.role))
+
+    if (rememberLogin) {
+      await writeJson(keys.auth, token)
+      await writeJson(keys.me, data)
+      await writeJson(keys.role, invertRoleLabel(data.role))
+    } else {
+      await clearMany([keys.auth, keys.me, keys.role])
+    }
+    await writeJson(keys.rememberLogin, rememberLogin)
+
     setAuthToken(token)
     setProfile(data)
   }, [])
 
   const logout = useCallback(async () => {
     await writeJson(keys.lastLogoutAt, new Date().toISOString())
-    await clearMany([keys.auth, keys.me, keys.role])
+    await clearMany([keys.auth, keys.me, keys.role, keys.rememberLogin])
     setAuthToken(null)
     setProfile(null)
   }, [])

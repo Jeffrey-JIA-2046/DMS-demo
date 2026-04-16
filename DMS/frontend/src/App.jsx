@@ -16,6 +16,7 @@ import RetentionManagement from './components/RetentionManagement'
 import ReminderManagement from './components/ReminderManagement'
 import JobManagement from './components/JobManagement'
 import CodeTableManagement from './components/CodeTableManagement'
+import WorkflowDesigner from './components/WorkflowDesigner'
 
 function SystemAdministration() {
   const [adminTab, setAdminTab] = useState('retention')
@@ -27,6 +28,7 @@ function SystemAdministration() {
           { key: 'reminder', label: 'Reminder Management' },
           { key: 'jobs', label: 'Job Management' },
           { key: 'codetable', label: 'Code Table Management' },
+          { key: 'workflow', label: 'Workflow Designer' },
         ].map((tab) => (
           <button
             key={tab.key}
@@ -43,6 +45,7 @@ function SystemAdministration() {
       {adminTab === 'reminder' && <ReminderManagement />}
       {adminTab === 'jobs' && <JobManagement />}
       {adminTab === 'codetable' && <CodeTableManagement />}
+      {adminTab === 'workflow' && <WorkflowDesigner />}
     </div>
   )
 }

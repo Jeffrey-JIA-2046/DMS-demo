@@ -5,6 +5,7 @@ import { AuthContext } from '../contexts/AuthContext'
 import { AnnounceContext } from '../contexts/AnnounceContext'
 import { authHeaders, downloadDocument, listApproverOptions } from '../api/documents'
 import MetadataFieldInputs from './MetadataFieldInputs'
+import DocumentWorkflowPanel from './DocumentWorkflowPanel'
 import { describeMetadataField, normalizeMetadataValues, validateMetadataValues } from '../utils/metadataTemplate'
 import { fetchActiveCodeTableItems } from '../api/codeTable'
 
@@ -809,6 +810,7 @@ export default function DocumentDetails({
                 )}
               </div>
             </div>
+            <DocumentWorkflowPanel documentId={document.id} toast={toast} />
             <div className="details-card__section">
               <div className="section-header">
                 <h4>Metadata</h4>
