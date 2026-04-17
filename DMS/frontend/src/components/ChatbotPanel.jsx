@@ -34,6 +34,12 @@ function formatMessage(text) {
 
 export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open: openProp, onOpenChange }) {
   const { toast } = useContext(AnnounceContext)
+  const initialMessages = useMemo(() => ([
+    {
+      role: 'ai',
+      content: 'Hello! Select 1-3 documents to compare and summarize them.',
+    },
+  ]), [])
   const [internalOpen, setInternalOpen] = useState(false)
   const controlled = typeof openProp === 'boolean'
   const open = controlled ? openProp : internalOpen
@@ -70,12 +76,7 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
   const [chatId, setChatId] = useState(null)
   const [activeDocumentId, setActiveDocumentId] = useState(null)
   const [selectedDocumentIds, setSelectedDocumentIds] = useState([])
-  const [messages, setMessages] = useState([
-    {
-      role: 'ai',
-      content: 'Hello! Select 1-3 documents to compare and summarize them.',
-    },
-  ])
+  const [messages, setMessages] = useState(initialMessages)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -194,6 +195,13 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
 
   const clearAllSelections = () => {
     setSelectedDocumentIds([])
+  }
+
+  const resetChatSession = () => {
+    setChatId(null)
+    setMessages(initialMessages)
+    setError('')
+    toast && toast('Started a new chat session.', { type: 'info' })
   }
 
   const runSearch = async ({ page = 1, perPage = itemsPerPage } = {}) => {
@@ -533,6 +541,9 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
               <h4>AI Assistant</h4>
               <p>Get summaries and insights about selected documents.</p>
             </div>
+            <button type="button" className="ghost" onClick={resetChatSession} disabled={qaLoading || summaryLoading}>
+              New Session
+            </button>
           </div>
 
           <div className="chatbot-panel__chat-window">
@@ -573,6 +584,7 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
 
           <div className="chatbot-template__chat-actions">
             {activeDocument?.title && <span className="chatbot-template__active-doc">Focused: {activeDocument.title}</span>}
+            {chatId && <span className="chatbot-template__active-doc">Session: {chatId}</span>}
           </div>
 
           {error && <p className="feedback feedback--error">{error}</p>}

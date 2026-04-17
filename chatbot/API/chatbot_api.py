@@ -173,6 +173,12 @@ def _count_tokens_approx(messages: list[dict[str, str]]) -> int:
     return sum(len((msg.get("content") or "")) // 4 for msg in messages)
 
 
+def _count_text_tokens_approx(text: str) -> int:
+    if not text:
+        return 0
+    return max(1, len(text) // 4)
+
+
 def _get_embedding_model():
     global _embedding_model
     if _embedding_model is not None:
@@ -199,12 +205,53 @@ def _get_chatlog_messages(chat_id: str) -> list[dict[str, str]]:
         return []
 
 
-def _save_chat_log(chat_id: str, payload: dict[str, Any], assistant_response: str) -> None:
+def _extract_provider_usage(provider_payload: Optional[dict[str, Any]]) -> dict[str, Any]:
+    payload = provider_payload or {}
+    prompt_tokens = payload.get("prompt_eval_count")
+    completion_tokens = payload.get("eval_count")
+    total_tokens = None
+    if isinstance(prompt_tokens, int) and isinstance(completion_tokens, int):
+        total_tokens = prompt_tokens + completion_tokens
+
+    usage: dict[str, Any] = {
+        "provider_prompt_tokens": prompt_tokens,
+        "provider_completion_tokens": completion_tokens,
+        "provider_total_tokens": total_tokens,
+    }
+
+    for field in (
+        "total_duration",
+        "load_duration",
+        "prompt_eval_duration",
+        "eval_duration",
+    ):
+        if field in payload:
+            usage[field] = payload.get(field)
+
+    return usage
+
+
+def _build_token_usage(messages: list[dict[str, str]], assistant_response: str, provider_payload: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    input_tokens_approx = _count_tokens_approx(messages)
+    output_tokens_approx = _count_text_tokens_approx(assistant_response)
+    usage = {
+        "input_tokens_approx": input_tokens_approx,
+        "output_tokens_approx": output_tokens_approx,
+        "total_tokens_approx": input_tokens_approx + output_tokens_approx,
+        "message_count": len(messages),
+        "assistant_characters": len(assistant_response or ""),
+    }
+    usage.update(_extract_provider_usage(provider_payload))
+    return usage
+
+
+def _save_chat_log(chat_id: str, payload: dict[str, Any], assistant_response: str, token_usage: Optional[dict[str, Any]] = None) -> None:
     doc = {
         "chat_id": chat_id,
         "timestamp": datetime.utcnow().isoformat(),
         "payload": payload,
         "response": assistant_response,
+        "token_usage": token_usage or {},
     }
     es.index(index=CHAT_LOG_INDEX, id=chat_id, body=doc, refresh=True)
 
@@ -263,11 +310,13 @@ def _generate_completion(chat_id: Optional[str], user_prompt: str) -> dict[str, 
     assistant_response = remove_deepthink(body.get("message", {}).get("content", ""))
 
     payload["messages"].append({"role": "assistant", "content": assistant_response})
-    _save_chat_log(resolved_chat_id, payload, assistant_response)
+    token_usage = _build_token_usage(messages, assistant_response, body)
+    _save_chat_log(resolved_chat_id, payload, assistant_response, token_usage)
 
     return {
         "chat_id": resolved_chat_id,
         "answer": assistant_response,
+        "token_usage": token_usage,
     }
 
 
@@ -293,6 +342,7 @@ def _generate_completion_stream(chat_id: Optional[str], user_prompt: str):
 
     def _event_generator():
         assistant_response = ""
+        final_event: dict[str, Any] = {}
         try:
             response = requests.post(
                 LLM_API,
@@ -313,6 +363,8 @@ def _generate_completion_stream(chat_id: Optional[str], user_prompt: str):
                     data = json.loads(line.decode("utf-8"))
                 except json.JSONDecodeError:
                     continue
+                if data.get("done") is True:
+                    final_event = data
                 chunk = data.get("message", {}).get("content")
                 if not chunk:
                     continue
@@ -322,9 +374,10 @@ def _generate_completion_stream(chat_id: Optional[str], user_prompt: str):
             # cleaned = remove_deepthink(assistant_response)
             cleaned = assistant_response.strip()
             payload["messages"].append({"role": "assistant", "content": cleaned})
-            _save_chat_log(resolved_chat_id, payload, cleaned)
+            token_usage = _build_token_usage(messages, cleaned, final_event)
+            _save_chat_log(resolved_chat_id, payload, cleaned, token_usage)
 
-            yield f"data: {json.dumps({'complete': True, 'chat_id': resolved_chat_id})}\n\n"
+            yield f"data: {json.dumps({'complete': True, 'chat_id': resolved_chat_id, 'token_usage': token_usage})}\n\n"
         except Exception as exc:  # noqa: BLE001
             yield f"data: {json.dumps({'error': str(exc), 'complete': True})}\n\n"
 
@@ -589,9 +642,16 @@ def summarize_multiple(req: SummarizeRequest):
 
 @app.get("/api/chatbot/chats/{chat_id}")
 def get_chat(chat_id: str) -> dict[str, Any]:
+    token_usage = {}
+    try:
+        response = es.get(index=CHAT_LOG_INDEX, id=chat_id)
+        token_usage = response.get("_source", {}).get("token_usage", {})
+    except NotFoundError:
+        token_usage = {}
     return {
         "chat_id": chat_id,
         "messages": _get_chatlog_messages(chat_id),
+        "token_usage": token_usage,
     }
 
 

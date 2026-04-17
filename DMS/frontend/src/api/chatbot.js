@@ -54,6 +54,7 @@ const streamSseTextResponse = async ({ path, body, onChunk }) => {
   const decoder = new TextDecoder()
   let buffer = ''
   let result = ''
+  let meta = {}
 
   const handleSseData = (line) => {
     if (!line.startsWith('data:')) return
@@ -63,6 +64,12 @@ const streamSseTextResponse = async ({ path, body, onChunk }) => {
       const parsed = JSON.parse(payload)
       if (parsed?.error) {
         throw new Error(parsed.error)
+      }
+      if (parsed?.chat_id) {
+        meta = { ...meta, chat_id: parsed.chat_id }
+      }
+      if (parsed?.token_usage) {
+        meta = { ...meta, token_usage: parsed.token_usage }
       }
       const chunk = parsed?.chunk ?? (!parsed?.complete ? parsed?.assistant_response : '') ?? ''
       if (chunk) {
@@ -103,7 +110,7 @@ const streamSseTextResponse = async ({ path, body, onChunk }) => {
       handleSseData(line)
     }
   }
-  return result
+  return { text: result, meta }
 }
 
 export const searchChatDocuments = async ({ prompt, startDate, endDate, page = 1, perPage = 20, limit, searchMode = 'hybrid' } = {}) => {
@@ -147,7 +154,7 @@ export const searchChatDocuments = async ({ prompt, startDate, endDate, page = 1
 }
 
 export const summarizeDocumentWithChatbot = async ({ chatId, pressReleases }, onChunk) => {
-  const text = await streamSseTextResponse({
+  const { text, meta } = await streamSseTextResponse({
     path: '/api/chatbot/summarize-multiple',
     body: {
       chat_id: chatId,
@@ -156,11 +163,11 @@ export const summarizeDocumentWithChatbot = async ({ chatId, pressReleases }, on
     },
     onChunk,
   })
-  return { summary: text, chat_id: chatId }
+  return { summary: text, chat_id: meta?.chat_id ?? chatId ?? null, token_usage: meta?.token_usage ?? null }
 }
 
 export const askDocumentQuestion = async ({ question, chatId, pressReleases }, onChunk) => {
-  const text = await streamSseTextResponse({
+  const { text, meta } = await streamSseTextResponse({
     path: '/api/chatbot/chat',
     body: {
       question,
@@ -170,7 +177,7 @@ export const askDocumentQuestion = async ({ question, chatId, pressReleases }, o
     },
     onChunk,
   })
-  return { answer: text, chat_id: chatId }
+  return { answer: text, chat_id: meta?.chat_id ?? chatId ?? null, token_usage: meta?.token_usage ?? null }
 }
 
 export const startEmbeddingJob = async (payload) => {
