@@ -104,6 +104,12 @@ class SearchRequest(BaseModel):
     page: int = 1
     per_page: int = 20
     search_mode: str = "hybrid"
+    owners: list[str] = Field(default_factory=list)
+    categories: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    folder_names: list[str] = Field(default_factory=list)
+    folder_paths: list[str] = Field(default_factory=list)
+    metadata_filters: dict[str, str] = Field(default_factory=dict)
 
 
 class ChatRequest(BaseModel):
@@ -150,6 +156,77 @@ def convert_to_es_datetime_end(date_str: str) -> Optional[str]:
         return date_obj.strftime("%Y-%m-%dT23:59:59.999999")
     except ValueError:
         return None
+
+
+def _normalize_string_list(values: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        cleaned = " ".join(str(value).split()).strip()
+        if not cleaned:
+            continue
+        key = cleaned.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(cleaned)
+    return normalized
+
+
+def _normalize_metadata_filters(values: dict[str, str]) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    for raw_key, raw_value in values.items():
+        key = " ".join(str(raw_key).split()).strip()
+        value = " ".join(str(raw_value).split()).strip()
+        if key and value:
+            normalized[key] = value
+    return normalized
+
+
+def _build_filter_clauses(req: SearchRequest, date_filter: dict[str, str]) -> list[dict[str, Any]]:
+    filters: list[dict[str, Any]] = []
+    if date_filter:
+        filters.append({"range": {"created_at": date_filter}})
+
+    owners = _normalize_string_list(req.owners)
+    if owners:
+        filters.append({"terms": {"owner": owners}})
+
+    categories = _normalize_string_list(req.categories)
+    if categories:
+        filters.append({"terms": {"category": categories}})
+
+    tags = _normalize_string_list(req.tags)
+    if tags:
+        filters.append({"terms": {"tags": tags}})
+
+    folder_names = _normalize_string_list(req.folder_names)
+    if folder_names:
+        filters.append({"terms": {"folder_name": folder_names}})
+
+    folder_paths = _normalize_string_list(req.folder_paths)
+    if folder_paths:
+        filters.append({"terms": {"folder_path.keyword": folder_paths}})
+
+    metadata_filters = _normalize_metadata_filters(req.metadata_filters)
+    for key, value in metadata_filters.items():
+        filters.append(
+            {
+                "nested": {
+                    "path": "metadata_entries",
+                    "query": {
+                        "bool": {
+                            "must": [
+                                {"term": {"metadata_entries.key": key}},
+                                {"term": {"metadata_entries.value.keyword": value}},
+                            ]
+                        }
+                    },
+                }
+            }
+        )
+
+    return filters
 
 
 def format_for_display(date_str: str) -> str:
@@ -415,67 +492,72 @@ def _build_search_body(req: SearchRequest) -> tuple[dict[str, Any], dict[str, st
             "fields": {
                 "ocr_content": {},
                 "title": {},
+                "description": {},
+                "metadata_text": {},
+                "folder_path": {},
             }
         },
     }
+    filter_clauses = _build_filter_clauses(req, date_filter)
+    text_fields = ["ocr_content", "title^2", "description", "metadata_text", "folder_name", "folder_path"]
 
     if query:
         # If text search only mode, skip embeddings entirely
         if search_mode == "text":
-            if date_filter:
+            if filter_clauses:
                 body["query"] = {
                     "bool": {
-                        "must": [{"multi_match": {"query": query, "fields": ["ocr_content", "title"]}}],
-                        "filter": [{"range": {"created_at": date_filter}}],
+                        "must": [{"multi_match": {"query": query, "fields": text_fields}}],
+                        "filter": filter_clauses,
                     }
                 }
             else:
-                body["query"] = {"multi_match": {"query": query, "fields": ["ocr_content", "title"]}}
+                body["query"] = {"multi_match": {"query": query, "fields": text_fields}}
             return body, date_filter
 
         # Hybrid search mode: try embeddings, fallback to text if unavailable
         embedder = _get_embedding_model()
         if embedder is False:
-            if date_filter:
+            if filter_clauses:
                 body["query"] = {
                     "bool": {
-                        "must": [{"multi_match": {"query": query, "fields": ["ocr_content", "title"]}}],
-                        "filter": [{"range": {"created_at": date_filter}}],
+                        "must": [{"multi_match": {"query": query, "fields": text_fields}}],
+                        "filter": filter_clauses,
                     }
                 }
             else:
-                body["query"] = {"multi_match": {"query": query, "fields": ["ocr_content", "title"]}}
+                body["query"] = {"multi_match": {"query": query, "fields": text_fields}}
             return body, date_filter
 
         query_embedding = embedder.encode(f"query: {query}", normalize_embeddings=True).tolist()
         hybrid_queries = []
 
-        text_query: dict[str, Any] = {"multi_match": {"query": query, "fields": ["ocr_content", "title"]}}
-        if date_filter:
+        text_query: dict[str, Any] = {"multi_match": {"query": query, "fields": text_fields}}
+        if filter_clauses:
             text_query = {
                 "bool": {
-                    "must": [{"multi_match": {"query": query, "fields": ["ocr_content", "title"]}}],
-                    "filter": [{"range": {"created_at": date_filter}}],
+                    "must": [{"multi_match": {"query": query, "fields": text_fields}}],
+                    "filter": filter_clauses,
                 }
             }
         hybrid_queries.append(text_query)
 
         title_knn = {"knn": {TITLE_VECTOR_FIELD: {"vector": query_embedding, "k": 50}}}
-        if date_filter:
-            title_knn["knn"][TITLE_VECTOR_FIELD]["filter"] = {"range": {"created_at": date_filter}}
+        if filter_clauses:
+            title_knn["knn"][TITLE_VECTOR_FIELD]["filter"] = {"bool": {"filter": filter_clauses}}
         hybrid_queries.append(title_knn)
 
         content_knn = {"knn": {CONTENT_VECTOR_FIELD: {"vector": query_embedding, "k": 50}}}
-        if date_filter:
-            content_knn["knn"][CONTENT_VECTOR_FIELD]["filter"] = {"range": {"created_at": date_filter}}
+        if filter_clauses:
+            content_knn["knn"][CONTENT_VECTOR_FIELD]["filter"] = {"bool": {"filter": filter_clauses}}
         hybrid_queries.append(content_knn)
 
         body["query"] = {"hybrid": {"queries": hybrid_queries}}
         body["search_pipeline"] = "rrf-pipeline"
         return body, date_filter
 
-    if date_filter:
-        body["query"] = {"range": {"created_at": date_filter}}
+    if filter_clauses:
+        body["query"] = {"bool": {"filter": filter_clauses}}
     else:
         body["query"] = {"match_all": {}}
 
@@ -530,6 +612,12 @@ def search(req: SearchRequest) -> dict[str, Any]:
                     q=req.q,
                     start_date=req.start_date,
                     end_date=req.end_date,
+                    owners=req.owners,
+                    categories=req.categories,
+                    tags=req.tags,
+                    folder_names=req.folder_names,
+                    folder_paths=req.folder_paths,
+                    metadata_filters=req.metadata_filters,
                     page=req.page,
                     per_page=req.per_page,
                     search_mode="text",

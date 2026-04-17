@@ -113,7 +113,21 @@ const streamSseTextResponse = async ({ path, body, onChunk }) => {
   return { text: result, meta }
 }
 
-export const searchChatDocuments = async ({ prompt, startDate, endDate, page = 1, perPage = 20, limit, searchMode = 'hybrid' } = {}) => {
+export const searchChatDocuments = async ({
+  prompt,
+  startDate,
+  endDate,
+  owners,
+  categories,
+  tags,
+  folderNames,
+  folderPaths,
+  metadataFilters,
+  page = 1,
+  perPage = 20,
+  limit,
+  searchMode = 'hybrid',
+} = {}) => {
   const resolvedPerPage = Math.max(1, Math.min(limit ?? perPage ?? 20, 50))
   const response = await fetch(resolveChatbotUrl('/api/chatbot/search'), {
     method: 'POST',
@@ -122,6 +136,12 @@ export const searchChatDocuments = async ({ prompt, startDate, endDate, page = 1
       q: prompt ?? '',
       start_date: startDate ?? '',
       end_date: endDate ?? '',
+      owners: Array.isArray(owners) ? owners : [],
+      categories: Array.isArray(categories) ? categories : [],
+      tags: Array.isArray(tags) ? tags : [],
+      folder_names: Array.isArray(folderNames) ? folderNames : [],
+      folder_paths: Array.isArray(folderPaths) ? folderPaths : [],
+      metadata_filters: metadataFilters && typeof metadataFilters === 'object' ? metadataFilters : {},
       page: Math.max(1, Number(page) || 1),
       per_page: resolvedPerPage,
       search_mode: searchMode ?? 'hybrid',
@@ -136,6 +156,11 @@ export const searchChatDocuments = async ({ prompt, startDate, endDate, page = 1
       title: source.title ?? source.document_title ?? source.name ?? 'Untitled',
       owner: source.owner ?? source.author ?? source.publisher ?? '',
       category: source.category ?? source.topic ?? '',
+      description: source.description ?? '',
+      tags: Array.isArray(source.tags) ? source.tags : [],
+      folderName: source.folder_name ?? '',
+      folderPath: source.folder_path ?? '',
+      metadata: source.document_metadata && typeof source.document_metadata === 'object' ? source.document_metadata : {},
       snippet: source.ocr_content ?? source.description ?? source.press_release ?? source.content ?? '',
       raw: item,
     }

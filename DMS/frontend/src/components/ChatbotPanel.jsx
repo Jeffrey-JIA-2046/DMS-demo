@@ -1,10 +1,28 @@
-import { useContext, useEffect, useMemo, useState } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { AnnounceContext } from '../contexts/AnnounceContext'
 import {
   askDocumentQuestion,
   searchChatDocuments,
   summarizeDocumentWithChatbot,
 } from '../api/chatbot'
+
+const FILTER_TYPE_OPTIONS = [
+  { value: 'owner', label: 'Owner' },
+  { value: 'category', label: 'Category' },
+  { value: 'tag', label: 'Tag' },
+  { value: 'folder_path', label: 'Folder Path' },
+  { value: 'metadata', label: 'Metadata' },
+]
+
+function createFilterCondition(type = 'owner') {
+  return {
+    id: `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    type,
+    value: '',
+    metadataKey: '',
+    metadataValue: '',
+  }
+}
 
 /**
  * Converts a plain markdown-ish string to safe HTML for chat rendering.
@@ -32,8 +50,25 @@ function formatMessage(text) {
   return msg
 }
 
-export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open: openProp, onOpenChange }) {
+function collectFolderPathOptions(nodes = [], trail = []) {
+  const options = []
+  for (const node of nodes) {
+    const nextTrail = [...trail, node.name].filter(Boolean)
+    if (node.id && nextTrail.length) {
+      const path = nextTrail.join(' / ')
+      options.push({ value: path, label: path })
+    }
+    if (node.children?.length) {
+      options.push(...collectFolderPathOptions(node.children, nextTrail))
+    }
+  }
+  return options
+}
+
+export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open: openProp, onOpenChange, folders = [] }) {
   const { toast } = useContext(AnnounceContext)
+  const resizeStateRef = useRef(null)
+  const sectionResizeStateRef = useRef(null)
   const initialMessages = useMemo(() => ([
     {
       role: 'ai',
@@ -65,6 +100,10 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
   const [searchMode, setSearchMode] = useState('hybrid')
+  const [filterConditions, setFilterConditions] = useState([createFilterCondition()])
+  const [panelSize, setPanelSize] = useState({ width: 1180, height: 820 })
+  const [panelPosition, setPanelPosition] = useState({ left: null, top: null })
+  const [sectionWidths, setSectionWidths] = useState({ filters: 320, results: 430 })
   const [searchResults, setSearchResults] = useState([])
   const [totalResults, setTotalResults] = useState(0)
   const [currentPage, setCurrentPage] = useState(1)
@@ -93,6 +132,52 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
       setActiveDocumentId(selectedDocument.id)
     }
   }, [selectedDocument])
+
+  useEffect(() => {
+    if (!open || typeof window === 'undefined') {
+      return
+    }
+
+    const nextLeft = Math.max(12, window.innerWidth - panelSize.width - 20)
+    const nextTop = Math.max(12, window.innerHeight - panelSize.height - 80)
+
+    setPanelPosition((prev) => ({
+      left: prev.left == null ? nextLeft : Math.min(Math.max(prev.left, 12), Math.max(12, window.innerWidth - panelSize.width - 12)),
+      top: prev.top == null ? nextTop : Math.min(Math.max(prev.top, 12), Math.max(12, window.innerHeight - panelSize.height - 12)),
+    }))
+  }, [open, panelSize.height, panelSize.width])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    const handleWindowResize = () => {
+      setPanelSize((prev) => ({
+        width: Math.min(prev.width, window.innerWidth - 24),
+        height: Math.min(prev.height, window.innerHeight - 24),
+      }))
+      setPanelPosition((prev) => ({
+        left: prev.left == null ? prev.left : Math.min(Math.max(prev.left, 12), Math.max(12, window.innerWidth - panelSize.width - 12)),
+        top: prev.top == null ? prev.top : Math.min(Math.max(prev.top, 12), Math.max(12, window.innerHeight - panelSize.height - 12)),
+      }))
+    }
+
+    window.addEventListener('resize', handleWindowResize)
+    return () => window.removeEventListener('resize', handleWindowResize)
+  }, [panelSize.height, panelSize.width])
+
+  const folderPathOptions = useMemo(() => collectFolderPathOptions(folders), [folders])
+  const isThreeColumnResizable = panelSize.width > 1100
+
+  const templateStyle = useMemo(() => {
+    if (!isThreeColumnResizable) {
+      return undefined
+    }
+    return {
+      gridTemplateColumns: `${sectionWidths.filters}px 10px ${sectionWidths.results}px 10px minmax(320px, 1fr)`,
+    }
+  }, [isThreeColumnResizable, sectionWidths.filters, sectionWidths.results])
 
   const allSelectableDocuments = useMemo(() => {
     const mappedSelectedDocument = selectedDocument?.id
@@ -197,6 +282,142 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
     setSelectedDocumentIds([])
   }
 
+  const addFilterCondition = () => {
+    setFilterConditions((prev) => [...prev, createFilterCondition()])
+  }
+
+  const removeFilterCondition = (id) => {
+    setFilterConditions((prev) => {
+      if (prev.length <= 1) {
+        return [createFilterCondition()]
+      }
+      return prev.filter((condition) => condition.id !== id)
+    })
+  }
+
+  const updateFilterCondition = (id, changes) => {
+    setFilterConditions((prev) => prev.map((condition) => {
+      if (condition.id !== id) {
+        return condition
+      }
+      const next = { ...condition, ...changes }
+      if (changes.type && changes.type !== condition.type) {
+        next.value = ''
+        next.metadataKey = ''
+        next.metadataValue = ''
+      }
+      return next
+    }))
+  }
+
+  const clearFilterConditions = () => {
+    setFilterConditions([createFilterCondition()])
+  }
+
+  const handleResizeStart = (mode, event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    resizeStateRef.current = {
+      mode,
+      startX: event.clientX,
+      startY: event.clientY,
+      startLeft: panelPosition.left ?? Math.max(12, window.innerWidth - panelSize.width - 20),
+      startWidth: panelSize.width,
+      startHeight: panelSize.height,
+      minWidth: 980,
+      minHeight: 620,
+    }
+
+    const handlePointerMove = (moveEvent) => {
+      const state = resizeStateRef.current
+      if (!state) {
+        return
+      }
+
+      const anchorRight = Math.min(state.startLeft + state.startWidth, window.innerWidth - 12)
+      const nextWidth = state.mode === 'height'
+        ? state.startWidth
+        : Math.min(
+          Math.max(state.startWidth + (state.startX - moveEvent.clientX), state.minWidth),
+          Math.max(state.minWidth, anchorRight - 12),
+        )
+      const nextHeight = state.mode === 'width-left'
+        ? state.startHeight
+        : Math.min(
+          Math.max(state.startHeight + (moveEvent.clientY - state.startY), state.minHeight),
+          window.innerHeight - 24,
+        )
+
+      if (state.mode === 'width-left') {
+        setPanelPosition((prev) => ({
+          ...prev,
+          left: anchorRight - nextWidth,
+        }))
+      }
+
+      setPanelSize({ width: nextWidth, height: nextHeight })
+    }
+
+    const handlePointerUp = () => {
+      resizeStateRef.current = null
+      window.removeEventListener('mousemove', handlePointerMove)
+      window.removeEventListener('mouseup', handlePointerUp)
+    }
+
+    window.addEventListener('mousemove', handlePointerMove)
+    window.addEventListener('mouseup', handlePointerUp)
+  }
+
+  const handleSectionResizeStart = (section, event) => {
+    if (!isThreeColumnResizable) {
+      return
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+
+    sectionResizeStateRef.current = {
+      section,
+      startX: event.clientX,
+      startFiltersWidth: sectionWidths.filters,
+      startResultsWidth: sectionWidths.results,
+    }
+
+    const handlePointerMove = (moveEvent) => {
+      const state = sectionResizeStateRef.current
+      if (!state) {
+        return
+      }
+
+      const deltaX = moveEvent.clientX - state.startX
+      const panelInnerWidth = Math.max(panelSize.width - 72, 960)
+      const splitterAllowance = 20
+      const chatMinWidth = 320
+      const filtersMinWidth = 260
+      const resultsMinWidth = 300
+
+      if (state.section === 'filters') {
+        const maxFiltersWidth = Math.max(filtersMinWidth, panelInnerWidth - splitterAllowance - state.startResultsWidth - chatMinWidth)
+        const nextFiltersWidth = Math.min(Math.max(state.startFiltersWidth + deltaX, filtersMinWidth), maxFiltersWidth)
+        setSectionWidths((prev) => ({ ...prev, filters: nextFiltersWidth }))
+        return
+      }
+
+      const maxResultsWidth = Math.max(resultsMinWidth, panelInnerWidth - splitterAllowance - sectionWidths.filters - chatMinWidth)
+      const nextResultsWidth = Math.min(Math.max(state.startResultsWidth + deltaX, resultsMinWidth), maxResultsWidth)
+      setSectionWidths((prev) => ({ ...prev, results: nextResultsWidth }))
+    }
+
+    const handlePointerUp = () => {
+      sectionResizeStateRef.current = null
+      window.removeEventListener('mousemove', handlePointerMove)
+      window.removeEventListener('mouseup', handlePointerUp)
+    }
+
+    window.addEventListener('mousemove', handlePointerMove)
+    window.addEventListener('mouseup', handlePointerUp)
+  }
+
   const resetChatSession = () => {
     setChatId(null)
     setMessages(initialMessages)
@@ -208,10 +429,39 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
     setSearchLoading(true)
     setError('')
     try {
+      const owners = []
+      const categories = []
+      const tags = []
+      const folderPaths = []
+      const metadataFilters = {}
+
+      filterConditions.forEach((condition) => {
+        if (condition.type === 'owner' && condition.value.trim()) {
+          owners.push(condition.value.trim())
+        }
+        if (condition.type === 'category' && condition.value.trim()) {
+          categories.push(condition.value.trim())
+        }
+        if (condition.type === 'tag' && condition.value.trim()) {
+          tags.push(condition.value.trim())
+        }
+        if (condition.type === 'folder_path' && condition.value.trim()) {
+          folderPaths.push(condition.value.trim())
+        }
+        if (condition.type === 'metadata' && condition.metadataKey.trim() && condition.metadataValue.trim()) {
+          metadataFilters[condition.metadataKey.trim()] = condition.metadataValue.trim()
+        }
+      })
+
       const data = await searchChatDocuments({
         prompt: prompt.trim(),
         startDate,
         endDate,
+        owners,
+        categories,
+        tags,
+        folderPaths,
+        metadataFilters,
         page,
         perPage,
         searchMode,
@@ -375,11 +625,11 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
 
   const renderPanel = () => (
     <section className="chatbot-panel chatbot-panel--template">
-      <div className="chatbot-template">
-        <div className="chatbot-template__search-section">
+      <div className="chatbot-template" style={templateStyle}>
+        <div className="chatbot-template__filters-section">
           <div className="chatbot-template__header">
-            <h3>Search Documents</h3>
-            <p>Search through archived documents with filters.</p>
+            <h3>Filters</h3>
+            <p>Refine the document search before running it.</p>
           </div>
 
           <form className="chatbot-template__search-box" onSubmit={handleSearch}>
@@ -393,7 +643,7 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
             <button type="submit" className="primary" disabled={searchLoading}>Search</button>
           </form>
 
-          <div className="chatbot-template__filters">
+          <div className="chatbot-template__filters chatbot-template__filters--pair">
             <label>
               <span>From Date</span>
               <input
@@ -410,6 +660,88 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
                 onChange={(event) => setEndDate(event.target.value)}
               />
             </label>
+          </div>
+
+          <div className="chatbot-template__condition-builder">
+            <div className="chatbot-template__condition-header">
+              <span>Conditions</span>
+              <div className="chatbot-template__condition-actions">
+                <button type="button" className="ghost" onClick={addFilterCondition}>Add Condition</button>
+                <button type="button" className="ghost" onClick={clearFilterConditions}>Clear</button>
+              </div>
+            </div>
+
+            <div className="chatbot-template__condition-list">
+              {filterConditions.map((condition) => (
+                <div key={condition.id} className="chatbot-template__condition-row">
+                  <label>
+                    <span>Type</span>
+                    <select
+                      value={condition.type}
+                      onChange={(event) => updateFilterCondition(condition.id, { type: event.target.value })}
+                    >
+                      {FILTER_TYPE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+
+                  {condition.type === 'metadata' ? (
+                    <>
+                      <label>
+                        <span>Metadata Key</span>
+                        <input
+                          type="text"
+                          placeholder="department"
+                          value={condition.metadataKey}
+                          onChange={(event) => updateFilterCondition(condition.id, { metadataKey: event.target.value })}
+                        />
+                      </label>
+                      <label>
+                        <span>Metadata Value</span>
+                        <input
+                          type="text"
+                          placeholder="Finance"
+                          value={condition.metadataValue}
+                          onChange={(event) => updateFilterCondition(condition.id, { metadataValue: event.target.value })}
+                        />
+                      </label>
+                    </>
+                  ) : condition.type === 'folder_path' ? (
+                    <label className="chatbot-template__condition-field chatbot-template__condition-field--wide">
+                      <span>Folder Path</span>
+                      <select
+                        value={condition.value}
+                        onChange={(event) => updateFilterCondition(condition.id, { value: event.target.value })}
+                      >
+                        <option value="">Select folder path</option>
+                        {folderPathOptions.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : (
+                    <label className="chatbot-template__condition-field chatbot-template__condition-field--wide">
+                      <span>Value</span>
+                      <input
+                        type="text"
+                        placeholder={`Enter ${condition.type.replace('_', ' ')}`}
+                        value={condition.value}
+                        onChange={(event) => updateFilterCondition(condition.id, { value: event.target.value })}
+                      />
+                    </label>
+                  )}
+
+                  <button
+                    type="button"
+                    className="ghost chatbot-template__condition-remove"
+                    onClick={() => removeFilterCondition(condition.id)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
 
           <div className="chatbot-template__search-mode">
@@ -434,10 +766,23 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
               <span>Natural Language Search</span>
             </label>
           </div>
+        </div>
 
+        {isThreeColumnResizable && (
+          <div
+            className="chatbot-template__section-resizer"
+            role="presentation"
+            onMouseDown={(event) => handleSectionResizeStart('filters', event)}
+          />
+        )}
+
+        <div className="chatbot-template__results-section">
           <div className="chatbot-template__results-card">
             <div className="chatbot-template__results-head">
-              <h4>Search Results</h4>
+              <div>
+                <h4>Search Results</h4>
+                <p>Review matches and focus a document for chat.</p>
+              </div>
               <span>{totalResults} {totalResults === 1 ? 'release' : 'releases'} found</span>
             </div>
 
@@ -476,6 +821,7 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
                       <p className="chatbot-panel__result-title">{result.title}</p>
                       <p className="chatbot-panel__result-meta">
                         {result.owner ? `Owner: ${result.owner}` : 'Unknown owner'} · {result.category || 'Uncategorized'}
+                        {result.folderPath ? ` · ${result.folderPath}` : ''}
                         {Number.isFinite(result.relevanceScore) ? ` · Score: ${result.relevanceScore.toFixed(3)}` : ''}
                       </p>
                       <p className="chatbot-panel__result-snippet">{result.snippet || 'No preview content'}</p>
@@ -534,6 +880,14 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
             </div>
           </div>
         </div>
+
+        {isThreeColumnResizable && (
+          <div
+            className="chatbot-template__section-resizer"
+            role="presentation"
+            onMouseDown={(event) => handleSectionResizeStart('results', event)}
+          />
+        )}
 
         <div className="chatbot-template__chat-section">
           <div className="chatbot-template__chat-head">
@@ -613,6 +967,12 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
             role="dialog"
             aria-label="DeepSeek assistant"
             onMouseDown={(e) => e.stopPropagation()}
+            style={{
+              width: `${panelSize.width}px`,
+              height: `${panelSize.height}px`,
+              left: panelPosition.left == null ? undefined : `${panelPosition.left}px`,
+              top: panelPosition.top == null ? undefined : `${panelPosition.top}px`,
+            }}
           >
             <div className="chatbot-floating-panel__toolbar">
               <span className="chatbot-floating-panel__title">DeepSeek assistant</span>
@@ -628,6 +988,16 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
                 </svg>
               </button>
             </div>
+            <div
+              className="chatbot-floating-panel__resize-handle chatbot-floating-panel__resize-handle--left"
+              role="presentation"
+              onMouseDown={(event) => handleResizeStart('width-left', event)}
+            />
+            <div
+              className="chatbot-floating-panel__resize-handle chatbot-floating-panel__resize-handle--bottom"
+              role="presentation"
+              onMouseDown={(event) => handleResizeStart('height', event)}
+            />
             {renderPanel()}
           </div>
         </div>

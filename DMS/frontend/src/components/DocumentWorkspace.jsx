@@ -1364,6 +1364,9 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
 
   const handleRunEmbedding = async () => {
     const ocrText = activeOcrPreviewContent
+    const embeddingDocument = selectedDocument ?? selectedListDocument ?? null
+    const embeddingFolder = embeddingDocument?.folder ?? null
+    const folderBreadcrumbs = Array.isArray(embeddingFolder?.breadcrumbs) ? embeddingFolder.breadcrumbs.filter(Boolean) : []
 
     if (!selectedId) {
       toast && toast('Select a document first.', { type: 'info' })
@@ -1384,15 +1387,19 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     try {
       const response = await startEmbeddingJob({
         document_id: String(selectedId),
-        title: selectedDocument?.title ?? selectedListDocument?.title ?? '',
+        title: embeddingDocument?.title ?? '',
+        description: embeddingDocument?.description ?? '',
         ocr_text: ocrText,
-        category: selectedDocument?.category ?? selectedListDocument?.category ?? null,
-        owner: selectedDocument?.owner ?? selectedListDocument?.owner ?? null,
+        category: embeddingDocument?.category ?? null,
+        owner: embeddingDocument?.owner ?? null,
+        tags: Array.isArray(embeddingDocument?.tags) ? embeddingDocument.tags : [],
+        document_metadata: embeddingDocument?.metadata ?? {},
+        folder_name: embeddingFolder?.name ?? null,
+        folder_path: folderBreadcrumbs.length ? folderBreadcrumbs.join(' / ') : null,
+        folder_breadcrumbs: folderBreadcrumbs,
         created_at:
-          selectedDocument?.createdAt
-          ?? selectedDocument?.created_at
-          ?? selectedListDocument?.createdAt
-          ?? selectedListDocument?.created_at
+          embeddingDocument?.createdAt
+          ?? embeddingDocument?.created_at
           ?? null,
         force_reindex: true,
       })
@@ -2598,6 +2605,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
           onDocumentSelect={setSelectedId}
           open={chatbotOpen}
           onOpenChange={setChatbotOpen}
+          folders={folderTree}
         />
       </div>
       {expandedDocumentId && (

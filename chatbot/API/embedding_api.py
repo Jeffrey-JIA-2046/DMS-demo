@@ -87,9 +87,15 @@ _jobs_lock = threading.Lock()
 class EmbeddingJobRequest(BaseModel):
     document_id: str = Field(min_length=1)
     title: str = ""
+    description: Optional[str] = None
     ocr_text: str = Field(min_length=1)
     category: Optional[str] = None
     owner: Optional[str] = None
+    tags: list[str] = Field(default_factory=list)
+    document_metadata: dict[str, str] = Field(default_factory=dict)
+    folder_name: Optional[str] = None
+    folder_path: Optional[str] = None
+    folder_breadcrumbs: list[str] = Field(default_factory=list)
     created_at: Optional[str] = None
     force_reindex: bool = False
 
@@ -150,6 +156,45 @@ def clean_text(text: Any) -> str:
     if not isinstance(text, str):
         return ""
     return " ".join(text.split()).strip()
+
+
+def clean_string_list(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = clean_text(value)
+        if not normalized:
+            continue
+        key = normalized.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(normalized)
+    return cleaned
+
+
+def clean_metadata_map(values: Any) -> dict[str, str]:
+    if not isinstance(values, dict):
+        return {}
+    cleaned: dict[str, str] = {}
+    for raw_key, raw_value in values.items():
+        key = clean_text(raw_key)
+        value = clean_text(raw_value)
+        if key and value:
+            cleaned[key] = value
+    return cleaned
+
+
+def build_metadata_entries(values: dict[str, str]) -> list[dict[str, str]]:
+    return [{"key": key, "value": value} for key, value in values.items()]
+
+
+def build_metadata_text(values: dict[str, str]) -> str:
+    if not values:
+        return ""
+    return " ".join(f"{key}: {value}" for key, value in values.items())
 
 
 def is_chinese_char(char: str) -> bool:
@@ -258,10 +303,39 @@ def _default_index_body() -> dict[str, Any]:
         "mappings": {
             "properties": {
                 "document_id": {"type": "keyword"},
-                "title": {"type": "text"},
+                "title": {
+                    "type": "text",
+                    "fields": {
+                        "keyword": {"type": "keyword", "ignore_above": 512},
+                    },
+                },
+                "description": {"type": "text"},
                 "ocr_content": {"type": "text"},
                 "category": {"type": "keyword"},
                 "owner": {"type": "keyword"},
+                "tags": {"type": "keyword"},
+                "folder_name": {"type": "keyword"},
+                "folder_path": {
+                    "type": "text",
+                    "fields": {
+                        "keyword": {"type": "keyword", "ignore_above": 1024},
+                    },
+                },
+                "folder_breadcrumbs": {"type": "keyword"},
+                "document_metadata": {"type": "object", "enabled": True},
+                "metadata_text": {"type": "text"},
+                "metadata_entries": {
+                    "type": "nested",
+                    "properties": {
+                        "key": {"type": "keyword"},
+                        "value": {
+                            "type": "text",
+                            "fields": {
+                                "keyword": {"type": "keyword", "ignore_above": 1024},
+                            },
+                        },
+                    },
+                },
                 "created_at": {"type": "date"},
                 "updated_at": {"type": "date"},
                 TITLE_VECTOR_FIELD: {
@@ -331,9 +405,18 @@ def _index_document(document_id: str, request: EmbeddingJobRequest) -> dict[str,
     ensure_search_index()
 
     title = clean_text(request.title)
+    description = clean_text(request.description)
     ocr_text = clean_text(request.ocr_text)
     if not ocr_text:
         raise ValueError("OCR text is empty after cleaning")
+
+    tags = clean_string_list(request.tags)
+    document_metadata = clean_metadata_map(request.document_metadata)
+    folder_name = clean_text(request.folder_name)
+    folder_path = clean_text(request.folder_path)
+    folder_breadcrumbs = clean_string_list(request.folder_breadcrumbs)
+    metadata_entries = build_metadata_entries(document_metadata)
+    metadata_text = build_metadata_text(document_metadata)
 
     chunks = chunk_text(ocr_text)
     if not chunks:
@@ -355,9 +438,17 @@ def _index_document(document_id: str, request: EmbeddingJobRequest) -> dict[str,
         **existing,
         "document_id": document_id,
         "title": title or existing.get("title") or document_id,
+        "description": description if description else existing.get("description"),
         "ocr_content": ocr_text,
         "category": request.category if request.category is not None else existing.get("category"),
         "owner": request.owner if request.owner is not None else existing.get("owner"),
+        "tags": tags if tags else existing.get("tags"),
+        "document_metadata": document_metadata if document_metadata else existing.get("document_metadata"),
+        "metadata_entries": metadata_entries if metadata_entries else existing.get("metadata_entries"),
+        "metadata_text": metadata_text if metadata_text else existing.get("metadata_text"),
+        "folder_name": folder_name if folder_name else existing.get("folder_name"),
+        "folder_path": folder_path if folder_path else existing.get("folder_path"),
+        "folder_breadcrumbs": folder_breadcrumbs if folder_breadcrumbs else existing.get("folder_breadcrumbs"),
         "created_at": request.created_at or existing.get("created_at") or now,
         "updated_at": now,
         CONTENT_VECTOR_FIELD: content_embedding,
