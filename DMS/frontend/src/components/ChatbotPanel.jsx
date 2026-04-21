@@ -1,6 +1,7 @@
 import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { AnnounceContext } from '../contexts/AnnounceContext'
 import {
+  askAgentQuestion,
   askDocumentQuestion,
   searchChatDocuments,
   summarizeDocumentWithChatbot,
@@ -72,7 +73,7 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
   const initialMessages = useMemo(() => ([
     {
       role: 'ai',
-      content: 'Hello! Select 1-3 documents to compare and summarize them.',
+      content: 'Hello! Ask a free-text question, or select 1-3 documents to compare and summarize them.',
     },
   ]), [])
   const [internalOpen, setInternalOpen] = useState(false)
@@ -113,6 +114,7 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [qaLoading, setQaLoading] = useState(false)
   const [chatId, setChatId] = useState(null)
+  const [lastIntent, setLastIntent] = useState(null)
   const [activeDocumentId, setActiveDocumentId] = useState(null)
   const [selectedDocumentIds, setSelectedDocumentIds] = useState([])
   const [messages, setMessages] = useState(initialMessages)
@@ -420,6 +422,7 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
 
   const resetChatSession = () => {
     setChatId(null)
+    setLastIntent(null)
     setMessages(initialMessages)
     setError('')
     toast && toast('Started a new chat session.', { type: 'info' })
@@ -514,6 +517,7 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
     appendMessage('ai', 'AI Assistant is thinking...', true)
 
     try {
+      setLastIntent('selected_document_summary')
       const data = await summarizeDocumentWithChatbot({
         chatId,
         pressReleases: selectedPressReleases,
@@ -543,10 +547,6 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
 
   const handleQuestion = async (event) => {
     event.preventDefault()
-    if (!selectedPressReleases.length) {
-      setError('Select 1-3 documents before asking a question')
-      return
-    }
     if (!question.trim()) {
       setError('Type a question before asking the assistant')
       return
@@ -560,11 +560,19 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
       setQuestion('')
       appendMessage('ai', 'AI Assistant is thinking...', true)
 
-      const data = await askDocumentQuestion({
-        question: trimmed,
-        chatId,
-        pressReleases: selectedPressReleases,
-      }, (chunk) => {
+      const askFn = selectedPressReleases.length ? askDocumentQuestion : askAgentQuestion
+      const requestPayload = selectedPressReleases.length
+        ? {
+            question: trimmed,
+            chatId,
+            pressReleases: selectedPressReleases,
+          }
+        : {
+            question: trimmed,
+            chatId,
+          }
+
+      const data = await askFn(requestPayload, (chunk) => {
         updateLastAiMessage((last) => ({
           content: `${last.loading ? '' : last.content}${chunk}`,
           loading: false,
@@ -572,6 +580,11 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
       })
       if (data?.chat_id) {
         setChatId(data.chat_id)
+      }
+      if (data?.intent) {
+        setLastIntent(data.intent)
+      } else if (selectedPressReleases.length) {
+        setLastIntent('selected_document_chat')
       }
       const completedAnswer = (data.answer || '').trim()
       updateLastAiMessage(() => ({
@@ -893,7 +906,7 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
           <div className="chatbot-template__chat-head">
             <div>
               <h4>AI Assistant</h4>
-              <p>Get summaries and insights about selected documents.</p>
+              <p>Ask free-text questions, find similar cases, count documents, or chat about selected documents.</p>
             </div>
             <button type="button" className="ghost" onClick={resetChatSession} disabled={qaLoading || summaryLoading}>
               New Session
@@ -927,7 +940,7 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
             <input
               id="chatbot-question"
               type="text"
-              placeholder="Ask about the selected document..."
+              placeholder="Ask anything: phrase search, similar case, case summary, or document count..."
               value={question}
               onChange={(event) => setQuestion(event.target.value)}
             />
@@ -939,6 +952,7 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
           <div className="chatbot-template__chat-actions">
             {activeDocument?.title && <span className="chatbot-template__active-doc">Focused: {activeDocument.title}</span>}
             {chatId && <span className="chatbot-template__active-doc">Session: {chatId}</span>}
+            {lastIntent && <span className="chatbot-template__active-doc">Intent: {lastIntent}</span>}
           </div>
 
           {error && <p className="feedback feedback--error">{error}</p>}

@@ -71,6 +71,9 @@ const streamSseTextResponse = async ({ path, body, onChunk }) => {
       if (parsed?.token_usage) {
         meta = { ...meta, token_usage: parsed.token_usage }
       }
+      if (parsed?.intent) {
+        meta = { ...meta, intent: parsed.intent }
+      }
       const chunk = parsed?.chunk ?? (!parsed?.complete ? parsed?.assistant_response : '') ?? ''
       if (chunk) {
         result += chunk
@@ -203,6 +206,24 @@ export const askDocumentQuestion = async ({ question, chatId, pressReleases }, o
     onChunk,
   })
   return { answer: text, chat_id: meta?.chat_id ?? chatId ?? null, token_usage: meta?.token_usage ?? null }
+}
+
+export const askAgentQuestion = async ({ question, chatId }, onChunk) => {
+  const { text, meta } = await streamSseTextResponse({
+    path: '/api/chatbot/agent-chat',
+    body: {
+      question,
+      chat_id: chatId,
+      stream: true,
+    },
+    onChunk,
+  })
+  return {
+    answer: text,
+    chat_id: meta?.chat_id ?? chatId ?? null,
+    intent: meta?.intent ?? null,
+    token_usage: meta?.token_usage ?? null,
+  }
 }
 
 export const startEmbeddingJob = async (payload) => {
