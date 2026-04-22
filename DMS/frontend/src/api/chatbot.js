@@ -74,6 +74,9 @@ const streamSseTextResponse = async ({ path, body, onChunk }) => {
       if (parsed?.intent) {
         meta = { ...meta, intent: parsed.intent }
       }
+      if (parsed?.sources) {
+        meta = { ...meta, sources: parsed.sources }
+      }
       const chunk = parsed?.chunk ?? (!parsed?.complete ? parsed?.assistant_response : '') ?? ''
       if (chunk) {
         result += chunk
@@ -222,6 +225,7 @@ export const askAgentQuestion = async ({ question, chatId }, onChunk) => {
     answer: text,
     chat_id: meta?.chat_id ?? chatId ?? null,
     intent: meta?.intent ?? null,
+    sources: meta?.sources ?? null,
     token_usage: meta?.token_usage ?? null,
   }
 }

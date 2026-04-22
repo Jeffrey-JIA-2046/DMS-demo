@@ -59,7 +59,7 @@ CLASSIFIER_TIMEOUT_SECONDS = int(os.getenv("CHATBOT_CLASSIFIER_TIMEOUT_SECONDS",
 
 MAX_CONTEXT_LENGTH = int(os.getenv("MAX_CONTEXT_LENGTH", "5000"))
 WARNING_THRESHOLD = int(os.getenv("WARNING_THRESHOLD", "4000"))
-VERBOSE_LOGS = os.getenv("CHATBOT_VERBOSE_LOGS", "true").lower() == "true"
+VERBOSE_LOGS = os.getenv("CHATBOT_VERBOSE_LOGS", "false").lower() == "true"
 
 _raw_origins = os.getenv("CHATBOT_CORS_ORIGINS", "*")
 CORS_ORIGINS = ["*"] if _raw_origins.strip() == "*" else [x.strip() for x in _raw_origins.split(",") if x.strip()]
@@ -256,10 +256,28 @@ class IntentType(str, Enum):
     SINGLE_DOC_SUMMARY = "single_doc_summary"
     MIXED_SEARCH_SUMMARY = "mixed_search_summary"
     GENERAL_RAG_QA = "general_rag_qa"
+    FREE_OPEN_CHAT = "free_open_chat"
+
+
+class SearchStrategy(str, Enum):
+    KEYWORD_SEARCH = "keyword_search"
+    HYBRID_SEARCH = "hybrid_search"
+    NO_SEARCH = "no_search"
+
+
+class TaskType(str, Enum):
+    LIST_DOCUMENTS = "list_documents"
+    ANSWER_QUESTION = "answer_question"
+    SUMMARIZE_RESULTS = "summarize_results"
+    COUNT_RESULTS = "count_results"
+    SINGLE_DOC_SUMMARY = "single_doc_summary"
 
 class IntentResult(BaseModel):
     intent: IntentType
+    search_strategy: SearchStrategy = SearchStrategy.HYBRID_SEARCH
+    task_type: TaskType = TaskType.ANSWER_QUESTION
     parameters: dict[str, Any] = Field(default_factory=dict)
+    search_result: dict[str, Any] | None = None
     confidence: float = 1.0
     classification_source: str = "llm"
 
@@ -268,11 +286,8 @@ KEYWORD_MATCH_MODES = {"exact_phrase", "all_terms", "any_terms"}
 
 
 CLASSIFIER_SYSTEM_PROMPT = (
-    "You are an intent planner for a document-management chatbot. "
-    "Classify the user's request into the best task type and extract routing parameters. "
-    "Prefer semantic retrieval for natural language questions. "
-    "Use keyword_search only when the user clearly requires literal or exact matching. "
-    "Use general_rag_qa for normal question answering that should retrieve relevant documents first."
+    "You are a planner for a document-management chatbot. "
+    "Follow the user's instructions exactly, return JSON only, and do not add explanations outside the schema."
 )
 
 
@@ -280,9 +295,11 @@ def _classification_debug_payload(question: str, result: IntentResult) -> dict[s
     return {
         "question": question,
         "intent": result.intent.value,
+        "search_strategy": result.search_strategy.value,
+        "task_type": result.task_type.value,
         "confidence": result.confidence,
         "classification_source": result.classification_source,
-        "parameters": result.parameters,
+        "search_template": _summarize_search_template_for_log(result.parameters),
     }
 
 
@@ -296,6 +313,12 @@ RAG_SYSTEM_PROMPT = (
     "Always answer using the retrieved document context. "
     "If the retrieved context is insufficient, explicitly say you cannot find enough evidence in the documents. "
     "When possible, mention the most relevant document titles or IDs that support the answer."
+)
+
+OPEN_CHAT_SYSTEM_PROMPT = (
+    "You are a helpful assistant for general open-ended questions. "
+    "Answer directly and clearly. "
+    "If the user is asking for document-grounded evidence, say that this reply is not using document retrieval."
 )
 
 
@@ -313,6 +336,36 @@ MONTH_NAME_TO_NUMBER = {
     "november": 11,
     "december": 12,
 }
+
+SEARCH_FILTER_KEYS = (
+    "start_date",
+    "end_date",
+    "owners",
+    "categories",
+    "tags",
+    "folder_names",
+    "folder_paths",
+    "metadata_filters",
+)
+
+
+def _summarize_search_template_for_log(parameters: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "query": parameters.get("query", ""),
+        "search_mode": parameters.get("search_mode"),
+        "match_mode": parameters.get("match_mode"),
+        "exact_phrase": parameters.get("exact_phrase"),
+        "must_terms": parameters.get("must_terms", []),
+        "should_terms": parameters.get("should_terms", []),
+        "start_date": parameters.get("start_date", ""),
+        "end_date": parameters.get("end_date", ""),
+        "owners": parameters.get("owners", []),
+        "categories": parameters.get("categories", []),
+        "tags": parameters.get("tags", []),
+        "folder_names": parameters.get("folder_names", []),
+        "folder_paths": parameters.get("folder_paths", []),
+        "metadata_filters": parameters.get("metadata_filters", {}),
+    }
 
 # ---------------------------------------------------------------------------
 # Specialist agents
@@ -449,11 +502,11 @@ class StatsAgent:
     async def execute(question: str, parameters: dict[str, Any] | None = None) -> dict:
         params = parameters or {}
         _log_verbose("StatsAgent.execute invoked", {"question": question, "parameters": params})
-        date_info = params.get("date_range") or extract_date_range_from_question(question)
+        date_info = params.get("date_range")
         if not date_info:
             return {"error": "Could not parse date range from question", "count": 0}
 
-        topic = params.get("topic") or extract_topic_from_question(question)
+        topic = params.get("topic")
         body = {
             "size": 0,
             "query": {
@@ -476,7 +529,7 @@ class StatsAgent:
                 {
                     "multi_match": {
                         "query": topic,
-                        "fields": ["folder_name^3", "title^2", "description", "metadata_text", "ocr_content"],
+                        "fields": ["folder_name", "title", "description", "metadata_text", "ocr_content"],
                     }
                 }
             )
@@ -514,10 +567,16 @@ class SingleDocSummaryAgent:
 
 class MixedSearchSummaryAgent:
     @staticmethod
-    async def execute(question: str, parameters: dict[str, Any] | None = None, top_k: int = 5) -> dict:
+    async def execute(
+        question: str,
+        parameters: dict[str, Any] | None = None,
+        search_strategy: SearchStrategy = SearchStrategy.HYBRID_SEARCH,
+        search_result: dict[str, Any] | None = None,
+        top_k: int = 5,
+    ) -> dict:
         _log_verbose("MixedSearchSummaryAgent.execute invoked", {"question": question, "parameters": parameters or {}, "top_k": top_k})
-        search_result = await SemanticSearchAgent.execute(question, parameters=parameters)
-        results = search_result.get("results", [])[:top_k]
+        resolved_search_result = search_result or await _execute_search_strategy(question, parameters, search_strategy)
+        results = resolved_search_result.get("results", [])[:top_k]
         if not results:
             return {"error": "No relevant documents found", "summary": ""}
         docs_text = []
@@ -542,12 +601,19 @@ class MixedSearchSummaryAgent:
 
 class RagAnswerAgent:
     @staticmethod
-    async def execute(question: str, chat_id: Optional[str], parameters: dict[str, Any] | None = None, top_k: int = 5) -> dict:
+    async def execute(
+        question: str,
+        chat_id: Optional[str],
+        parameters: dict[str, Any] | None = None,
+        search_strategy: SearchStrategy = SearchStrategy.HYBRID_SEARCH,
+        search_result: dict[str, Any] | None = None,
+        top_k: int = 5,
+    ) -> dict:
         # Step 4: retrieve the most relevant documents for grounded answering.
         params = parameters or {}
         _log_verbose("RagAnswerAgent.execute invoked", {"question": question, "chat_id": chat_id, "parameters": params, "top_k": top_k})
-        search_result = await SemanticSearchAgent.execute(question, parameters=params)
-        results = search_result.get("results", [])[:top_k]
+        resolved_search_result = search_result or await _execute_search_strategy(question, params, search_strategy)
+        results = resolved_search_result.get("results", [])[:top_k]
         if not results:
             return {
                 "answer": "I could not find relevant documents to answer this question.",
@@ -576,12 +642,22 @@ class RagAnswerAgent:
             verbose_only=True,
         )
         completion = _generate_completion(chat_id, rag_prompt, system_prompt=RAG_SYSTEM_PROMPT)
+        sources = [_summarize_result_for_log(item) for item in results]
+        answer_with_sources = f"{completion['answer']}{_format_retrieved_docs_section(sources)}"
         return {
-            "answer": completion["answer"],
+            "answer": answer_with_sources,
             "search_results": results,
-            "sources": [_summarize_result_for_log(item) for item in results],
+            "sources": sources,
             "token_usage": completion.get("token_usage", {}),
         }
+
+
+async def _resolve_search_result(question: str, intent_result: IntentResult) -> dict[str, Any] | None:
+    if intent_result.search_strategy == SearchStrategy.NO_SEARCH:
+        return None
+    if intent_result.search_result is not None:
+        return intent_result.search_result
+    return await _execute_search_strategy(question, intent_result.parameters, intent_result.search_strategy)
 
 
 def _stream_text_response(answer: str, chat_id: str, intent: IntentType, extra_meta: Optional[dict[str, Any]] = None):
@@ -626,7 +702,9 @@ def _wrap_stream_with_metadata(generator, intent: IntentType, extra_meta: Option
 
 async def _build_agent_stream(question: str, chat_id: Optional[str], intent_result: IntentResult):
     intent = intent_result.intent
+    search_strategy = intent_result.search_strategy
     params = intent_result.parameters
+    prefetched_search_result = await _resolve_search_result(question, intent_result)
     resolved_chat_id = chat_id or str(uuid4())
     classification_meta = {"classification": _classification_debug_payload(question, intent_result)}
     _log_verbose(
@@ -634,8 +712,35 @@ async def _build_agent_stream(question: str, chat_id: Optional[str], intent_resu
         {"question": question, "chat_id": chat_id, "resolved_chat_id": resolved_chat_id, "intent": intent.value, "parameters": params},
     )
 
+    if intent == IntentType.KEYWORD_SEARCH:
+        agent_result = prefetched_search_result or await KeywordSearchAgent.execute(question, parameters=params)
+        if agent_result.get("results"):
+            answer = f"Found {agent_result['total']} documents matching your keyword search.\nTop results:\n"
+            for result in agent_result["results"][:5]:
+                title = result["source"].get("title", "Untitled")
+                answer += f"- {title} (ID: {result['id']})\n"
+        else:
+            answer = "No documents found for your keyword search."
+        return _stream_text_response(answer, resolved_chat_id, intent, classification_meta)
+
+    if intent == IntentType.SEMANTIC_SEARCH:
+        agent_result = prefetched_search_result or await SemanticSearchAgent.execute(question, parameters=params)
+        if agent_result.get("results"):
+            answer = f"Found {agent_result['total']} similar cases.\nMost relevant:\n"
+            for result in agent_result["results"][:5]:
+                title = result["source"].get("title", "Untitled")
+                answer += f"- {title} (ID: {result['id']}, score: {result['score']:.2f})\n"
+        else:
+            answer = "No similar cases found."
+        return _stream_text_response(answer, resolved_chat_id, intent, classification_meta)
+
+    if intent == IntentType.STATS_COUNT:
+        agent_result = prefetched_search_result or await _execute_search_strategy(question, params, search_strategy)
+        answer = f"Number of documents: {agent_result.get('total', 0)}"
+        return _stream_text_response(answer, resolved_chat_id, intent, classification_meta)
+
     if intent == IntentType.GENERAL_RAG_QA:
-        search_result = await SemanticSearchAgent.execute(question, parameters=params)
+        search_result = prefetched_search_result or await _execute_search_strategy(question, params, search_strategy)
         results = search_result.get("results", [])[:5]
         if not results:
             return _stream_text_response(
@@ -660,6 +765,10 @@ async def _build_agent_stream(question: str, chat_id: Optional[str], intent_resu
         generator = _generate_completion_stream(resolved_chat_id, rag_prompt, system_prompt=RAG_SYSTEM_PROMPT)
         return _wrap_stream_with_metadata(generator, intent, {"sources": [_summarize_result_for_log(item) for item in results], **classification_meta})
 
+    if intent == IntentType.FREE_OPEN_CHAT:
+        generator = _generate_completion_stream(resolved_chat_id, question, system_prompt=OPEN_CHAT_SYSTEM_PROMPT)
+        return _wrap_stream_with_metadata(generator, intent, classification_meta)
+
     if intent == IntentType.SINGLE_DOC_SUMMARY:
         doc_id = params.get("doc_id")
         if not doc_id:
@@ -682,7 +791,7 @@ async def _build_agent_stream(question: str, chat_id: Optional[str], intent_resu
         return _wrap_stream_with_metadata(generator, intent, {"doc_id": doc_id, "title": title, **classification_meta})
 
     if intent == IntentType.MIXED_SEARCH_SUMMARY:
-        search_result = await SemanticSearchAgent.execute(question, parameters=params)
+        search_result = prefetched_search_result or await _execute_search_strategy(question, params, search_strategy)
         results = search_result.get("results", [])[:5]
         if not results:
             return _stream_text_response("No relevant documents found.", resolved_chat_id, intent, classification_meta)
@@ -702,87 +811,107 @@ async def _build_agent_stream(question: str, chat_id: Optional[str], intent_resu
         return _wrap_stream_with_metadata(generator, intent, {"sources": [_summarize_result_for_log(item) for item in results], **classification_meta})
 
     result = await orchestrate_agent_chat(question, resolved_chat_id)
-    _log_verbose("_build_agent_stream fallback response", result)
     return _stream_text_response(result["answer"], result["chat_id"], intent, classification_meta)
-
-def extract_date_range_from_question(question: str) -> dict[str, str] | None:
-    month_year_match = re.search(
-        r'(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})',
-        question,
-        re.IGNORECASE,
-    )
-    if month_year_match:
-        month_name = month_year_match.group(1).lower()
-        year_str = month_year_match.group(2)
-        month_num = MONTH_NAME_TO_NUMBER[month_name]
-    else:
-        iso_match = re.search(r'(\d{4})-(\d{2})', question)
-        if not iso_match:
-            return None
-        year_str = iso_match.group(1)
-        month_num = int(iso_match.group(2))
-
-    from calendar import monthrange
-
-    last_day = monthrange(int(year_str), month_num)[1]
-    return {
-        "start_date": f"{year_str}-{month_num:02d}-01",
-        "end_date": f"{year_str}-{month_num:02d}-{last_day:02d}",
-    }
-
-
-def extract_topic_from_question(question: str) -> str | None:
-    relating_match = re.search(r'relating to\s+(.+?)\s+in\s+(January|February|March|April|May|June|July|August|September|October|November|December|\d{4}-\d{2})', question, re.IGNORECASE)
-    if relating_match:
-        return relating_match.group(1).strip(" .")
-
-    if re.search(r'bills committee meeting', question, re.IGNORECASE):
-        return 'Bills Committee Meeting'
-
-    return None
 
 
 def build_search_parameters(question: str) -> dict[str, Any]:
-    # Let the LLM decide whether the query implies exact phrase, AND-term, or OR-term matching.
+    # Let the LLM fill the same search template shape used by the frontend filter section.
     exact_phrase = None
     must_terms: list[str] = []
     should_terms: list[str] = []
-    date_range = extract_date_range_from_question(question)
-    topic = extract_topic_from_question(question)
-    filters: dict[str, Any] = {}
+    date_range = None
+    topic = None
 
     query = question.strip()
 
-    return {
+    return _sync_parameter_filters({
         "query": query,
+        "start_date": "",
+        "end_date": "",
+        "owners": [],
+        "categories": [],
+        "tags": [],
+        "folder_names": [],
+        "folder_paths": [],
+        "metadata_filters": {},
         "exact_phrase": exact_phrase,
         "must_terms": must_terms,
         "should_terms": should_terms,
         "date_range": date_range,
         "topic": topic,
-        "filters": filters,
+        "filters": {},
         "search_mode": "hybrid",
         "match_mode": None,
         "requires_exact_match": False,
         "requires_summary": False,
-    }
+        "search_strategy": SearchStrategy.HYBRID_SEARCH.value,
+        "task_type": TaskType.ANSWER_QUESTION.value,
+    })
+
+
+def _normalize_classifier_string_list(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    return [str(value).strip() for value in values if str(value).strip()]
+
+
+def _normalize_classifier_metadata_filters(values: Any) -> dict[str, str]:
+    if not isinstance(values, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for raw_key, raw_value in values.items():
+        key = str(raw_key).strip()
+        value = str(raw_value).strip()
+        if key and value:
+            normalized[key] = value
+    return normalized
+
+
+def _extract_parameter_filters(parameters: dict[str, Any]) -> dict[str, Any]:
+    filter_payload: dict[str, Any] = {}
+    for key in SEARCH_FILTER_KEYS:
+        value = parameters.get(key)
+        if isinstance(value, list) and value:
+            filter_payload[key] = value
+        elif isinstance(value, dict) and value:
+            filter_payload[key] = value
+        elif isinstance(value, str) and value.strip():
+            filter_payload[key] = value.strip()
+    return filter_payload
+
+
+def _sync_parameter_filters(parameters: dict[str, Any]) -> dict[str, Any]:
+    parameters["filters"] = _extract_parameter_filters(parameters)
+    return parameters
 
 
 def _merge_classifier_parameters(base_parameters: dict[str, Any], classifier_payload: dict[str, Any]) -> dict[str, Any]:
     merged = deepcopy(base_parameters)
+    payload_filters = classifier_payload.get("filters") if isinstance(classifier_payload.get("filters"), dict) else {}
 
     if classifier_payload.get("phrase"):
         merged["exact_phrase"] = str(classifier_payload["phrase"]).strip()
     if classifier_payload.get("must_terms"):
-        merged["must_terms"] = [str(term).strip() for term in classifier_payload.get("must_terms", []) if str(term).strip()]
+        merged["must_terms"] = _normalize_classifier_string_list(classifier_payload.get("must_terms", []))
     if classifier_payload.get("should_terms"):
-        merged["should_terms"] = [str(term).strip() for term in classifier_payload.get("should_terms", []) if str(term).strip()]
+        merged["should_terms"] = _normalize_classifier_string_list(classifier_payload.get("should_terms", []))
     if classifier_payload.get("topic"):
         merged["topic"] = str(classifier_payload["topic"]).strip()
     if classifier_payload.get("doc_id"):
         merged["doc_id"] = str(classifier_payload["doc_id"]).strip()
     if classifier_payload.get("date_range"):
         merged["date_range"] = classifier_payload["date_range"]
+
+    merged["start_date"] = str(classifier_payload.get("start_date") or payload_filters.get("start_date") or merged.get("start_date") or "").strip()
+    merged["end_date"] = str(classifier_payload.get("end_date") or payload_filters.get("end_date") or merged.get("end_date") or "").strip()
+    merged["owners"] = _normalize_classifier_string_list(classifier_payload.get("owners", payload_filters.get("owners", merged.get("owners", []))))
+    merged["categories"] = _normalize_classifier_string_list(classifier_payload.get("categories", payload_filters.get("categories", merged.get("categories", []))))
+    merged["tags"] = _normalize_classifier_string_list(classifier_payload.get("tags", payload_filters.get("tags", merged.get("tags", []))))
+    merged["folder_names"] = _normalize_classifier_string_list(classifier_payload.get("folder_names", payload_filters.get("folder_names", merged.get("folder_names", []))))
+    merged["folder_paths"] = _normalize_classifier_string_list(classifier_payload.get("folder_paths", payload_filters.get("folder_paths", merged.get("folder_paths", []))))
+    merged["metadata_filters"] = _normalize_classifier_metadata_filters(
+        classifier_payload.get("metadata_filters", payload_filters.get("metadata_filters", merged.get("metadata_filters", {})))
+    )
 
     if "search_mode" in classifier_payload and classifier_payload["search_mode"] in {"text", "hybrid"}:
         merged["search_mode"] = classifier_payload["search_mode"]
@@ -814,65 +943,84 @@ def _merge_classifier_parameters(base_parameters: dict[str, Any], classifier_pay
     elif merged.get("exact_phrase"):
         merged["query"] = merged["exact_phrase"]
 
-    return merged
+    merged["search_strategy"] = str(classifier_payload.get("search_strategy") or merged.get("search_strategy") or SearchStrategy.HYBRID_SEARCH.value)
+    merged["task_type"] = str(classifier_payload.get("task_type") or merged.get("task_type") or TaskType.ANSWER_QUESTION.value)
+
+    return _sync_parameter_filters(merged)
 
 
-def _classify_intent_with_llm(question: str, base_parameters: dict[str, Any]) -> IntentResult | None:
-    classification_prompt = f"""Return JSON only.
+def _normalize_search_strategy(strategy_value: Any, intent_value: Any, parameters: dict[str, Any]) -> SearchStrategy:
+    has_keyword_plan = bool(
+        parameters.get("match_mode") in KEYWORD_MATCH_MODES
+        or parameters.get("exact_phrase")
+        or parameters.get("must_terms")
+        or parameters.get("should_terms")
+    )
+    if has_keyword_plan:
+        return SearchStrategy.KEYWORD_SEARCH
 
-Available intents:
-- keyword_search: literal or exact matching request.
-- semantic_search: similar case lookup or semantic retrieval.
-- stats_count: counting documents with date/topic constraints.
+    normalized_value = str(strategy_value or "").strip()
+    if normalized_value in {member.value for member in SearchStrategy}:
+        return SearchStrategy(normalized_value)
 
-- mixed_search_summary: retrieve multiple relevant documents and summarize them.
-- general_rag_qa: answer a question by retrieving relevant documents first.
-
-User question:
-{question}
-
-Hint parameters already extracted from the question:
-{json.dumps(base_parameters, ensure_ascii=False)}
-
-Rules:
-- Do not rely on quoted text alone to infer exact phrase matching.
-- Choose a keyword match mode only when the user clearly wants literal keyword filtering.
-- If the user wants documents containing term A and term B, use match_mode="all_terms" and return must_terms.
-- If the user wants documents containing term A or term B, use match_mode="any_terms" and return should_terms.
-- Only use match_mode="exact_phrase" and phrase when the user clearly asks for an exact phrase or literal adjacency match.
-- Do not choose keyword_search unless exact or literal matching is clearly needed.
-- Prefer general_rag_qa for normal questions that should be answered from retrieved documents.
-- Prefer semantic_search for "similar case", "find a case", "locate a case" style requests.
-- Prefer mixed_search_summary when the user wants relevant documents plus a brief summary of key points.
+    legacy_intent = str(intent_value or "").strip()
+    if legacy_intent == IntentType.KEYWORD_SEARCH.value:
+        return SearchStrategy.KEYWORD_SEARCH
+    if legacy_intent == IntentType.FREE_OPEN_CHAT.value:
+        return SearchStrategy.NO_SEARCH
+    if legacy_intent:
+        return SearchStrategy.HYBRID_SEARCH
+    return SearchStrategy.HYBRID_SEARCH
 
 
-Examples:
-- Query: documents containing "金融" and "貨幣"
-    Return: match_mode="all_terms", must_terms=["金融", "貨幣"], should_terms=[], phrase=null
-- Query: documents containing 金融 or 花園
-    Return: match_mode="any_terms", must_terms=[], should_terms=["金融", "花園"], phrase=null
-- Query: documents containing the exact phrase "金融 貨幣"
-    Return: match_mode="exact_phrase", phrase="金融 貨幣", must_terms=[], should_terms=[]
+def _normalize_task_type(task_value: Any, intent_value: Any) -> TaskType:
+    normalized_value = str(task_value or "").strip()
+    if normalized_value in {member.value for member in TaskType}:
+        return TaskType(normalized_value)
+
+    legacy_intent = str(intent_value or "").strip()
+    legacy_mapping = {
+        IntentType.KEYWORD_SEARCH.value: TaskType.LIST_DOCUMENTS,
+        IntentType.SEMANTIC_SEARCH.value: TaskType.LIST_DOCUMENTS,
+        IntentType.STATS_COUNT.value: TaskType.COUNT_RESULTS,
+        IntentType.SINGLE_DOC_SUMMARY.value: TaskType.SINGLE_DOC_SUMMARY,
+        IntentType.MIXED_SEARCH_SUMMARY.value: TaskType.SUMMARIZE_RESULTS,
+        IntentType.GENERAL_RAG_QA.value: TaskType.ANSWER_QUESTION,
+        IntentType.FREE_OPEN_CHAT.value: TaskType.ANSWER_QUESTION,
+    }
+    return legacy_mapping.get(legacy_intent, TaskType.ANSWER_QUESTION)
 
 
+def _derive_intent_from_plan(search_strategy: SearchStrategy, task_type: TaskType) -> IntentType:
+    if task_type == TaskType.SINGLE_DOC_SUMMARY:
+        return IntentType.SINGLE_DOC_SUMMARY
+    if search_strategy == SearchStrategy.NO_SEARCH:
+        return IntentType.FREE_OPEN_CHAT
+    if task_type == TaskType.COUNT_RESULTS:
+        return IntentType.STATS_COUNT
+    if task_type == TaskType.SUMMARIZE_RESULTS:
+        return IntentType.MIXED_SEARCH_SUMMARY
+    if task_type == TaskType.ANSWER_QUESTION:
+        return IntentType.GENERAL_RAG_QA
+    if search_strategy == SearchStrategy.KEYWORD_SEARCH:
+        return IntentType.KEYWORD_SEARCH
+    return IntentType.SEMANTIC_SEARCH
 
-Response schema:
-{{
-  "intent": "keyword_search|semantic_search|stats_count|single_doc_summary|mixed_search_summary|general_rag_qa",
-  "confidence": 0.0,
-  "search_mode": "text|hybrid",
-    "match_mode": "exact_phrase|all_terms|any_terms|null",
-  "requires_exact_match": false,
-  "requires_summary": false,
-  "doc_id": null,
-  "date_range": null,
-  "topic": null,
-  "must_terms": [],
-    "should_terms": [],
-  "phrase": null
-}}"""
 
-        # The LLM is responsible for deciding whether a doc_id exists; avoid regex shortcuts.
+async def _execute_search_strategy(
+    question: str,
+    parameters: dict[str, Any] | None,
+    search_strategy: SearchStrategy,
+) -> dict[str, Any]:
+    params = parameters or {}
+    if search_strategy == SearchStrategy.KEYWORD_SEARCH:
+        return await KeywordSearchAgent.execute(question, parameters=params)
+    if search_strategy == SearchStrategy.NO_SEARCH:
+        return {"intent": SearchStrategy.NO_SEARCH.value, "results": [], "total": 0, "parameters": params}
+    return await SemanticSearchAgent.execute(question, parameters=params)
+
+
+def _call_classifier_llm(prompt: str) -> dict[str, Any] | None:
     response = requests.post(
         LLM_API,
         json={
@@ -881,7 +1029,7 @@ Response schema:
             "think": False,
             "messages": [
                 {"role": "system", "content": CLASSIFIER_SYSTEM_PROMPT},
-                {"role": "user", "content": classification_prompt},
+                {"role": "user", "content": prompt},
             ],
             "parameters": {"temperature": 0},
         },
@@ -892,18 +1040,177 @@ Response schema:
         return None
 
     data = response.json()
-    _log_verbose("Intent classifier raw response", _summarize_provider_response_for_log(data))
     content = data.get("message", {}).get("content", "")
     content = re.sub(r'```json\s*|\s*```', '', content.strip())
-    classifier_payload = json.loads(content)
-    intent_value = classifier_payload.get("intent", IntentType.GENERAL_RAG_QA.value)
-    merged_parameters = _merge_classifier_parameters(base_parameters, classifier_payload)
-    confidence = float(classifier_payload.get("confidence", 0.8))
+    return json.loads(content)
+
+
+def _build_search_strategy_prompt(question: str, base_parameters: dict[str, Any]) -> str:
+    return f"""Return JSON only.
+
+You are agent1 in a sequential workflow.
+Your only job is to classify the search_strategy and fill the search template.
+
+User question:
+{question}
+
+Initial search template:
+{json.dumps(base_parameters, ensure_ascii=False)}
+
+Rules:
+- Choose exactly one search_strategy: keyword_search, hybrid_search, or no_search.
+- keyword_search means literal keyword filtering with the template fields and optional exact_phrase, must_terms, and should_terms.
+- hybrid_search means normal document retrieval using the same search template fields as chatbot-template__filters-section and chatbot_api.py.
+- no_search means the question is a free open question and does not need document retrieval.
+- Do not decide the final task type here.
+- Do not extract with hardcoded patterns; use the user meaning.
+- Fill start_date, end_date, owners, categories, tags, folder_names, folder_paths, and metadata_filters when the user clearly specifies filters.
+- If you fill phrase, must_terms, should_terms, or match_mode, search_strategy must be keyword_search.
+- If the user wants documents containing term A and term B, use match_mode="all_terms" and return must_terms.
+- If the user wants documents containing term A or term B, use match_mode="any_terms" and return should_terms.
+- Only use match_mode="exact_phrase" and phrase when the user clearly asks for an exact phrase or literal adjacency match.
+
+Examples:
+- Query: documents containing "金融" and "貨幣"
+  Return: search_strategy="keyword_search", match_mode="all_terms", must_terms=["金融", "貨幣"]
+- Query: find similar tenancy cases
+  Return: search_strategy="hybrid_search"
+- Query: what is the difference between civil law and criminal law?
+  Return: search_strategy="no_search"
+
+Response schema:
+{{
+  "search_strategy": "keyword_search|hybrid_search|no_search",
+  "confidence": 0.0,
+  "search_mode": "text|hybrid",
+  "match_mode": "exact_phrase|all_terms|any_terms|null",
+  "requires_exact_match": false,
+  "doc_id": null,
+  "start_date": "",
+  "end_date": "",
+  "owners": [],
+  "categories": [],
+  "tags": [],
+  "folder_names": [],
+  "folder_paths": [],
+  "metadata_filters": {{}},
+  "date_range": null,
+  "topic": null,
+  "must_terms": [],
+  "should_terms": [],
+  "phrase": null
+}}"""
+
+
+def _build_search_preview_for_task_classifier(search_result: dict[str, Any] | None, max_results: int = 5) -> list[dict[str, Any]]:
+    if not search_result:
+        return []
+    preview: list[dict[str, Any]] = []
+    for item in (search_result.get("results") or [])[:max_results]:
+        source = item.get("source", {})
+        preview.append(
+            {
+                "id": item.get("id"),
+                "title": source.get("title", "Untitled"),
+                "folder_name": source.get("folder_name", ""),
+                "folder_path": source.get("folder_path", ""),
+                "content_preview": _preview_text(
+                    source.get("ocr_content", "")
+                    or source.get("content", "")
+                    or source.get("description", "")
+                    or source.get("metadata_text", ""),
+                    240,
+                ),
+            }
+        )
+    return preview
+
+
+def _merge_task_classifier_parameters(base_parameters: dict[str, Any], classifier_payload: dict[str, Any]) -> dict[str, Any]:
+    merged = deepcopy(base_parameters)
+    if classifier_payload.get("doc_id"):
+        merged["doc_id"] = str(classifier_payload["doc_id"]).strip()
+    if "requires_summary" in classifier_payload:
+        merged["requires_summary"] = bool(classifier_payload["requires_summary"])
+    return merged
+
+
+def _build_task_type_prompt(
+    question: str,
+    search_strategy: SearchStrategy,
+    parameters: dict[str, Any],
+    search_result: dict[str, Any] | None,
+) -> str:
+    search_preview = _build_search_preview_for_task_classifier(search_result)
+    return f"""Return JSON only.
+
+You are agent2 in a sequential workflow.
+Agent1 already classified the search strategy and filled the search template.
+Your only job is to classify the task_type to perform after search results are available.
+
+User question:
+{question}
+
+Chosen search_strategy:
+{search_strategy.value}
+
+Filled search template:
+{json.dumps(parameters, ensure_ascii=False)}
+
+Search results preview:
+{json.dumps(search_preview, ensure_ascii=False)}
+
+Rules:
+- Choose exactly one task_type: list_documents, answer_question, summarize_results, count_results, or single_doc_summary.
+- list_documents means the user mainly wants matching documents or cases listed.
+- answer_question means answer the user using searched documents, unless search_strategy=no_search.
+- summarize_results means summarize the matched documents.
+- count_results means count matched documents.
+- single_doc_summary means summarize a single identified document; return doc_id when available.
+- If search_strategy is no_search, prefer answer_question unless the user explicitly asks to summarize a specific document id.
+- Use the search results preview to decide whether the user is asking for listing, answering, counting, or summarizing.
+
+Response schema:
+{{
+  "task_type": "list_documents|answer_question|summarize_results|count_results|single_doc_summary",
+  "confidence": 0.0,
+  "doc_id": null,
+  "requires_summary": false
+}}"""
+
+
+async def _classify_intent_with_llm(question: str, base_parameters: dict[str, Any]) -> IntentResult | None:
+    search_strategy_payload = _call_classifier_llm(_build_search_strategy_prompt(question, base_parameters))
+    if search_strategy_payload is None:
+        return None
+
+    merged_parameters = _merge_classifier_parameters(base_parameters, search_strategy_payload)
+    search_strategy = _normalize_search_strategy(search_strategy_payload.get("search_strategy"), "", merged_parameters)
+    search_confidence = float(search_strategy_payload.get("confidence", 0.8))
+
+    search_result: dict[str, Any] | None = None
+    if search_strategy != SearchStrategy.NO_SEARCH:
+        search_result = await _execute_search_strategy(question, merged_parameters, search_strategy)
+
+    task_type_payload = _call_classifier_llm(
+        _build_task_type_prompt(question, search_strategy, merged_parameters, search_result)
+    )
+    if task_type_payload is None:
+        return None
+
+    merged_parameters = _merge_task_classifier_parameters(merged_parameters, task_type_payload)
+    task_type = _normalize_task_type(task_type_payload.get("task_type"), "")
+    task_confidence = float(task_type_payload.get("confidence", search_confidence))
+    normalized_intent = _derive_intent_from_plan(search_strategy, task_type)
+    confidence = min(search_confidence, task_confidence)
     return IntentResult(
-        intent=IntentType(intent_value),
+        intent=normalized_intent,
+        search_strategy=search_strategy,
+        task_type=task_type,
         parameters=merged_parameters,
+        search_result=search_result,
         confidence=confidence,
-        classification_source="llm",
+        classification_source="llm_agent1_agent2",
     )
 
 
@@ -917,6 +1224,17 @@ def _summarize_result_for_log(result: dict[str, Any]) -> dict[str, Any]:
         "folder_path": source.get("folder_path", ""),
         "created_at": source.get("created_at", ""),
     }
+
+def _format_retrieved_docs_section(results: list[dict[str, Any]]) -> str:
+    if not results:
+        return ""
+
+    lines = ["", "Retrieved documents:"]
+    for item in results:
+        title = item.get("title") or "Untitled"
+        doc_id = item.get("id") or ""
+        lines.append(f"- {title} (ID: {doc_id})")
+    return "\n".join(lines)
 
 
 def _build_rag_context(results: list[dict[str, Any]], max_chars_per_doc: int = 1200) -> str:
@@ -953,13 +1271,12 @@ def _build_rag_context(results: list[dict[str, Any]], max_chars_per_doc: int = 1
 
 class IntentClassifier:
     @staticmethod
-    def classify(question: str) -> IntentResult:
+    async def classify(question: str) -> IntentResult:
         # Step 2: classify the user question into the best backend task.
         parameters = build_search_parameters(question)
-        _log_verbose("Step 2 input: IntentClassifier.classify", {"question": question, "parameters": parameters})
 
         try:
-            intent_result = _classify_intent_with_llm(question, parameters)
+            intent_result = await _classify_intent_with_llm(question, parameters)
             if intent_result is not None:
                 _log_classification_result(question, intent_result)
                 return intent_result
@@ -968,6 +1285,8 @@ class IntentClassifier:
 
         result = IntentResult(
             intent=IntentType.GENERAL_RAG_QA,
+            search_strategy=SearchStrategy.HYBRID_SEARCH,
+            task_type=TaskType.ANSWER_QUESTION,
             parameters=parameters,
             classification_source="fallback_general_rag_qa",
         )
@@ -1058,9 +1377,11 @@ def _execute_raw_search(body: dict[str, Any], page: int, per_page: int) -> dict:
 
 async def orchestrate_agent_chat(question: str, chat_id: Optional[str] = None) -> dict:
     # Step 1: accept the request and determine which backend task should handle it.
-    intent_result = IntentClassifier.classify(question)
+    intent_result = await IntentClassifier.classify(question)
     intent = intent_result.intent
+    search_strategy = intent_result.search_strategy
     params = intent_result.parameters
+    prefetched_search_result = await _resolve_search_result(question, intent_result)
     resolved_chat_id = chat_id or str(uuid4())
     classification = _classification_debug_payload(question, intent_result)
     _log_workflow_step(
@@ -1073,7 +1394,7 @@ async def orchestrate_agent_chat(question: str, chat_id: Optional[str] = None) -
     response_payload = {}
     try:
         if intent == IntentType.KEYWORD_SEARCH:
-            agent_result = await KeywordSearchAgent.execute(question, parameters=params)
+            agent_result = prefetched_search_result or await KeywordSearchAgent.execute(question, parameters=params)
             if agent_result.get("results"):
                 answer = f"Found {agent_result['total']} documents matching your keyword search.\nTop results:\n"
                 for r in agent_result["results"][:5]:
@@ -1084,7 +1405,7 @@ async def orchestrate_agent_chat(question: str, chat_id: Optional[str] = None) -
             response_payload = {"answer": answer, "search_results": agent_result}
 
         elif intent == IntentType.SEMANTIC_SEARCH:
-            agent_result = await SemanticSearchAgent.execute(question, parameters=params)
+            agent_result = prefetched_search_result or await SemanticSearchAgent.execute(question, parameters=params)
             if agent_result.get("results"):
                 answer = f"Found {agent_result['total']} similar cases.\nMost relevant:\n"
                 for r in agent_result["results"][:5]:
@@ -1095,15 +1416,8 @@ async def orchestrate_agent_chat(question: str, chat_id: Optional[str] = None) -
             response_payload = {"answer": answer, "search_results": agent_result}
 
         elif intent == IntentType.STATS_COUNT:
-            agent_result = await StatsAgent.execute(question, params)
-            if "count" in agent_result:
-                answer = f"Number of documents: {agent_result['count']}"
-                if "date_range" in agent_result:
-                    answer += f" for period {agent_result['date_range']}"
-                if agent_result.get("topic"):
-                    answer += f" related to {agent_result['topic']}"
-            else:
-                answer = f"Could not compute statistics: {agent_result.get('error', 'Unknown error')}"
+            agent_result = prefetched_search_result or await _execute_search_strategy(question, params, search_strategy)
+            answer = f"Number of documents: {agent_result.get('total', 0)}"
             response_payload = {"answer": answer, "stats": agent_result}
 
         elif intent == IntentType.SINGLE_DOC_SUMMARY:
@@ -1120,15 +1434,36 @@ async def orchestrate_agent_chat(question: str, chat_id: Optional[str] = None) -
             response_payload = {"answer": answer, "doc_summary": agent_result}
 
         elif intent == IntentType.MIXED_SEARCH_SUMMARY:
-            agent_result = await MixedSearchSummaryAgent.execute(question, parameters=params)
+            agent_result = await MixedSearchSummaryAgent.execute(
+                question,
+                parameters=params,
+                search_strategy=search_strategy,
+                search_result=prefetched_search_result,
+            )
             if "summary" in agent_result:
                 answer = agent_result["summary"]
             else:
                 answer = agent_result.get("error", "No results to summarize.")
             response_payload = {"answer": answer, "mixed_result": agent_result}
 
+        elif intent == IntentType.FREE_OPEN_CHAT:
+            agent_result = _generate_completion(resolved_chat_id, question, system_prompt=OPEN_CHAT_SYSTEM_PROMPT)
+            answer = agent_result["answer"]
+            response_payload = {
+                "answer": answer,
+                "token_usage": agent_result.get("token_usage", {}),
+                "search_results": [],
+                "sources": [],
+            }
+
         else:  # GENERAL_RAG_QA
-            agent_result = await RagAnswerAgent.execute(question, resolved_chat_id, params)
+            agent_result = await RagAnswerAgent.execute(
+                question,
+                resolved_chat_id,
+                params,
+                search_strategy=search_strategy,
+                search_result=prefetched_search_result,
+            )
             answer = agent_result["answer"]
             response_payload = {
                 "answer": answer,
@@ -1137,7 +1472,7 @@ async def orchestrate_agent_chat(question: str, chat_id: Optional[str] = None) -
                 "sources": agent_result.get("sources", []),
             }
 
-        if intent != IntentType.GENERAL_RAG_QA:
+        if intent not in {IntentType.GENERAL_RAG_QA, IntentType.FREE_OPEN_CHAT}:
             payload = {"question": question, "intent": intent.value, "response_payload": response_payload}
             token_usage = response_payload.get("token_usage", {})
             _save_chat_log(resolved_chat_id, payload, answer, token_usage)
@@ -1696,7 +2031,6 @@ async def agent_chat(req: ChatRequest):
     """
     Multi‑agent endpoint: classifies intent and routes to specialist agents.
     """
-    # Step 1: receive the frontend request and decide whether to use the agent workflow.
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="Missing question")
     _log_workflow_step(
@@ -1709,7 +2043,7 @@ async def agent_chat(req: ChatRequest):
         return chat(req)
 
     if req.stream:
-        intent_result = IntentClassifier.classify(req.question)
+        intent_result = await IntentClassifier.classify(req.question)
         generator = await _build_agent_stream(req.question, req.chat_id, intent_result)
         return StreamingResponse(generator, media_type="text/event-stream")
 

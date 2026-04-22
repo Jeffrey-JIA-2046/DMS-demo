@@ -66,15 +66,43 @@ function collectFolderPathOptions(nodes = [], trail = []) {
   return options
 }
 
+function createMessage(role, content = '', loading = false, extra = {}) {
+  return {
+    role,
+    content,
+    loading,
+    timestamp: new Date().toISOString(),
+    ...extra,
+  }
+}
+
+function formatMessageTime(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+function formatRetrievedDocsMessage(sources = []) {
+  if (!Array.isArray(sources) || !sources.length) {
+    return ''
+  }
+
+  const lines = ['Retrieved documents:']
+  sources.forEach((source) => {
+    const title = source?.title || 'Untitled'
+    const docId = source?.id || ''
+    lines.push(`- ${title} (ID: ${docId})`)
+  })
+  return lines.join('\n')
+}
+
 export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open: openProp, onOpenChange, folders = [] }) {
   const { toast } = useContext(AnnounceContext)
   const resizeStateRef = useRef(null)
   const sectionResizeStateRef = useRef(null)
   const initialMessages = useMemo(() => ([
-    {
-      role: 'ai',
-      content: 'Hello! Ask a free-text question, or select 1-3 documents to compare and summarize them.',
-    },
+    createMessage('ai', 'Hello! Ask a free-text question, or select 1-3 documents to compare and summarize them.'),
   ]), [])
   const [internalOpen, setInternalOpen] = useState(false)
   const controlled = typeof openProp === 'boolean'
@@ -244,7 +272,7 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
   }, [selectedDocumentIds, allSelectableDocuments, selectedDocument])
 
   const appendMessage = (role, content = '', loading = false) => {
-    setMessages((prev) => [...prev, { role, content, loading }])
+    setMessages((prev) => [...prev, createMessage(role, content, loading)])
   }
 
   const updateLastAiMessage = (updater) => {
@@ -591,6 +619,9 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
         content: completedAnswer || 'No response was generated.',
         loading: false,
       }))
+      if (data?.sources?.length) {
+        appendMessage('ai', formatRetrievedDocsMessage(data.sources))
+      }
     } catch (err) {
       const message = err.message || 'Unable to answer right now'
       setError(message)
@@ -931,7 +962,10 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
                       : <span dangerouslySetInnerHTML={{ __html: formatMessage(message.content) }} />
                   }
                 </div>
-                <div className="chatbot-panel__message-meta">{message.role === 'user' ? 'You' : 'AI Assistant'}</div>
+                <div className="chatbot-panel__message-meta">
+                  {message.role === 'user' ? 'You' : 'AI Assistant'}
+                  {message.timestamp ? ` · ${formatMessageTime(message.timestamp)}` : ''}
+                </div>
               </div>
             ))}
           </div>
