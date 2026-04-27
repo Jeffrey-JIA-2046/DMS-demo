@@ -38,6 +38,7 @@ com\dms\config\OpenSearchConfig.class
 com\dms\task\controller\UserDashboardController.class
 com\dms\job\dto\JobScheduleResponse.class
 com\dms\codetable\service\CodeTableService.class
+com\dms\chatbot\service\ChatbotDocumentIndexService$HousekeepingResult.class
 com\dms\workflow\model\WorkflowStepStatus.class
 com\dms\job\config\JobSchedulerConfig.class
 com\dms\tools\DBInspector.class
@@ -205,6 +206,7 @@ com\dms\job\dto\JobScheduleRequest.class
 com\dms\ocr\model\DocumentOcrResult.class
 com\dms\workflow\model\WorkflowConnection.class
 com\dms\workflow\service\NoOpAutoActivity.class
+com\dms\chatbot\service\ChatbotDocumentIndexService.class
 com\dms\document\dto\DocumentExtractionSaveRequest.class
 com\dms\knowledge\service\KnowledgeTopicService.class
 com\dms\document\service\DocumentService$1.class

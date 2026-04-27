@@ -12,6 +12,7 @@ public record DocumentUploadRequest(
     @Size(max = 1024) String description,
     @NotBlank @Size(max = 160) String owner,
     @Size(max = 120) String category,
+    @Size(max = 64) String categoryCode,
     @NotBlank String documentDate,
     @NotBlank String expiryDate,
     Set<@Size(max = 40) String> tags,

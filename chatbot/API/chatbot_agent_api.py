@@ -57,6 +57,9 @@ LLM_API = os.getenv("LLM_API", "http://localhost:11434/api/chat")
 LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-r1:14b")
 CLASSIFIER_TIMEOUT_SECONDS = int(os.getenv("CHATBOT_CLASSIFIER_TIMEOUT_SECONDS", "20"))
 
+# DMS Java backend base URL used for housekeeping and other backend calls.
+DMS_BASE_URL = os.getenv("DMS_BASE_URL", "http://localhost:8080")
+
 MAX_CONTEXT_LENGTH = int(os.getenv("MAX_CONTEXT_LENGTH", "5000"))
 WARNING_THRESHOLD = int(os.getenv("WARNING_THRESHOLD", "4000"))
 VERBOSE_LOGS = os.getenv("CHATBOT_VERBOSE_LOGS", "false").lower() == "true"
@@ -248,29 +251,84 @@ class SummarizeRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Multi‑agent classification & routing
 # ---------------------------------------------------------------------------
+#
+# Sequential two-agent workflow overview
+# ──────────────────────────────────────
+# Agent 1  (_build_search_strategy_prompt)
+#   Classifies the search_strategy and fills the search template.
+#   Output → one of: keyword_search | hybrid_search | no_search
+#
+#   keyword_search template shape:
+#     query        : raw user text (or joined from must/should_terms)
+#     match_mode   : "exact_phrase" | "all_terms" | "any_terms"
+#     exact_phrase : str  ← used when match_mode="exact_phrase"
+#     must_terms   : [str, ...]  ← all terms must appear (AND)
+#     should_terms : [str, ...]  ← at least one term must appear (OR)
+#     start_date / end_date / owners / categories / tags /
+#     folder_names / folder_paths / metadata_filters  ← optional filters
+#
+#   hybrid_search template shape:
+#     query        : raw user text (used for vector + BM25 hybrid)
+#     search_mode  : "hybrid"  (multi_match + two knn queries via rrf-pipeline)
+#     start_date / end_date / owners / categories / tags /
+#     folder_names / folder_paths / metadata_filters  ← optional filters
+#     (match_mode / must_terms / should_terms are NOT used)
+#
+#   no_search template shape:
+#     query        : raw user text (forwarded directly to LLM)
+#     (no OpenSearch call is made)
+#
+# Agent 2  (_build_task_type_prompt)
+#   Sees the chosen strategy + a preview of search results and decides
+#   what to do with them.
+#   Output → one of: list_documents | answer_question |
+#                    summarize_results | count_results | single_doc_summary
+#
+# Intent derivation  (_derive_intent_from_plan)
+#   Combines (search_strategy, task_type) → IntentType for the stream router.
+#
+#   Strategy × Task → Intent
+#   ┌──────────────────┬──────────────────────┬──────────────────────────┐
+#   │ search_strategy  │ task_type            │ intent                   │
+#   ├──────────────────┼──────────────────────┼──────────────────────────┤
+#   │ keyword_search   │ list_documents       │ KEYWORD_SEARCH           │
+#   │ hybrid_search    │ list_documents       │ SEMANTIC_SEARCH          │
+#   │ keyword_search   │ answer_question      │ GENERAL_RAG_QA           │
+#   │ hybrid_search    │ answer_question      │ GENERAL_RAG_QA           │
+#   │ keyword_search   │ summarize_results    │ MIXED_SEARCH_SUMMARY     │
+#   │ hybrid_search    │ summarize_results    │ MIXED_SEARCH_SUMMARY     │
+#   │ keyword_search   │ count_results        │ STATS_COUNT              │
+#   │ hybrid_search    │ count_results        │ STATS_COUNT              │
+#   │ any              │ single_doc_summary   │ SINGLE_DOC_SUMMARY       │
+#   │ no_search        │ answer_question      │ FREE_OPEN_CHAT           │
+#   └──────────────────┴──────────────────────┴──────────────────────────┘
+# ---------------------------------------------------------------------------
 
 class IntentType(str, Enum):
-    KEYWORD_SEARCH = "keyword_search"
-    SEMANTIC_SEARCH = "semantic_search"
-    STATS_COUNT = "stats_count"
-    SINGLE_DOC_SUMMARY = "single_doc_summary"
-    MIXED_SEARCH_SUMMARY = "mixed_search_summary"
-    GENERAL_RAG_QA = "general_rag_qa"
-    FREE_OPEN_CHAT = "free_open_chat"
+    # Final routing target used by _build_agent_stream.
+    KEYWORD_SEARCH = "keyword_search"        # literal term search → list docs
+    SEMANTIC_SEARCH = "semantic_search"      # hybrid vector+BM25 → list docs
+    STATS_COUNT = "stats_count"              # count matched documents
+    SINGLE_DOC_SUMMARY = "single_doc_summary"  # summarise one document by ID
+    MIXED_SEARCH_SUMMARY = "mixed_search_summary"  # search then summarise results
+    GENERAL_RAG_QA = "general_rag_qa"        # search then answer via LLM+context
+    FREE_OPEN_CHAT = "free_open_chat"        # no search, direct LLM conversation
 
 
 class SearchStrategy(str, Enum):
-    KEYWORD_SEARCH = "keyword_search"
-    HYBRID_SEARCH = "hybrid_search"
-    NO_SEARCH = "no_search"
+    # Chosen by Agent 1.
+    KEYWORD_SEARCH = "keyword_search"   # uses match_mode + must/should_terms
+    HYBRID_SEARCH = "hybrid_search"     # uses vector knn + BM25 via rrf-pipeline
+    NO_SEARCH = "no_search"             # skips OpenSearch entirely
 
 
 class TaskType(str, Enum):
-    LIST_DOCUMENTS = "list_documents"
-    ANSWER_QUESTION = "answer_question"
-    SUMMARIZE_RESULTS = "summarize_results"
-    COUNT_RESULTS = "count_results"
-    SINGLE_DOC_SUMMARY = "single_doc_summary"
+    # Chosen by Agent 2 after seeing retrieved results.
+    LIST_DOCUMENTS = "list_documents"       # return a list of matching doc titles/IDs
+    ANSWER_QUESTION = "answer_question"     # answer using retrieved context or open chat
+    SUMMARIZE_RESULTS = "summarize_results" # summarise the retrieved result set
+    COUNT_RESULTS = "count_results"         # return a document count only
+    SINGLE_DOC_SUMMARY = "single_doc_summary"  # deep-summarise one specific document
 
 class IntentResult(BaseModel):
     intent: IntentType
@@ -372,6 +430,43 @@ def _summarize_search_template_for_log(parameters: dict[str, Any]) -> dict[str, 
 # ---------------------------------------------------------------------------
 
 class KeywordSearchAgent:
+    """
+    Executes a structured keyword search against OpenSearch.
+
+    Expected search template fields
+    ────────────────────────────────
+    match_mode     : "exact_phrase" | "all_terms" | "any_terms" | None
+    exact_phrase   : str   – literal phrase query  (match_mode="exact_phrase")
+    must_terms     : list  – every term must match  (match_mode="all_terms")
+                             → builds one must:multi_match clause per term
+    should_terms   : list  – at least one term matches (match_mode="any_terms")
+                             → builds should clauses with minimum_should_match=1
+    query          : str   – plain free-text fallback when no term lists supplied
+
+    Common filter fields (all optional)
+    ─────────────────────────────────────
+    start_date / end_date  : ISO date strings → range filter on created_at
+    owners                 : list[str]  → terms filter on owner field
+    categories             : list[str]  → terms filter on category field
+    tags                   : list[str]  → terms filter on tags field
+    folder_names           : list[str]  → terms filter on folder_name field
+    folder_paths           : list[str]  → terms filter on folder_path.keyword
+    metadata_filters       : dict[str, str] → nested key/value filters
+
+    OpenSearch query shape produced
+    ─────────────────────────────────
+    {
+      "query": {
+        "bool": {
+          "must":   [ { "multi_match": { "query": term, "operator": "and" } }, ... ],
+          "should": [ { "multi_match": { "query": term, "operator": "and" } }, ... ],
+          "filter": [ <date/owner/category/tag/folder/metadata clauses> ]
+        }
+      }
+    }
+    Falls back to a plain multi_match on the full query string when no
+    term lists are filled and match_mode cannot be inferred.
+    """
     @staticmethod
     async def execute(question: str, filters: dict = None, parameters: dict[str, Any] | None = None) -> dict:
         params = parameters or {}
@@ -388,6 +483,13 @@ class KeywordSearchAgent:
 
             exact_phrase = params.get("exact_phrase")
             match_mode = params.get("match_mode")
+            # Infer match_mode when the LLM left it null but supplied terms.
+            if not match_mode:
+                if params.get("must_terms"):
+                    match_mode = "all_terms"
+                elif params.get("should_terms"):
+                    match_mode = "any_terms"
+
             if match_mode == "exact_phrase" and exact_phrase:
                 must_clauses.append(
                     {
@@ -437,7 +539,7 @@ class KeywordSearchAgent:
                 "size": per_page,
                 "highlight": {
                     "fields": {
-                        "ocr_content": {},
+                        "ocr_content": {"type": "unified", "number_of_fragments": 3, "fragment_size": 300},
                         "title": {},
                         "description": {},
                         "metadata_text": {},
@@ -476,6 +578,38 @@ class KeywordSearchAgent:
         }
 
 class SemanticSearchAgent:
+    """
+    Executes a hybrid vector + BM25 search via OpenSearch's rrf-pipeline.
+
+    Expected search template fields
+    ────────────────────────────────
+    query          : str  – natural language query text
+                           encoded into a vector by the E5 embedding model;
+                           also used as the BM25 multi_match query
+    search_mode    : "hybrid" (always; text-only falls back to multi_match)
+
+    Common filter fields (all optional, same as KeywordSearchAgent)
+    ─────────────────────────────────────────────────────────────────
+    start_date / end_date / owners / categories / tags /
+    folder_names / folder_paths / metadata_filters
+
+    OpenSearch query shape produced
+    ─────────────────────────────────
+    {
+      "query": {
+        "hybrid": {
+          "queries": [
+            { "multi_match": { "query": "<text>" } },          ← BM25
+            { "knn": { "chatbot_title_embedding":   { ... } } }, ← title vector
+            { "knn": { "chatbot_ocr_content_embedding": { ... } } }  ← content vector
+          ]
+        }
+      },
+      "search_pipeline": "rrf-pipeline"   ← reciprocal-rank fusion
+    }
+    Results are ranked by RRF score combining all three sub-queries.
+    Falls back to plain multi_match when the embedding model is unavailable.
+    """
     @staticmethod
     async def execute(question: str, filters: dict = None, parameters: dict[str, Any] | None = None) -> dict:
         params = parameters or {}
@@ -714,25 +848,37 @@ async def _build_agent_stream(question: str, chat_id: Optional[str], intent_resu
 
     if intent == IntentType.KEYWORD_SEARCH:
         agent_result = prefetched_search_result or await KeywordSearchAgent.execute(question, parameters=params)
-        if agent_result.get("results"):
+        results = agent_result.get("results", [])
+        if results:
             answer = f"Found {agent_result['total']} documents matching your keyword search.\nTop results:\n"
-            for result in agent_result["results"][:5]:
+            for result in results[:5]:
                 title = result["source"].get("title", "Untitled")
                 answer += f"- {title} (ID: {result['id']})\n"
         else:
             answer = "No documents found for your keyword search."
-        return _stream_text_response(answer, resolved_chat_id, intent, classification_meta)
+        sources = [_summarize_result_for_log(r) for r in results[:5]]
+        return _wrap_stream_with_metadata(
+            _stream_text_response(answer, resolved_chat_id, intent),
+            intent,
+            {"sources": sources, **classification_meta},
+        )
 
     if intent == IntentType.SEMANTIC_SEARCH:
         agent_result = prefetched_search_result or await SemanticSearchAgent.execute(question, parameters=params)
-        if agent_result.get("results"):
+        results = agent_result.get("results", [])
+        if results:
             answer = f"Found {agent_result['total']} similar cases.\nMost relevant:\n"
-            for result in agent_result["results"][:5]:
+            for result in results[:5]:
                 title = result["source"].get("title", "Untitled")
                 answer += f"- {title} (ID: {result['id']}, score: {result['score']:.2f})\n"
         else:
             answer = "No similar cases found."
-        return _stream_text_response(answer, resolved_chat_id, intent, classification_meta)
+        sources = [_summarize_result_for_log(r) for r in results[:5]]
+        return _wrap_stream_with_metadata(
+            _stream_text_response(answer, resolved_chat_id, intent),
+            intent,
+            {"sources": sources, **classification_meta},
+        )
 
     if intent == IntentType.STATS_COUNT:
         agent_result = prefetched_search_result or await _execute_search_strategy(question, params, search_strategy)
@@ -815,6 +961,35 @@ async def _build_agent_stream(question: str, chat_id: Optional[str], intent_resu
 
 
 def build_search_parameters(question: str) -> dict[str, Any]:
+    """
+    Returns the default (blank) search template that Agent 1 will fill.
+
+    Full search template schema
+    ────────────────────────────
+    Shared by both keyword_search and hybrid_search strategies.
+    Agent 1 populates only the fields relevant to the chosen strategy.
+
+    ┌─────────────────────┬────────────────────────────────────────────────────┐
+    │ Field               │ Used by                                            │
+    ├─────────────────────┼────────────────────────────────────────────────────┤
+    │ query               │ Both – free-text query / fallback                  │
+    │ search_mode         │ hybrid_search: "hybrid" / keyword_search: "text"   │
+    │ match_mode          │ keyword_search: exact_phrase|all_terms|any_terms    │
+    │ exact_phrase        │ keyword_search + match_mode="exact_phrase"          │
+    │ must_terms          │ keyword_search + match_mode="all_terms"  (AND)      │
+    │ should_terms        │ keyword_search + match_mode="any_terms"  (OR)       │
+    │ start_date          │ Both – ISO date lower bound for created_at range    │
+    │ end_date            │ Both – ISO date upper bound for created_at range    │
+    │ owners              │ Both – filter by owner field                        │
+    │ categories          │ Both – filter by category field                     │
+    │ tags                │ Both – filter by tags field                         │
+    │ folder_names        │ Both – filter by folder_name field                  │
+    │ folder_paths        │ Both – filter by folder_path.keyword field          │
+    │ metadata_filters    │ Both – nested key/value metadata filter             │
+    │ search_strategy     │ Propagated to IntentResult for routing              │
+    │ task_type           │ Propagated to IntentResult for routing              │
+    └─────────────────────┴────────────────────────────────────────────────────┘
+    """
     # Let the LLM fill the same search template shape used by the frontend filter section.
     exact_phrase = None
     must_terms: list[str] = []
@@ -992,6 +1167,19 @@ def _normalize_task_type(task_value: Any, intent_value: Any) -> TaskType:
 
 
 def _derive_intent_from_plan(search_strategy: SearchStrategy, task_type: TaskType) -> IntentType:
+    """
+    Maps the two-agent classification output to the final IntentType used
+    by the stream router (_build_agent_stream).
+
+    Priority order (highest wins):
+      1. single_doc_summary  → SINGLE_DOC_SUMMARY  (regardless of strategy)
+      2. no_search           → FREE_OPEN_CHAT       (no retrieval; pure LLM chat)
+      3. count_results       → STATS_COUNT          (return document count)
+      4. summarize_results   → MIXED_SEARCH_SUMMARY (search + LLM summarisation)
+      5. answer_question     → GENERAL_RAG_QA       (search + LLM answer)
+      6. keyword + list_docs → KEYWORD_SEARCH       (return keyword hit list)
+      7. hybrid + list_docs  → SEMANTIC_SEARCH      (return vector-ranked list)
+    """
     if task_type == TaskType.SINGLE_DOC_SUMMARY:
         return IntentType.SINGLE_DOC_SUMMARY
     if search_strategy == SearchStrategy.NO_SEARCH:
@@ -1046,6 +1234,7 @@ def _call_classifier_llm(prompt: str) -> dict[str, Any] | None:
 
 
 def _build_search_strategy_prompt(question: str, base_parameters: dict[str, Any]) -> str:
+    current_year = datetime.now().year
     return f"""Return JSON only.
 
 You are agent1 in a sequential workflow.
@@ -1056,6 +1245,8 @@ User question:
 
 Initial search template:
 {json.dumps(base_parameters, ensure_ascii=False)}
+
+Current year: {current_year}
 
 Rules:
 - Choose exactly one search_strategy: keyword_search, hybrid_search, or no_search.
@@ -1069,14 +1260,21 @@ Rules:
 - If the user wants documents containing term A and term B, use match_mode="all_terms" and return must_terms.
 - If the user wants documents containing term A or term B, use match_mode="any_terms" and return should_terms.
 - Only use match_mode="exact_phrase" and phrase when the user clearly asks for an exact phrase or literal adjacency match.
+- If the only filter is a date, owner, category, folder, or tag (no keyword terms), use hybrid_search, not keyword_search.
+
 
 Examples:
 - Query: documents containing "金融" and "貨幣"
   Return: search_strategy="keyword_search", match_mode="all_terms", must_terms=["金融", "貨幣"]
 - Query: find similar tenancy cases
   Return: search_strategy="hybrid_search"
-- Query: what is the difference between civil law and criminal law?
-  Return: search_strategy="no_search"
+- Query: find the docs updated 18/4/2026
+  Return: search_strategy="hybrid_search", start_date="2026-04-18", end_date="2026-04-18"
+- Query: show documents created in March 2026
+  Return: search_strategy="hybrid_search", start_date="2026-03-01", end_date="2026-03-31"
+- Query: documents from 2025 about currency
+  Return: search_strategy="keyword_search", should_terms=["currency"], start_date="2025-01-01", end_date="2025-12-31"
+
 
 Response schema:
 {{
@@ -1837,7 +2035,7 @@ def _build_search_body(req: SearchRequest) -> tuple[dict[str, Any], dict[str, st
         "size": size,
         "highlight": {
             "fields": {
-                "ocr_content": {},
+                "ocr_content": {"type": "unified", "number_of_fragments": 3, "fragment_size": 300},
                 "title": {},
                 "description": {},
                 "metadata_text": {},
@@ -1897,6 +2095,8 @@ def _build_search_body(req: SearchRequest) -> tuple[dict[str, Any], dict[str, st
         body["query"] = {"bool": {"filter": filter_clauses}}
     else:
         body["query"] = {"match_all": {}}
+
+    print("search body:", json.dumps(body, indent=2))
     return body, date_filter
 
 # ---------------------------------------------------------------------------
@@ -1920,6 +2120,28 @@ def startup() -> None:
                 }
             },
         )
+
+    # Housekeeping: remove chatbot index entries whose document no longer exists
+    # in dms-documents.
+    try:
+        url = f"{DMS_BASE_URL}/api/chatbot/index/housekeeping"
+        resp = requests.post(url, timeout=30)
+        if resp.ok:
+            result = resp.json()
+            logger.info(
+                "Chatbot index housekeeping complete: scanned=%s deleted=%s",
+                result.get("scanned", "?"),
+                result.get("deleted", "?"),
+            )
+        else:
+            logger.warning(
+                "Chatbot index housekeeping returned HTTP %s: %s",
+                resp.status_code,
+                resp.text[:200],
+            )
+    except Exception as exc:
+        # Non-fatal: log and continue startup.
+        logger.warning("Chatbot index housekeeping skipped: %s", exc)
 
 @app.get("/health")
 def health() -> dict[str, Any]:

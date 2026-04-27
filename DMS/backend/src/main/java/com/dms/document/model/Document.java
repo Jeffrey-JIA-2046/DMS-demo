@@ -17,6 +17,13 @@ public class Document {
     private String description;
     private String owner;
     private String category;
+
+    @JsonProperty("category_code")
+    private String categoryCode;
+
+    @JsonProperty("category_label")
+    private String categoryLabel;
+
     private DocumentStatus status = DocumentStatus.DRAFT;
 
     @JsonProperty("folder_id")
@@ -112,6 +119,22 @@ public class Document {
 
     public void setCategory(String category) {
         this.category = category;
+    }
+
+    public String getCategoryCode() {
+        return categoryCode;
+    }
+
+    public void setCategoryCode(String categoryCode) {
+        this.categoryCode = categoryCode;
+    }
+
+    public String getCategoryLabel() {
+        return categoryLabel;
+    }
+
+    public void setCategoryLabel(String categoryLabel) {
+        this.categoryLabel = categoryLabel;
     }
 
     public DocumentStatus getStatus() {

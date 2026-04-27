@@ -176,6 +176,7 @@ public class MysqlToOpenSearchDocumentMigration {
         String descriptionColumn = choose(columns, "description", "summary", "details");
         String ownerColumn = choose(columns, "owner", "created_by", "author", "username");
         String categoryColumn = choose(columns, "category", "type");
+        String categoryCodeColumn = choose(columns, "category_code");
         String statusColumn = choose(columns, "status", "state");
         String folderIdColumn = choose(columns, "folder_id", "document_folder_id", "folder");
         String approverIdColumn = choose(columns, "approver_id", "approved_by", "approver");
@@ -206,6 +207,9 @@ public class MysqlToOpenSearchDocumentMigration {
                 document.setDescription(asStringOrNull(rs.getObject(descriptionColumn)));
                 document.setOwner(defaultIfBlank(asString(rs.getObject(ownerColumn)), "system"));
                 document.setCategory(defaultIfBlank(asString(rs.getObject(categoryColumn)), "General"));
+                if (StringUtils.hasText(categoryCodeColumn)) {
+                    document.setCategoryCode(asStringOrNull(rs.getObject(categoryCodeColumn)));
+                }
                 document.setStatus(parseStatus(asString(rs.getObject(statusColumn))));
 
                 String folderId = asStringOrNull(rs.getObject(folderIdColumn));

@@ -1311,7 +1311,16 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   }
 
   const handleRunExtraction = async () => {
-    const ocrText = activeOcrPreviewContent
+    // Use all pages for extraction too, matching the embedding behaviour.
+    const ocrText = ocrPages.length > 1
+      ? ocrPages
+          .map((page, idx) => {
+            const content = typeof page.md_content === 'string' ? page.md_content.trim() : extractPagePreview(page)
+            return content ? `[Page ${idx + 1}]\n${content}` : ''
+          })
+          .filter(Boolean)
+          .join('\n\n---\n\n')
+      : activeOcrPreviewContent
     const metadataTemplate = selectedDocument?.folder?.metadataTemplate
     const effectivePrompt = selectedDocumentIsOcr ? ocrPrompt : 'prompt_ocr'
 
@@ -1363,7 +1372,17 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   }
 
   const handleRunEmbedding = async () => {
-    const ocrText = activeOcrPreviewContent
+    // For multi-page OCR documents, concatenate all pages' md_content so that
+    // the entire document is embedded, not just the currently-viewed page.
+    const ocrText = ocrPages.length > 1
+      ? ocrPages
+          .map((page, idx) => {
+            const content = typeof page.md_content === 'string' ? page.md_content.trim() : extractPagePreview(page)
+            return content ? `[Page ${idx + 1}]\n${content}` : ''
+          })
+          .filter(Boolean)
+          .join('\n\n---\n\n')
+      : activeOcrPreviewContent
     const embeddingDocument = selectedDocument ?? selectedListDocument ?? null
     const embeddingFolder = embeddingDocument?.folder ?? null
     const folderBreadcrumbs = Array.isArray(embeddingFolder?.breadcrumbs) ? embeddingFolder.breadcrumbs.filter(Boolean) : []
@@ -1733,7 +1752,20 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
                 <h4>Result Display</h4>
                 <div className="workspace-ocr-page-nav">
                   <button type="button" className="ghost" disabled={!ocrPages.length || ocrPageIndex <= 0} onClick={() => setOcrPageIndex((prev) => Math.max(prev - 1, 0))}>Prev</button>
-                  <span>{ocrPages.length ? `${ocrPageIndex + 1} / ${ocrPages.length}` : '0 / 0'}</span>
+                  <input
+                    type="number"
+                    className="workspace-ocr-page-nav__input"
+                    min={1}
+                    max={ocrPages.length || 1}
+                    value={ocrPages.length ? ocrPageIndex + 1 : ''}
+                    disabled={!ocrPages.length}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value, 10)
+                      if (!isNaN(v)) setOcrPageIndex(Math.min(Math.max(v - 1, 0), ocrPages.length - 1))
+                    }}
+                    aria-label="Page number"
+                  />
+                  <span className="workspace-ocr-page-nav__of">/ {ocrPages.length || 0}</span>
                   <button type="button" className="ghost" disabled={!ocrPages.length || ocrPageIndex >= ocrPages.length - 1} onClick={() => setOcrPageIndex((prev) => Math.min(prev + 1, ocrPages.length - 1))}>Next</button>
                 </div>
               </div>
@@ -2603,6 +2635,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
         <ChatbotPanel
           selectedDocument={selectedDocument}
           onDocumentSelect={setSelectedId}
+          onDocumentMaximize={handleDocumentMaximize}
           open={chatbotOpen}
           onOpenChange={setChatbotOpen}
           folders={folderTree}

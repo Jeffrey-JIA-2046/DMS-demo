@@ -11,6 +11,8 @@ public record DocumentSummaryResponse(
     String owner,
     String supervisor,
     String category,
+    String categoryCode,
+    String categoryLabel,
     DocumentStatus status,
     int confidenceScore,
     Set<String> tags,

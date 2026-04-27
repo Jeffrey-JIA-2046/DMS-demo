@@ -654,6 +654,7 @@ export default function UploadPanel({
     const normalizedMetadata = normalizeMetadataValues(selectedTemplate, metadataValues)
     setError('')
     setMetadataErrors({})
+
     onSubmit({
       ...form,
       owner: currentOwner,

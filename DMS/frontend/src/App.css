@@ -1312,6 +1312,8 @@
   padding: 0.75rem 1rem;
   border-bottom: 1px solid rgba(15, 23, 42, 0.08);
   background: rgba(248, 250, 255, 0.95);
+  cursor: move;
+  user-select: none;
 }
 
 .chatbot-floating-panel__title {
@@ -2381,6 +2383,49 @@
   color: rgba(248, 250, 255, 0.65);
 }
 
+.chatbot-panel__message--sources {
+  margin-top: -0.12rem;
+}
+
+.chatbot-panel__message--sources .chatbot-panel__message-content {
+  background: #f8fafc;
+  border: 1px dashed #94a3b8;
+}
+
+.chatbot-panel__sources-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.chatbot-panel__sources-heading {
+  margin: 0 0 0.4rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.chatbot-panel__source-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 0.42rem 0.7rem;
+  font-size: 0.85rem;
+  color: #1a5276;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.chatbot-panel__source-item:hover {
+  background: #e0f2fe;
+  border-color: #1a5276;
+}
+
 /* Template-mirrored chatbot layout */
 .chatbot-panel--template {
   margin-top: 0;
@@ -2809,6 +2854,16 @@
   background: #ffffff;
   color: #111827;
   border-color: #e5e7eb;
+}
+
+.chatbot-template__chat-section .chatbot-panel__message-meta {
+  color: #475569;
+}
+
+.chatbot-template__chat-section .chatbot-panel__message--sources .chatbot-panel__message-content {
+  background: #f8fafc;
+  color: #0f172a;
+  border-color: #cbd5e1;
 }
 
 /* Override code bg for light AI bubble */
@@ -3573,6 +3628,27 @@
   color: var(--ink-muted);
 }
 
+.workspace-ocr-page-nav__input {
+  width: 3.5rem;
+  padding: 0.2rem 0.35rem;
+  font-size: 0.85rem;
+  text-align: center;
+  border: 1px solid rgba(15, 23, 42, 0.2);
+  border-radius: 6px;
+  background: var(--surface, #fff);
+  color: var(--ink, #0f172a);
+}
+
+.workspace-ocr-page-nav__input:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.workspace-ocr-page-nav__of {
+  font-size: 0.85rem;
+  color: var(--ink-muted);
+}
+
 .workspace-ocr-card__preview-frame {
   width: 100%;
   min-height: 520px;
@@ -3739,7 +3815,7 @@
   align-items: center;
   justify-content: center;
   padding: 2rem;
-  z-index: 40;
+  z-index: 4000;
 }
 
 .document-viewer-modal__backdrop {

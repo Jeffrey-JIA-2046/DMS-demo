@@ -17,6 +17,8 @@ import com.dms.chatbot.dto.ChatSearchRequest;
 import com.dms.chatbot.dto.ChatSearchResponse;
 import com.dms.chatbot.dto.DocumentAnswerResponse;
 import com.dms.chatbot.dto.DocumentQuestionRequest;
+import com.dms.chatbot.service.ChatbotDocumentIndexService;
+import com.dms.chatbot.service.ChatbotDocumentIndexService.HousekeepingResult;
 import com.dms.chatbot.service.ChatbotService;
 
 import jakarta.validation.Valid;
@@ -26,9 +28,12 @@ import jakarta.validation.Valid;
 public class ChatbotController {
 
     private final ChatbotService chatbotService;
+    private final ChatbotDocumentIndexService chatbotDocumentIndexService;
 
-    public ChatbotController(ChatbotService chatbotService) {
+    public ChatbotController(ChatbotService chatbotService,
+                             ChatbotDocumentIndexService chatbotDocumentIndexService) {
         this.chatbotService = chatbotService;
+        this.chatbotDocumentIndexService = chatbotDocumentIndexService;
     }
 
     @PostMapping("/search")
@@ -89,5 +94,17 @@ public class ChatbotController {
         } catch (IOException ex) {
             throw new IllegalStateException("Failed to stream chunk", ex);
         }
+    }
+
+    /**
+     * POST /api/chatbot/index/housekeeping
+     *
+     * Scans the dms-documents-chatbot index and removes any entries whose document
+     * ID no longer exists in dms-documents. Returns a summary of how many entries
+     * were scanned and deleted.
+     */
+    @PostMapping("/index/housekeeping")
+    public HousekeepingResult runHousekeeping() {
+        return chatbotDocumentIndexService.runHousekeeping();
     }
 }

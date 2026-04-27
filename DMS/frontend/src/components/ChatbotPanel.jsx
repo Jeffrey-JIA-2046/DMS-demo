@@ -80,7 +80,13 @@ function formatMessageTime(value) {
   if (!value) return ''
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return ''
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const pad = (number) => String(number).padStart(2, '0')
+  const month = pad(date.getMonth() + 1)
+  const day = pad(date.getDate())
+  const hours = pad(date.getHours())
+  const minutes = pad(date.getMinutes())
+  const seconds = pad(date.getSeconds())
+  return `${month}-${day} ${hours}:${minutes}:${seconds}`
 }
 
 function formatRetrievedDocsMessage(sources = []) {
@@ -97,7 +103,11 @@ function formatRetrievedDocsMessage(sources = []) {
   return lines.join('\n')
 }
 
-export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open: openProp, onOpenChange, folders = [] }) {
+function nowIsoString() {
+  return new Date().toISOString()
+}
+
+export default function ChatbotPanel({ selectedDocument, onDocumentSelect, onDocumentMaximize, open: openProp, onOpenChange, folders = [] }) {
   const { toast } = useContext(AnnounceContext)
   const resizeStateRef = useRef(null)
   const sectionResizeStateRef = useRef(null)
@@ -271,8 +281,8 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
       })
   }, [selectedDocumentIds, allSelectableDocuments, selectedDocument])
 
-  const appendMessage = (role, content = '', loading = false) => {
-    setMessages((prev) => [...prev, createMessage(role, content, loading)])
+  const appendMessage = (role, content = '', loading = false, extra = {}) => {
+    setMessages((prev) => [...prev, createMessage(role, content, loading, extra)])
   }
 
   const updateLastAiMessage = (updater) => {
@@ -396,6 +406,34 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
 
     window.addEventListener('mousemove', handlePointerMove)
     window.addEventListener('mouseup', handlePointerUp)
+  }
+
+  const handleDragStart = (event) => {
+    // Ignore if the click originated from a button inside the toolbar
+    if (event.target.closest('button')) return
+    event.preventDefault()
+    event.stopPropagation()
+    const startX = event.clientX
+    const startY = event.clientY
+    const startLeft = panelPosition.left ?? Math.max(12, window.innerWidth - panelSize.width - 20)
+    const startTop = panelPosition.top ?? Math.max(12, window.innerHeight - panelSize.height - 80)
+
+    const handleMove = (moveEvent) => {
+      const dx = moveEvent.clientX - startX
+      const dy = moveEvent.clientY - startY
+      setPanelPosition({
+        left: Math.min(Math.max(startLeft + dx, 12), window.innerWidth - panelSize.width - 12),
+        top: Math.min(Math.max(startTop + dy, 12), window.innerHeight - panelSize.height - 12),
+      })
+    }
+
+    const handleUp = () => {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+    }
+
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
   }
 
   const handleSectionResizeStart = (section, event) => {
@@ -553,6 +591,7 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
         updateLastAiMessage((last) => ({
           content: `${last.loading ? '' : last.content}${chunk}`,
           loading: false,
+          timestamp: last.loading ? nowIsoString() : last.timestamp,
         }))
       })
       if (data?.chat_id) {
@@ -562,12 +601,13 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
       updateLastAiMessage(() => ({
         content: completedSummary || 'No summary was generated.',
         loading: false,
+        timestamp: nowIsoString(),
       }))
     } catch (err) {
       const message = err.message || 'Summary failed'
       setError(message)
       toast && toast(message, { type: 'error' })
-      updateLastAiMessage(() => ({ content: `Error: ${message}`, loading: false }))
+      updateLastAiMessage(() => ({ content: `Error: ${message}`, loading: false, timestamp: nowIsoString() }))
     } finally {
       setSummaryLoading(false)
     }
@@ -604,6 +644,7 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
         updateLastAiMessage((last) => ({
           content: `${last.loading ? '' : last.content}${chunk}`,
           loading: false,
+          timestamp: last.loading ? nowIsoString() : last.timestamp,
         }))
       })
       if (data?.chat_id) {
@@ -618,15 +659,16 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
       updateLastAiMessage(() => ({
         content: completedAnswer || 'No response was generated.',
         loading: false,
+        timestamp: nowIsoString(),
       }))
       if (data?.sources?.length) {
-        appendMessage('ai', formatRetrievedDocsMessage(data.sources))
+        appendMessage('ai', '', false, { kind: 'sources', sources: data.sources })
       }
     } catch (err) {
       const message = err.message || 'Unable to answer right now'
       setError(message)
       toast && toast(message, { type: 'error' })
-      updateLastAiMessage(() => ({ content: `Error: ${message}`, loading: false }))
+      updateLastAiMessage(() => ({ content: `Error: ${message}`, loading: false, timestamp: nowIsoString() }))
     } finally {
       setQaLoading(false)
     }
@@ -946,7 +988,10 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
 
           <div className="chatbot-panel__chat-window">
             {messages.map((message, index) => (
-              <div key={`${message.role}-${index}`} className={`chatbot-panel__message chatbot-panel__message--${message.role}`}>
+              <div
+                key={`${message.role}-${index}`}
+                className={`chatbot-panel__message chatbot-panel__message--${message.role}${message.kind ? ` chatbot-panel__message--${message.kind}` : ''}`}
+              >
                 <div className="chatbot-panel__message-content">
                   {message.role === 'user'
                     ? message.content
@@ -959,7 +1004,23 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
                           <span className="chatbot-panel__dot" />
                         </span>
                       )
-                      : <span dangerouslySetInnerHTML={{ __html: formatMessage(message.content) }} />
+                      : message.kind === 'sources'
+                        ? (
+                          <div className="chatbot-panel__sources-list">
+                            <p className="chatbot-panel__sources-heading">Retrieved documents</p>
+                            {(message.sources || []).map((source) => (
+                              <button
+                                key={source.id || source.title}
+                                type="button"
+                                className="chatbot-panel__source-item"
+                                onClick={() => onDocumentMaximize && onDocumentMaximize(source.id)}
+                              >
+                                {source.title || 'Untitled'}
+                              </button>
+                            ))}
+                          </div>
+                        )
+                        : <span dangerouslySetInnerHTML={{ __html: formatMessage(message.content) }} />
                   }
                 </div>
                 <div className="chatbot-panel__message-meta">
@@ -1022,7 +1083,7 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, open:
               top: panelPosition.top == null ? undefined : `${panelPosition.top}px`,
             }}
           >
-            <div className="chatbot-floating-panel__toolbar">
+            <div className="chatbot-floating-panel__toolbar" onMouseDown={handleDragStart}>
               <span className="chatbot-floating-panel__title">DeepSeek assistant</span>
               <button
                 type="button"

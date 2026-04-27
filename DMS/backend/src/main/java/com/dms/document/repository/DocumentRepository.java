@@ -33,6 +33,8 @@ import com.dms.repository.BaseOpenSearchRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.opensearch.client.opensearch.OpenSearchClient;
 import org.opensearch.client.opensearch._types.Refresh;
+import org.opensearch.client.opensearch.core.SearchRequest;
+import org.opensearch.client.opensearch.core.SearchResponse;
 import org.opensearch.client.opensearch.core.UpdateRequest;
 
 @Repository
@@ -94,7 +96,15 @@ public class DocumentRepository extends BaseOpenSearchRepository<Document> {
     @Override
     public List<Document> findAll() throws IOException {
         if (openSearchEnabled || dataSource == null) {
-            return super.findAll();
+            // Exclude raw file content bytes from the list query — this field is
+            // only needed for downloads, which go through findById (GET) instead.
+            SearchRequest request = new SearchRequest.Builder()
+                .index(getIndexName())
+                .size(10000)
+                .source(s -> s.filter(f -> f.excludes("versions.content")))
+                .build();
+            SearchResponse<Document> response = openSearchClient.search(request, Document.class);
+            return extractHits(response);
         }
 
         try (Connection conn = dataSource.getConnection()) {

@@ -11,6 +11,7 @@ C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\chatbot\dto\ChatSearchRequest
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\chatbot\dto\ChatSearchResponse.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\chatbot\dto\DocumentAnswerResponse.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\chatbot\dto\DocumentQuestionRequest.java
+C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\chatbot\service\ChatbotDocumentIndexService.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\chatbot\service\ChatbotService.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\chatbot\support\DocumentTextExtractor.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\codetable\controller\CodeTableAdminController.java

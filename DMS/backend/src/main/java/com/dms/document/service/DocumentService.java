@@ -69,6 +69,9 @@ import com.dms.user.dto.GroupSummary;
 import com.dms.user.model.AppUser;
 import com.dms.user.model.UserGroup;
 import com.dms.user.repository.AppUserRepository;
+import com.dms.chatbot.service.ChatbotDocumentIndexService;
+import com.dms.codetable.model.CodeTableItem;
+import com.dms.codetable.repository.CodeTableRepository;
 import com.dms.workflow.service.WorkflowService;
 
 @Service
@@ -102,6 +105,8 @@ public class DocumentService {
     private final DocumentOcrResultService documentOcrResultService;
     private final WorkflowService workflowService;
     private final Clock clock;
+    private final CodeTableRepository codeTableRepository;
+    private final ChatbotDocumentIndexService chatbotDocumentIndexService;
 
     public DocumentService(
         DocumentRepository documentRepository,
@@ -114,7 +119,9 @@ public class DocumentService {
         DocumentOcrProcessingService documentOcrProcessingService,
         DocumentOcrResultService documentOcrResultService,
         WorkflowService workflowService,
-        Clock clock
+        Clock clock,
+        CodeTableRepository codeTableRepository,
+        ChatbotDocumentIndexService chatbotDocumentIndexService
     ) {
         this.documentRepository = documentRepository;
         this.documentVersionRepository = documentVersionRepository;
@@ -127,6 +134,8 @@ public class DocumentService {
         this.documentOcrResultService = documentOcrResultService;
         this.workflowService = workflowService;
         this.clock = clock;
+        this.codeTableRepository = codeTableRepository;
+        this.chatbotDocumentIndexService = chatbotDocumentIndexService;
     }
 
     @Transactional(readOnly = true)
@@ -483,6 +492,10 @@ public class DocumentService {
             document.setDescription(request.description());
             document.setOwner(request.owner());
             document.setCategory(request.category());
+            if (StringUtils.hasText(request.categoryCode())) {
+                document.setCategoryCode(request.categoryCode());
+                document.setCategoryLabel(resolveCategoryLabel(request.categoryCode()));
+            }
             document.setTags(normalizeTags(request.tags()));
             DocumentFolder folder = findFolder(request.folderId());
             assertCanWrite(folder, user);
@@ -583,6 +596,11 @@ public class DocumentService {
                 document.setCategory(request.category());
                 changed = true;
             }
+            if (StringUtils.hasText(request.categoryCode())) {
+                document.setCategoryCode(request.categoryCode());
+                document.setCategoryLabel(resolveCategoryLabel(request.categoryCode()));
+                changed = true;
+            }
             if (request.tags() != null) {
                 document.setTags(normalizeTags(request.tags()));
                 changed = true;
@@ -673,6 +691,7 @@ public class DocumentService {
             assertCanDelete(resolveFolderForAccess(document), user);
             cancelLinkedTasks(document, "Deleted", Instant.now(clock));
             documentOcrResultService.invalidateDocumentCache(document.getId());
+            chatbotDocumentIndexService.deleteDocument(document.getId());
             removeIndexedAttachments(document);
             documentRepository.deleteById(String.valueOf(documentId));
         } catch (IOException ex) {
@@ -687,6 +706,7 @@ public class DocumentService {
             Instant now = Instant.now(clock);
             cancelLinkedTasks(document, "Disposed by retention policy", now);
             documentOcrResultService.invalidateDocumentCache(document.getId());
+            chatbotDocumentIndexService.deleteDocument(document.getId());
             removeIndexedAttachments(document);
             documentRepository.deleteById(String.valueOf(documentId));
             log.info("Disposed document {} by retention rule {} on {}", documentId, retentionRuleId, disposalDate);
@@ -1389,6 +1409,8 @@ public class DocumentService {
             document.getOwner(),
             supervisorLabel(document),
             document.getCategory(),
+            document.getCategoryCode(),
+            document.getCategoryLabel(),
             document.getStatus(),
             calculateConfidenceScore(document),
             detachTags(document),
@@ -1416,6 +1438,8 @@ public class DocumentService {
             document.getOwner(),
             supervisorLabel(document),
             document.getCategory(),
+            document.getCategoryCode(),
+            document.getCategoryLabel(),
             document.getStatus(),
             calculateConfidenceScore(document),
             detachTags(document),
@@ -1455,6 +1479,22 @@ public class DocumentService {
         double ratio = (double) filled / (double) template.size();
         int score = (int) Math.round(ratio * 100.0d);
         return Math.max(0, Math.min(100, score));
+    }
+
+    private String resolveCategoryLabel(String categoryCode) {
+        if (!StringUtils.hasText(categoryCode)) {
+            return null;
+        }
+        try {
+            return codeTableRepository.findByTableCode("CATEGORY").stream()
+                .filter(item -> categoryCode.equalsIgnoreCase(item.getItemCode()))
+                .map(CodeTableItem::getItemLabel)
+                .findFirst()
+                .orElse(null);
+        } catch (Exception ex) {
+            log.warn("Could not resolve category label for code '{}': {}", categoryCode, ex.getMessage());
+            return null;
+        }
     }
 
     private String supervisorLabel(Document document) {
