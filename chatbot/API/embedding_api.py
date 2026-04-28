@@ -50,12 +50,20 @@ SEARCH_INDEX_NAME = (
     or (os.getenv("SEARCH_INDEX_NAME") if os.getenv("SEARCH_INDEX_NAME") not in {None, "", "dms-documents"} else None)
     or DEFAULT_SEARCH_INDEX_NAME
 )
+DEFAULT_CHUNK_SEARCH_INDEX_NAME = "dms-documents-chatbot-chunks"
+CHUNK_SEARCH_INDEX_NAME = (
+    os.getenv("CHATBOT_CHUNK_SEARCH_INDEX_NAME")
+    or os.getenv("SEARCH_CHUNK_INDEX_NAME")
+    or DEFAULT_CHUNK_SEARCH_INDEX_NAME
+)
 EMBEDDING_MODEL_PATH = os.getenv("EMBEDDING_MODEL_PATH", "./local_models/multilingual-e5-small")
 EMBEDDING_DIMENSION = int(os.getenv("EMBEDDING_DIMENSION", "384"))
 MAX_CHUNK_SIZE = int(os.getenv("EMBEDDING_MAX_CHUNK_SIZE", "250"))
 TITLE_VECTOR_FIELD = os.getenv("SEARCH_TITLE_VECTOR_FIELD", "chatbot_title_embedding")
 CONTENT_VECTOR_FIELD = os.getenv("SEARCH_CONTENT_VECTOR_FIELD", "chatbot_ocr_content_embedding")
 CHUNKS_FIELD = os.getenv("SEARCH_CHUNKS_FIELD", "chatbot_ocr_content_chunks")
+CHUNK_TEXT_FIELD = os.getenv("SEARCH_CHUNK_TEXT_FIELD", "chunk_text")
+CHUNK_VECTOR_FIELD = os.getenv("SEARCH_CHUNK_VECTOR_FIELD", "chunk_embedding")
 
 _raw_origins = os.getenv("EMBEDDING_CORS_ORIGINS", "*")
 CORS_ORIGINS = ["*"] if _raw_origins.strip() == "*" else [o.strip() for o in _raw_origins.split(",") if o.strip()]
@@ -376,6 +384,71 @@ def _default_index_body() -> dict[str, Any]:
     }
 
 
+def _default_chunk_index_body() -> dict[str, Any]:
+    return {
+        "settings": {
+            "index": {
+                "knn": True,
+            }
+        },
+        "mappings": {
+            "properties": {
+                "chunk_id": {"type": "keyword"},
+                "chunk_index": {"type": "integer"},
+                CHUNK_TEXT_FIELD: {"type": "text"},
+                CHUNK_VECTOR_FIELD: {
+                    "type": "knn_vector",
+                    "dimension": EMBEDDING_DIMENSION,
+                    "method": {
+                        "name": "hnsw",
+                        "space_type": "cosinesimil",
+                        "engine": "faiss",
+                    },
+                },
+                "document_id": {"type": "keyword"},
+                "title": {
+                    "type": "text",
+                    "fields": {
+                        "keyword": {"type": "keyword", "ignore_above": 512},
+                    },
+                },
+                "category": {"type": "keyword"},
+                "owner": {"type": "keyword"},
+                "tags": {"type": "keyword"},
+                "folder_name": {
+                    "type": "text",
+                    "fields": {
+                        "keyword": {"type": "keyword", "ignore_above": 512},
+                    },
+                },
+                "folder_path": {
+                    "type": "text",
+                    "fields": {
+                        "keyword": {"type": "keyword", "ignore_above": 1024},
+                    },
+                },
+                "folder_breadcrumbs": {"type": "text"},
+                "document_metadata": {"type": "object", "enabled": True},
+                "metadata_text": {"type": "text"},
+                "metadata_entries": {
+                    "type": "nested",
+                    "properties": {
+                        "key": {"type": "keyword"},
+                        "value": {
+                            "type": "text",
+                            "fields": {
+                                "keyword": {"type": "keyword", "ignore_above": 1024},
+                            },
+                        },
+                    },
+                },
+                "created_at": {"type": "date"},
+                "updated_at": {"type": "date"},
+            }
+        },
+    }
+
+
 def ensure_search_index() -> None:
     if not es.indices.exists(index=SEARCH_INDEX_NAME):
         es.indices.create(index=SEARCH_INDEX_NAME, body=_default_index_body())
@@ -383,14 +456,21 @@ def ensure_search_index() -> None:
         return
 
     try:
-        es.indices.put_settings(index=SEARCH_INDEX_NAME, body={"index": {"knn": True}})
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Unable to update index settings for %s: %s", SEARCH_INDEX_NAME, exc)
-
-    try:
         es.indices.put_mapping(index=SEARCH_INDEX_NAME, body=_default_index_body()["mappings"])
     except Exception as exc:  # noqa: BLE001
         logger.warning("Unable to update index mapping for %s: %s", SEARCH_INDEX_NAME, exc)
+
+
+def ensure_chunk_search_index() -> None:
+    if not es.indices.exists(index=CHUNK_SEARCH_INDEX_NAME):
+        es.indices.create(index=CHUNK_SEARCH_INDEX_NAME, body=_default_chunk_index_body())
+        logger.info("Created chunk search index %s", CHUNK_SEARCH_INDEX_NAME)
+        return
+
+    try:
+        es.indices.put_mapping(index=CHUNK_SEARCH_INDEX_NAME, body=_default_chunk_index_body()["mappings"])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Unable to update chunk index mapping for %s: %s", CHUNK_SEARCH_INDEX_NAME, exc)
 
 
 def _load_existing_document(document_id: str) -> dict[str, Any]:
@@ -403,6 +483,7 @@ def _load_existing_document(document_id: str) -> dict[str, Any]:
 
 def _index_document(document_id: str, request: EmbeddingJobRequest) -> dict[str, Any]:
     ensure_search_index()
+    ensure_chunk_search_index()
 
     title = clean_text(request.title)
     description = clean_text(request.description)
@@ -463,13 +544,66 @@ def _index_document(document_id: str, request: EmbeddingJobRequest) -> dict[str,
     payload = {key: value for key, value in payload.items() if value is not None}
     es.index(index=SEARCH_INDEX_NAME, id=document_id, body=payload, refresh=True)
 
+    try:
+        es.delete_by_query(
+            index=CHUNK_SEARCH_INDEX_NAME,
+            body={"query": {"term": {"document_id": document_id}}},
+            refresh=True,
+            conflicts="proceed",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Unable to clear existing chunks for %s: %s", document_id, exc)
+
+    resolved_title = payload.get("title")
+    resolved_category = payload.get("category")
+    resolved_owner = payload.get("owner")
+    resolved_tags = payload.get("tags")
+    resolved_folder_name = payload.get("folder_name")
+    resolved_folder_path = payload.get("folder_path")
+    resolved_folder_breadcrumbs = payload.get("folder_breadcrumbs")
+    resolved_document_metadata = payload.get("document_metadata")
+    resolved_metadata_text = payload.get("metadata_text")
+    resolved_metadata_entries = payload.get("metadata_entries")
+    resolved_created_at = payload.get("created_at")
+
+    chunk_count = 0
+    for chunk_index, (chunk_value, chunk_embedding) in enumerate(zip(chunks, chunk_embeddings), start=1):
+        chunk_id = f"{document_id}::chunk::{chunk_index}"
+        chunk_doc = {
+            "chunk_id": chunk_id,
+            "chunk_index": chunk_index,
+            CHUNK_TEXT_FIELD: chunk_value,
+            CHUNK_VECTOR_FIELD: chunk_embedding,
+            "document_id": document_id,
+            "title": resolved_title,
+            "category": resolved_category,
+            "owner": resolved_owner,
+            "tags": resolved_tags,
+            "folder_name": resolved_folder_name,
+            "folder_path": resolved_folder_path,
+            "folder_breadcrumbs": resolved_folder_breadcrumbs,
+            "document_metadata": resolved_document_metadata,
+            "metadata_text": resolved_metadata_text,
+            "metadata_entries": resolved_metadata_entries,
+            "created_at": resolved_created_at,
+            "updated_at": now,
+        }
+        chunk_doc = {key: value for key, value in chunk_doc.items() if value is not None}
+        es.index(index=CHUNK_SEARCH_INDEX_NAME, id=chunk_id, body=chunk_doc, refresh=False)
+        chunk_count += 1
+
+    if chunk_count:
+        es.indices.refresh(index=CHUNK_SEARCH_INDEX_NAME)
+
     return {
         "document_id": document_id,
         "index": SEARCH_INDEX_NAME,
+        "chunk_index": CHUNK_SEARCH_INDEX_NAME,
         "chunk_count": len(chunks),
         "title_embedded": title_embedding is not None,
         "title_vector_field": TITLE_VECTOR_FIELD,
         "content_vector_field": CONTENT_VECTOR_FIELD,
+        "chunk_vector_field": CHUNK_VECTOR_FIELD,
         "updated_at": now,
     }
 
@@ -501,9 +635,11 @@ def health() -> dict[str, Any]:
     return {
         "ok": True,
         "search_index": SEARCH_INDEX_NAME,
+        "chunk_search_index": CHUNK_SEARCH_INDEX_NAME,
         "embedding_model_path": EMBEDDING_MODEL_PATH,
         "title_vector_field": TITLE_VECTOR_FIELD,
         "content_vector_field": CONTENT_VECTOR_FIELD,
+        "chunk_vector_field": CHUNK_VECTOR_FIELD,
         "job_count": len(_jobs),
     }
 

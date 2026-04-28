@@ -71,6 +71,8 @@ C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\service\FolderPermis
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\specification\DocumentQueryBuilder.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\specification\DocumentSpecifications.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\DocumentManagementApplication.java
+C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\embedding\client\EmbeddingApiClient.java
+C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\embedding\config\EmbeddingApiProperties.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\exception\AiServiceException.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\exception\GlobalExceptionHandler.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\exception\InvalidDocumentException.java

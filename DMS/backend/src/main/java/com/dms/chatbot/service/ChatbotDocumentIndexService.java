@@ -8,6 +8,7 @@ import org.opensearch.client.opensearch.OpenSearchClient;
 import org.opensearch.client.opensearch._types.OpenSearchException;
 import org.opensearch.client.opensearch._types.Refresh;
 import org.opensearch.client.opensearch.core.DeleteRequest;
+import org.opensearch.client.opensearch.core.DeleteByQueryRequest;
 import org.opensearch.client.opensearch.core.SearchRequest;
 import org.opensearch.client.opensearch.core.SearchResponse;
 import org.opensearch.client.opensearch.core.search.Hit;
@@ -35,6 +36,9 @@ public class ChatbotDocumentIndexService {
 
     @Value("${app.opensearch.chatbot-documents-index:dms-documents-chatbot}")
     private String chatbotDocumentsIndex;
+
+    @Value("${app.opensearch.chatbot-chunks-index:dms-documents-chatbot-chunks}")
+    private String chatbotChunksIndex;
 
     public ChatbotDocumentIndexService(OpenSearchClient openSearchClient,
                                        DocumentRepository documentRepository) {
@@ -71,6 +75,24 @@ public class ChatbotDocumentIndexService {
             }
         } catch (Exception ex) {
             log.warn("Could not delete chatbot index entry for document {}: {}", documentId, ex.getMessage());
+        }
+
+        try {
+            DeleteByQueryRequest chunkDeleteRequest = new DeleteByQueryRequest.Builder()
+                .index(chatbotChunksIndex)
+                .query(q -> q.term(t -> t.field("document_id").value(v -> v.stringValue(documentId))))
+                .refresh(true)
+                .build();
+            openSearchClient.deleteByQuery(chunkDeleteRequest);
+            log.debug("Deleted chatbot chunk index entries for document {}", documentId);
+        } catch (OpenSearchException ex) {
+            if (ex.getMessage() != null && ex.getMessage().contains("index_not_found_exception")) {
+                log.debug("Chatbot chunk index '{}' not found while deleting {}", chatbotChunksIndex, documentId);
+            } else {
+                log.warn("Could not delete chatbot chunk index entries for document {}: {}", documentId, ex.getMessage());
+            }
+        } catch (Exception ex) {
+            log.warn("Could not delete chatbot chunk index entries for document {}: {}", documentId, ex.getMessage());
         }
     }
 
@@ -128,12 +150,16 @@ public class ChatbotDocumentIndexService {
             }
 
             log.info("Chatbot index housekeeping complete: scanned={}, deleted={}", scanned, deleted);
-            return new HousekeepingResult(scanned, deleted, orphanIds);
+
+            // Also cleanup chunk index by document_id to keep behavior aligned with main chatbot index.
+            ChunkHousekeepingResult chunkResult = runChunkHousekeeping();
+
+            return new HousekeepingResult(scanned, deleted, orphanIds, chunkResult.scanned(), chunkResult.deleted());
 
         } catch (OpenSearchException ex) {
             if (ex.getMessage() != null && ex.getMessage().contains("index_not_found_exception")) {
                 log.info("Chatbot index '{}' does not exist yet – nothing to housekeep.", chatbotDocumentsIndex);
-                return new HousekeepingResult(0, 0, List.of());
+                return new HousekeepingResult(0, 0, List.of(), 0, 0);
             }
             throw new RuntimeException("Housekeeping failed while scanning chatbot index", ex);
         } catch (Exception ex) {
@@ -141,5 +167,63 @@ public class ChatbotDocumentIndexService {
         }
     }
 
-    public record HousekeepingResult(int scanned, int deleted, List<String> deletedIds) {}
+    private ChunkHousekeepingResult runChunkHousekeeping() {
+        int scannedChunks = 0;
+        int deletedChunks = 0;
+
+        try {
+            SearchRequest chunkSearchRequest = new SearchRequest.Builder()
+                .index(chatbotChunksIndex)
+                .source(s -> s.filter(f -> f.includes("document_id")))
+                .size(HOUSEKEEPING_BATCH_SIZE)
+                .build();
+
+            SearchResponse<Map> response = openSearchClient.search(chunkSearchRequest, Map.class);
+            List<Hit<Map>> hits = response.hits().hits();
+
+            for (Hit<Map> hit : hits) {
+                Map source = hit.source();
+                if (source == null) {
+                    continue;
+                }
+                Object docIdObj = source.get("document_id");
+                String documentId = docIdObj != null ? String.valueOf(docIdObj) : null;
+                if (documentId == null || documentId.isBlank()) {
+                    continue;
+                }
+
+                scannedChunks++;
+                try {
+                    if (documentRepository.findById(documentId).isEmpty()) {
+                        DeleteRequest deleteRequest = new DeleteRequest.Builder()
+                            .index(chatbotChunksIndex)
+                            .id(hit.id())
+                            .refresh(Refresh.WaitFor)
+                            .build();
+                        openSearchClient.delete(deleteRequest);
+                        deletedChunks++;
+                    }
+                } catch (Exception ex) {
+                    log.warn("Chunk housekeeping: failed while processing chunk {}: {}", hit.id(), ex.getMessage());
+                }
+            }
+
+            log.info("Chatbot chunk index housekeeping complete: scanned={}, deleted={}", scannedChunks, deletedChunks);
+            return new ChunkHousekeepingResult(scannedChunks, deletedChunks);
+        } catch (OpenSearchException ex) {
+            if (ex.getMessage() != null && ex.getMessage().contains("index_not_found_exception")) {
+                log.info("Chatbot chunk index '{}' does not exist yet – nothing to housekeep.", chatbotChunksIndex);
+                return new ChunkHousekeepingResult(0, 0);
+            }
+            log.warn("Chunk housekeeping failed: {}", ex.getMessage());
+            return new ChunkHousekeepingResult(scannedChunks, deletedChunks);
+        } catch (Exception ex) {
+            log.warn("Chunk housekeeping failed: {}", ex.getMessage());
+            return new ChunkHousekeepingResult(scannedChunks, deletedChunks);
+        }
+    }
+
+    public record HousekeepingResult(int scanned, int deleted, List<String> deletedIds, int chunkScanned, int chunkDeleted) {}
+
+    private record ChunkHousekeepingResult(int scanned, int deleted) {}
 }

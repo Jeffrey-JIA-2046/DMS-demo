@@ -139,6 +139,7 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, onDoc
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
   const [searchMode, setSearchMode] = useState('hybrid')
+  const [exactPhrase, setExactPhrase] = useState(false)
   const [filterConditions, setFilterConditions] = useState([createFilterCondition()])
   const [panelSize, setPanelSize] = useState({ width: 1180, height: 820 })
   const [panelPosition, setPanelPosition] = useState({ left: null, top: null })
@@ -534,6 +535,7 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, onDoc
         page,
         perPage,
         searchMode,
+        exactPhrase,
       })
       setSearchResults(data.results ?? [])
       setTotalResults(data.total ?? 0)
@@ -841,6 +843,16 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, onDoc
               />
               <span>Text Search Only</span>
             </label>
+            {searchMode === 'text' && (
+              <label style={{ marginLeft: 16 }}>
+                <input
+                  type="checkbox"
+                  checked={exactPhrase}
+                  onChange={(e) => setExactPhrase(e.target.checked)}
+                />
+                <span style={{ marginLeft: 4 }}>Exact Phrase</span>
+              </label>
+            )}
             <label>
               <input
                 type="radio"

@@ -28,6 +28,7 @@ com\dms\extraction\service\DocumentExtractionProcessingService$1.class
 com\dms\knowledge\repository\KnowledgeTopicRepository.class
 com\dms\chatbot\client\DeepSeekClient$ChatResponse.class
 com\dms\config\MysqlToOpenSearchDocumentMigration$1.class
+com\dms\chatbot\service\ChatbotDocumentIndexService$ChunkHousekeepingResult.class
 com\dms\exception\InvalidDocumentException.class
 com\dms\workflow\repository\WorkflowRepository.class
 com\dms\document\dto\FolderPermissionsResponse.class
@@ -63,6 +64,7 @@ com\dms\knowledge\dto\KnowledgeShareResponse.class
 com\dms\ocr\client\DotsOcrClient.class
 com\dms\audit\controller\AuditController.class
 com\dms\retention\dto\RetentionSweepResponse.class
+com\dms\embedding\client\EmbeddingApiClient.class
 com\dms\workflow\model\WorkflowCategoryBinding.class
 com\dms\document\dto\FolderMetadataFieldDto.class
 com\dms\document\model\DocumentStatus.class
@@ -175,6 +177,7 @@ com\dms\workflow\repository\WorkflowRepository$2.class
 com\dms\chatbot\support\DocumentTextExtractor.class
 com\dms\task\model\UserTask.class
 com\dms\job\service\JobManagementService$1.class
+com\dms\embedding\config\EmbeddingApiProperties.class
 com\dms\ocr\service\DocumentOcrResultService$1.class
 com\dms\config\MysqlToOpenSearchDocumentMigration$2.class
 com\dms\document\model\DocumentFolder.class
@@ -208,6 +211,7 @@ com\dms\workflow\model\WorkflowConnection.class
 com\dms\workflow\service\NoOpAutoActivity.class
 com\dms\chatbot\service\ChatbotDocumentIndexService.class
 com\dms\document\dto\DocumentExtractionSaveRequest.class
+com\dms\embedding\client\EmbeddingApiClient$1.class
 com\dms\knowledge\service\KnowledgeTopicService.class
 com\dms\document\service\DocumentService$1.class
 com\dms\reminder\dto\ReminderSweepResponse.class

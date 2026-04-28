@@ -7,10 +7,13 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.slf4j.Logger;
@@ -21,8 +24,10 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import com.dms.document.model.Document;
+import com.dms.document.model.DocumentFolder;
 import com.dms.document.model.DocumentVersion;
 import com.dms.document.repository.DocumentRepository;
+import com.dms.embedding.client.EmbeddingApiClient;
 import com.dms.exception.ResourceNotFoundException;
 import com.dms.extraction.service.DocumentExtractionProcessingService;
 import com.dms.ocr.client.DotsOcrClient;
@@ -39,6 +44,7 @@ public class DocumentOcrProcessingService {
     private final DotsOcrClient dotsOcrClient;
     private final DocumentOcrResultService documentOcrResultService;
     private final DocumentExtractionProcessingService documentExtractionProcessingService;
+    private final EmbeddingApiClient embeddingApiClient;
     private final Clock clock;
 
     public DocumentOcrProcessingService(
@@ -46,12 +52,14 @@ public class DocumentOcrProcessingService {
         DotsOcrClient dotsOcrClient,
         DocumentOcrResultService documentOcrResultService,
         DocumentExtractionProcessingService documentExtractionProcessingService,
+        EmbeddingApiClient embeddingApiClient,
         Clock clock
     ) {
         this.documentRepository = documentRepository;
         this.dotsOcrClient = dotsOcrClient;
         this.documentOcrResultService = documentOcrResultService;
         this.documentExtractionProcessingService = documentExtractionProcessingService;
+        this.embeddingApiClient = embeddingApiClient;
         this.clock = clock;
     }
 
@@ -112,11 +120,103 @@ public class DocumentOcrProcessingService {
             if (runDataExtraction) {
                 documentExtractionProcessingService.extractAndApplyMetadata(documentId, saved);
             }
-            // Embedding is triggered from frontend after OCR is ready.
+            if (runEmbedding) {
+                queueEmbeddingJob(document, saved);
+            }
             return saved;
         } catch (IOException ex) {
             throw new RuntimeException("Failed to process OCR for stored document", ex);
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void queueEmbeddingJob(Document document, Map<String, Object> savedOcrPayload) {
+        String ocrText = extractOcrText(savedOcrPayload);
+        if (!StringUtils.hasText(ocrText)) {
+            log.warn("Skip embedding for document {} because OCR text is empty", document.getId());
+            return;
+        }
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("document_id", document.getId());
+        payload.put("title", StringUtils.hasText(document.getTitle()) ? document.getTitle() : document.getId());
+        payload.put("description", document.getDescription());
+        payload.put("ocr_text", ocrText);
+        payload.put("category", document.getCategory());
+        payload.put("owner", document.getOwner());
+        payload.put("tags", normalizeTags(document.getTags()));
+        payload.put("document_metadata", new HashMap<>(document.getMetadataValues() != null ? document.getMetadataValues() : Map.of()));
+
+        DocumentFolder folder = document.getFolder();
+        payload.put("folder_name", folder != null ? folder.getName() : null);
+        payload.put("folder_path", folder != null ? folder.getName() : null);
+        payload.put("folder_breadcrumbs", buildFolderBreadcrumbs(folder));
+        payload.put("created_at", document.getCreatedAt() != null ? document.getCreatedAt().toString() : null);
+
+        try {
+            Map<String, Object> response = embeddingApiClient.startJob(payload);
+            log.info("Queued embedding job for document {} with response: {}", document.getId(), response);
+        } catch (Exception ex) {
+            // Non-fatal for OCR completion: log and continue.
+            log.warn("Failed to queue embedding job for document {}", document.getId(), ex);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private String extractOcrText(Map<String, Object> savedOcrPayload) {
+        Object preview = savedOcrPayload.get("preview_markdown");
+        if (preview instanceof String previewText && StringUtils.hasText(previewText)) {
+            return previewText;
+        }
+
+        Object results = savedOcrPayload.get("results");
+        if (!(results instanceof List<?> pages)) {
+            return "";
+        }
+
+        StringBuilder combined = new StringBuilder();
+        for (Object pageObj : pages) {
+            if (!(pageObj instanceof Map<?, ?> page)) {
+                continue;
+            }
+            Object md = ((Map<String, Object>) page).get("md_content");
+            if (md == null) {
+                continue;
+            }
+            String mdText = String.valueOf(md).trim();
+            if (!StringUtils.hasText(mdText)) {
+                continue;
+            }
+            if (combined.length() > 0) {
+                combined.append("\n\n---\n\n");
+            }
+            combined.append(mdText);
+        }
+        return combined.toString();
+    }
+
+    private List<String> normalizeTags(Set<String> tags) {
+        if (tags == null || tags.isEmpty()) {
+            return List.of();
+        }
+        return tags.stream()
+            .filter(StringUtils::hasText)
+            .map(String::trim)
+            .distinct()
+            .collect(Collectors.toList());
+    }
+
+    private List<String> buildFolderBreadcrumbs(DocumentFolder folder) {
+        if (folder == null) {
+            return List.of();
+        }
+        List<String> breadcrumbs = new ArrayList<>();
+        DocumentFolder current = folder;
+        while (current != null && StringUtils.hasText(current.getName())) {
+            breadcrumbs.add(0, current.getName().trim());
+            current = current.getParent();
+        }
+        return breadcrumbs;
     }
 
     @Transactional

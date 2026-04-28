@@ -49,9 +49,17 @@ SEARCH_INDEX_NAME = (
     or (os.getenv("SEARCH_INDEX_NAME") if os.getenv("SEARCH_INDEX_NAME") not in {None, "", "dms-documents"} else None)
     or DEFAULT_SEARCH_INDEX_NAME
 )
+DEFAULT_CHUNK_SEARCH_INDEX_NAME = "dms-documents-chatbot-chunks"
+CHUNK_SEARCH_INDEX_NAME = (
+    os.getenv("CHATBOT_CHUNK_SEARCH_INDEX_NAME")
+    or os.getenv("SEARCH_CHUNK_INDEX_NAME")
+    or DEFAULT_CHUNK_SEARCH_INDEX_NAME
+)
 CHAT_LOG_INDEX = os.getenv("CHAT_LOG_INDEX", "chat_logs_dms")
 TITLE_VECTOR_FIELD = os.getenv("SEARCH_TITLE_VECTOR_FIELD", "chatbot_title_embedding")
 CONTENT_VECTOR_FIELD = os.getenv("SEARCH_CONTENT_VECTOR_FIELD", "chatbot_ocr_content_embedding")
+CHUNK_VECTOR_FIELD = os.getenv("SEARCH_CHUNK_VECTOR_FIELD", "chunk_embedding")
+CHUNK_TEXT_FIELD = os.getenv("SEARCH_CHUNK_TEXT_FIELD", "chunk_text")
 
 LLM_API = os.getenv("LLM_API", "http://localhost:11434/api/chat")
 LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-r1:14b")
@@ -63,6 +71,7 @@ DMS_BASE_URL = os.getenv("DMS_BASE_URL", "http://localhost:8080")
 MAX_CONTEXT_LENGTH = int(os.getenv("MAX_CONTEXT_LENGTH", "5000"))
 WARNING_THRESHOLD = int(os.getenv("WARNING_THRESHOLD", "4000"))
 VERBOSE_LOGS = os.getenv("CHATBOT_VERBOSE_LOGS", "false").lower() == "true"
+DEBUG_SEARCH_BODY = os.getenv("CHATBOT_DEBUG_SEARCH_BODY", "true").lower() == "true"
 
 _raw_origins = os.getenv("CHATBOT_CORS_ORIGINS", "*")
 CORS_ORIGINS = ["*"] if _raw_origins.strip() == "*" else [x.strip() for x in _raw_origins.split(",") if x.strip()]
@@ -190,6 +199,16 @@ def _log_workflow_step(step: int, title: str, payload: Any | None = None, verbos
         return
     logger.info("%s | %s", message, _truncate_for_log(payload))
 
+
+def _log_search_body(label: str, index_name: str, body: dict[str, Any]) -> None:
+    if not DEBUG_SEARCH_BODY:
+        return
+    try:
+        rendered = json.dumps(body, ensure_ascii=False, indent=2)
+    except Exception:  # noqa: BLE001
+        rendered = repr(body)
+    logger.info("%s | index=%s\n%s", label, index_name, rendered)
+
 # ---------------------------------------------------------------------------
 # App and clients
 # ---------------------------------------------------------------------------
@@ -230,6 +249,7 @@ class SearchRequest(BaseModel):
     page: int = 1
     per_page: int = 20
     search_mode: str = "hybrid"
+    exact_phrase: bool = False
     owners: list[str] = Field(default_factory=list)
     categories: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
@@ -326,9 +346,9 @@ class TaskType(str, Enum):
     # Chosen by Agent 2 after seeing retrieved results.
     LIST_DOCUMENTS = "list_documents"       # return a list of matching doc titles/IDs
     ANSWER_QUESTION = "answer_question"     # answer using retrieved context or open chat
-    SUMMARIZE_RESULTS = "summarize_results" # summarise the retrieved result set
+    SUMMARIZE_RESULTS = "summarize_results" # deprecated: normalized to ANSWER_QUESTION
     COUNT_RESULTS = "count_results"         # return a document count only
-    SINGLE_DOC_SUMMARY = "single_doc_summary"  # deep-summarise one specific document
+    SINGLE_DOC_SUMMARY = "single_doc_summary"  # deprecated: normalized to ANSWER_QUESTION
 
 class IntentResult(BaseModel):
     intent: IntentType
@@ -743,11 +763,18 @@ class RagAnswerAgent:
         search_result: dict[str, Any] | None = None,
         top_k: int = 5,
     ) -> dict:
-        # Step 4: retrieve the most relevant documents for grounded answering.
+        # Step 4: retrieve the most relevant chunks for grounded answering.
         params = parameters or {}
         _log_verbose("RagAnswerAgent.execute invoked", {"question": question, "chat_id": chat_id, "parameters": params, "top_k": top_k})
-        resolved_search_result = search_result or await _execute_search_strategy(question, params, search_strategy)
-        results = resolved_search_result.get("results", [])[:top_k]
+        chunk_search_result = _execute_chunk_search(question, params, top_k=top_k)
+        results = chunk_search_result.get("results", [])[:top_k]
+        used_chunk_context = bool(results)
+
+        if not results:
+            # Backward-compatible fallback for older indexes that have no chunk docs yet.
+            resolved_search_result = search_result or await _execute_search_strategy(question, params, search_strategy)
+            results = resolved_search_result.get("results", [])[:top_k]
+
         if not results:
             return {
                 "answer": "I could not find relevant documents to answer this question.",
@@ -756,7 +783,7 @@ class RagAnswerAgent:
                 "token_usage": {},
             }
 
-        context = _build_rag_context(results)
+        context = _build_chunk_rag_context(results) if used_chunk_context else _build_rag_context(results)
         rag_prompt = (
             f"User question: {question}\n\n"
             "Retrieved document context:\n"
@@ -770,13 +797,21 @@ class RagAnswerAgent:
             {
                 "question": question,
                 "doc_count": len(results),
-                "docs": [_summarize_result_for_log(item) for item in results],
+                "docs": [
+                    _summarize_chunk_result_for_log(item) if used_chunk_context else _summarize_result_for_log(item)
+                    for item in results
+                ],
                 "rag_prompt_preview": rag_prompt,
+                "chunk_context": used_chunk_context,
             },
             verbose_only=True,
         )
         completion = _generate_completion(chat_id, rag_prompt, system_prompt=RAG_SYSTEM_PROMPT)
-        sources = [_summarize_result_for_log(item) for item in results]
+        sources = (
+            _build_document_sources_from_chunk_results(results)
+            if used_chunk_context
+            else [_summarize_result_for_log(item) for item in results]
+        )
         answer_with_sources = f"{completion['answer']}{_format_retrieved_docs_section(sources)}"
         return {
             "answer": answer_with_sources,
@@ -886,8 +921,12 @@ async def _build_agent_stream(question: str, chat_id: Optional[str], intent_resu
         return _stream_text_response(answer, resolved_chat_id, intent, classification_meta)
 
     if intent == IntentType.GENERAL_RAG_QA:
-        search_result = prefetched_search_result or await _execute_search_strategy(question, params, search_strategy)
-        results = search_result.get("results", [])[:5]
+        chunk_search_result = _execute_chunk_search(question, params, top_k=5)
+        results = chunk_search_result.get("results", [])[:5]
+        used_chunk_context = bool(results)
+        if not results:
+            search_result = prefetched_search_result or await _execute_search_strategy(question, params, search_strategy)
+            results = search_result.get("results", [])[:5]
         if not results:
             return _stream_text_response(
                 "I could not find relevant documents to answer this question.",
@@ -896,7 +935,7 @@ async def _build_agent_stream(question: str, chat_id: Optional[str], intent_resu
                 classification_meta,
             )
 
-        context = _build_rag_context(results)
+        context = _build_chunk_rag_context(results) if used_chunk_context else _build_rag_context(results)
         rag_prompt = (
             f"User question: {question}\n\n"
             "Retrieved document context:\n"
@@ -906,10 +945,29 @@ async def _build_agent_stream(question: str, chat_id: Optional[str], intent_resu
         )
         _log_verbose(
             "_build_agent_stream RAG documents",
-            {"question": question, "doc_count": len(results), "docs": [_summarize_result_for_log(item) for item in results]},
+            {
+                "question": question,
+                "doc_count": len(results),
+                "docs": [
+                    _summarize_chunk_result_for_log(item) if used_chunk_context else _summarize_result_for_log(item)
+                    for item in results
+                ],
+                "chunk_context": used_chunk_context,
+            },
         )
         generator = _generate_completion_stream(resolved_chat_id, rag_prompt, system_prompt=RAG_SYSTEM_PROMPT)
-        return _wrap_stream_with_metadata(generator, intent, {"sources": [_summarize_result_for_log(item) for item in results], **classification_meta})
+        return _wrap_stream_with_metadata(
+            generator,
+            intent,
+            {
+                "sources": (
+                    _build_document_sources_from_chunk_results(results)
+                    if used_chunk_context
+                    else [_summarize_result_for_log(item) for item in results]
+                ),
+                **classification_meta,
+            },
+        )
 
     if intent == IntentType.FREE_OPEN_CHAT:
         generator = _generate_completion_stream(resolved_chat_id, question, system_prompt=OPEN_CHAT_SYSTEM_PROMPT)
@@ -1150,6 +1208,8 @@ def _normalize_search_strategy(strategy_value: Any, intent_value: Any, parameter
 
 def _normalize_task_type(task_value: Any, intent_value: Any) -> TaskType:
     normalized_value = str(task_value or "").strip()
+    if normalized_value in {TaskType.SUMMARIZE_RESULTS.value, TaskType.SINGLE_DOC_SUMMARY.value}:
+        return TaskType.ANSWER_QUESTION
     if normalized_value in {member.value for member in TaskType}:
         return TaskType(normalized_value)
 
@@ -1158,8 +1218,8 @@ def _normalize_task_type(task_value: Any, intent_value: Any) -> TaskType:
         IntentType.KEYWORD_SEARCH.value: TaskType.LIST_DOCUMENTS,
         IntentType.SEMANTIC_SEARCH.value: TaskType.LIST_DOCUMENTS,
         IntentType.STATS_COUNT.value: TaskType.COUNT_RESULTS,
-        IntentType.SINGLE_DOC_SUMMARY.value: TaskType.SINGLE_DOC_SUMMARY,
-        IntentType.MIXED_SEARCH_SUMMARY.value: TaskType.SUMMARIZE_RESULTS,
+        IntentType.SINGLE_DOC_SUMMARY.value: TaskType.ANSWER_QUESTION,
+        IntentType.MIXED_SEARCH_SUMMARY.value: TaskType.ANSWER_QUESTION,
         IntentType.GENERAL_RAG_QA.value: TaskType.ANSWER_QUESTION,
         IntentType.FREE_OPEN_CHAT.value: TaskType.ANSWER_QUESTION,
     }
@@ -1172,22 +1232,16 @@ def _derive_intent_from_plan(search_strategy: SearchStrategy, task_type: TaskTyp
     by the stream router (_build_agent_stream).
 
     Priority order (highest wins):
-      1. single_doc_summary  → SINGLE_DOC_SUMMARY  (regardless of strategy)
-      2. no_search           → FREE_OPEN_CHAT       (no retrieval; pure LLM chat)
-      3. count_results       → STATS_COUNT          (return document count)
-      4. summarize_results   → MIXED_SEARCH_SUMMARY (search + LLM summarisation)
-      5. answer_question     → GENERAL_RAG_QA       (search + LLM answer)
-      6. keyword + list_docs → KEYWORD_SEARCH       (return keyword hit list)
-      7. hybrid + list_docs  → SEMANTIC_SEARCH      (return vector-ranked list)
+      1. no_search           → FREE_OPEN_CHAT       (no retrieval; pure LLM chat)
+      2. count_results       → STATS_COUNT          (return document count)
+      3. answer_question     → GENERAL_RAG_QA       (search + LLM answer)
+      4. keyword + list_docs → KEYWORD_SEARCH       (return keyword hit list)
+      5. hybrid + list_docs  → SEMANTIC_SEARCH      (return vector-ranked list)
     """
-    if task_type == TaskType.SINGLE_DOC_SUMMARY:
-        return IntentType.SINGLE_DOC_SUMMARY
     if search_strategy == SearchStrategy.NO_SEARCH:
         return IntentType.FREE_OPEN_CHAT
     if task_type == TaskType.COUNT_RESULTS:
         return IntentType.STATS_COUNT
-    if task_type == TaskType.SUMMARIZE_RESULTS:
-        return IntentType.MIXED_SEARCH_SUMMARY
     if task_type == TaskType.ANSWER_QUESTION:
         return IntentType.GENERAL_RAG_QA
     if search_strategy == SearchStrategy.KEYWORD_SEARCH:
@@ -1359,18 +1413,17 @@ Search results preview:
 {json.dumps(search_preview, ensure_ascii=False)}
 
 Rules:
-- Choose exactly one task_type: list_documents, answer_question, summarize_results, count_results, or single_doc_summary.
+- Choose exactly one task_type: list_documents, answer_question, or count_results.
 - list_documents means the user mainly wants matching documents or cases listed.
 - answer_question means answer the user using searched documents, unless search_strategy=no_search.
-- summarize_results means summarize the matched documents.
 - count_results means count matched documents.
-- single_doc_summary means summarize a single identified document; return doc_id when available.
-- If search_strategy is no_search, prefer answer_question unless the user explicitly asks to summarize a specific document id.
+- If the user asks for a summary, classify as answer_question. Do not use summarize_results or single_doc_summary.
+- If search_strategy is no_search, prefer answer_question.
 - Use the search results preview to decide whether the user is asking for listing, answering, counting, or summarizing.
 
 Response schema:
 {{
-  "task_type": "list_documents|answer_question|summarize_results|count_results|single_doc_summary",
+  "task_type": "list_documents|answer_question|count_results",
   "confidence": 0.0,
   "doc_id": null,
   "requires_summary": false
@@ -1463,6 +1516,74 @@ def _build_rag_context(results: list[dict[str, Any]], max_chars_per_doc: int = 1
         )
     return "\n\n---\n\n".join(sections)
 
+
+def _summarize_chunk_result_for_log(result: dict[str, Any]) -> dict[str, Any]:
+    source = result.get("source", {})
+    return {
+        "id": result.get("id"),
+        "document_id": source.get("document_id", ""),
+        "chunk_index": source.get("chunk_index"),
+        "score": result.get("score"),
+        "title": source.get("title", "Untitled"),
+        "folder_name": source.get("folder_name", ""),
+        "folder_path": source.get("folder_path", ""),
+        "created_at": source.get("created_at", ""),
+    }
+
+
+def _build_document_sources_from_chunk_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    document_sources: list[dict[str, Any]] = []
+    for item in results:
+        source = item.get("source", {})
+        document_id = str(source.get("document_id") or "").strip()
+        if not document_id or document_id in seen:
+            continue
+        seen.add(document_id)
+        document_sources.append(
+            {
+                "id": document_id,
+                "score": item.get("score"),
+                "title": source.get("title", "Untitled"),
+                "folder_name": source.get("folder_name", ""),
+                "folder_path": source.get("folder_path", ""),
+                "created_at": source.get("created_at", ""),
+            }
+        )
+    return document_sources
+
+
+def _build_chunk_rag_context(results: list[dict[str, Any]], max_chars_per_chunk: int = 1000) -> str:
+    sections: list[str] = []
+    for index, item in enumerate(results, start=1):
+        source = item.get("source", {})
+        title = source.get("title", "Untitled")
+        doc_id = source.get("document_id", "")
+        chunk_index = source.get("chunk_index", "")
+        score = item.get("score")
+        folder_name = source.get("folder_name", "")
+        folder_path = source.get("folder_path", "")
+        created_at = source.get("created_at", "")
+        chunk_text = source.get(CHUNK_TEXT_FIELD, "") or source.get("chunk_text", "")
+        chunk_text = (chunk_text or "")[:max_chars_per_chunk]
+        sections.append(
+            "\n".join(
+                [
+                    f"Chunk {index}",
+                    f"Chunk ID: {item.get('id', '')}",
+                    f"Document ID: {doc_id}",
+                    f"Chunk Index: {chunk_index}",
+                    f"Title: {title}",
+                    f"Score: {score}",
+                    f"Folder Name: {folder_name}",
+                    f"Folder Path: {folder_path}",
+                    f"Created At: {created_at}",
+                    f"Content: {chunk_text}",
+                ]
+            )
+        )
+    return "\n\n---\n\n".join(sections)
+
 # ---------------------------------------------------------------------------
 # Intent classifier agent
 # ---------------------------------------------------------------------------
@@ -1499,6 +1620,7 @@ def _execute_search(req: SearchRequest) -> dict:
     try:
         # Step 3: build and run the shared OpenSearch query.
         body, date_filter = _build_search_body(req)
+        _log_search_body("OpenSearch _execute_search body", SEARCH_INDEX_NAME, body)
         _log_workflow_step(
             3,
             "OpenSearch search request",
@@ -1538,6 +1660,7 @@ def _execute_search(req: SearchRequest) -> dict:
 
 def _execute_raw_search(body: dict[str, Any], page: int, per_page: int) -> dict:
     try:
+        _log_search_body("OpenSearch _execute_raw_search body", SEARCH_INDEX_NAME, body)
         _log_verbose("_execute_raw_search request", {"page": page, "per_page": per_page, "body": body})
         res = es.search(index=SEARCH_INDEX_NAME, body=body)
         hits_obj = res.get("hits", {})
@@ -1567,6 +1690,88 @@ def _execute_raw_search(body: dict[str, Any], page: int, per_page: int) -> dict:
         return result
     except Exception as exc:
         logger.exception("_execute_raw_search failed")
+        return {"total": 0, "results": [], "error": str(exc)}
+
+
+def _execute_chunk_search(query_text: str, parameters: dict[str, Any] | None = None, top_k: int = 5) -> dict:
+    params = parameters or {}
+    query = (params.get("query") or query_text or "").strip()
+    if not query:
+        return {"total": 0, "results": []}
+
+    # Reuse existing filter semantics from document search for consistency.
+    effective_filters = _extract_parameter_filters(params)
+    req = SearchRequest(
+        q=query,
+        search_mode="text",
+        page=1,
+        per_page=max(10, top_k),
+        **effective_filters,
+    )
+    filter_clauses = _build_filter_clauses(req, {}) if effective_filters else []
+
+    text_fields = [f"{CHUNK_TEXT_FIELD}^2", "title", "metadata_text", "folder_name", "folder_path"]
+    body: dict[str, Any] = {
+        "from": 0,
+        "size": max(10, top_k),
+        "highlight": {
+            "fields": {
+                CHUNK_TEXT_FIELD: {"type": "unified", "number_of_fragments": 3, "fragment_size": 260},
+                "title": {},
+                "metadata_text": {},
+                "folder_path": {},
+            }
+        },
+    }
+
+    embedder = _get_embedding_model()
+    if embedder is False:
+        text_query: dict[str, Any] = {"multi_match": {"query": query, "fields": text_fields}}
+        if filter_clauses:
+            text_query = {"bool": {"must": [text_query], "filter": filter_clauses}}
+        body["query"] = text_query
+    else:
+        query_embedding = embedder.encode(f"query: {query}", normalize_embeddings=True).tolist()
+        text_query: dict[str, Any] = {"multi_match": {"query": query, "fields": text_fields}}
+        if filter_clauses:
+            text_query = {
+                "bool": {
+                    "must": [{"multi_match": {"query": query, "fields": text_fields}}],
+                    "filter": filter_clauses,
+                }
+            }
+        knn_query: dict[str, Any] = {"knn": {CHUNK_VECTOR_FIELD: {"vector": query_embedding, "k": max(50, top_k * 6)}}}
+        if filter_clauses:
+            knn_query["knn"][CHUNK_VECTOR_FIELD]["filter"] = {"bool": {"filter": filter_clauses}}
+        body["query"] = {"hybrid": {"queries": [text_query, knn_query]}}
+        body["search_pipeline"] = "rrf-pipeline"
+
+    try:
+        _log_search_body("OpenSearch _execute_chunk_search body", CHUNK_SEARCH_INDEX_NAME, body)
+        _log_verbose("_execute_chunk_search request", {"index": CHUNK_SEARCH_INDEX_NAME, "query": query, "top_k": top_k, "body": body})
+        res = es.search(index=CHUNK_SEARCH_INDEX_NAME, body=body)
+        hits_obj = res.get("hits", {})
+        hits = hits_obj.get("hits", [])
+        total_obj = hits_obj.get("total", 0)
+        total = total_obj.get("value", 0) if isinstance(total_obj, dict) else int(total_obj or 0)
+        results = []
+        for hit in hits:
+            source = hit.get("_source", {})
+            results.append(
+                {
+                    "id": hit.get("_id"),
+                    "score": hit.get("_score"),
+                    "source": source,
+                    "highlight": hit.get("highlight", {}),
+                }
+            )
+        _log_verbose("_execute_chunk_search response", {"index": CHUNK_SEARCH_INDEX_NAME, "total": total, "returned": len(results)})
+        return {
+            "total": total,
+            "results": results,
+        }
+    except Exception as exc:
+        logger.exception("_execute_chunk_search failed")
         return {"total": 0, "results": [], "error": str(exc)}
 
 # ---------------------------------------------------------------------------
@@ -2047,15 +2252,14 @@ def _build_search_body(req: SearchRequest) -> tuple[dict[str, Any], dict[str, st
     text_fields = ["ocr_content", "title^2", "description", "metadata_text", "folder_name", "folder_path"]
     if query:
         if search_mode == "text":
-            if filter_clauses:
-                body["query"] = {
-                    "bool": {
-                        "must": [{"multi_match": {"query": query, "fields": text_fields}}],
-                        "filter": filter_clauses,
-                    }
-                }
+            if req.exact_phrase:
+                text_clause: dict[str, Any] = {"multi_match": {"query": query, "fields": text_fields, "type": "phrase", "slop": 2}}
             else:
-                body["query"] = {"multi_match": {"query": query, "fields": text_fields}}
+                text_clause = {"multi_match": {"query": query, "fields": text_fields}}
+            if filter_clauses:
+                body["query"] = {"bool": {"must": [text_clause], "filter": filter_clauses}}
+            else:
+                body["query"] = text_clause
             return body, date_filter
         embedder = _get_embedding_model()
         if embedder is False:
@@ -2129,9 +2333,11 @@ def startup() -> None:
         if resp.ok:
             result = resp.json()
             logger.info(
-                "Chatbot index housekeeping complete: scanned=%s deleted=%s",
+                "Chatbot index housekeeping complete: scanned=%s deleted=%s | chunk_scanned=%s chunk_deleted=%s",
                 result.get("scanned", "?"),
                 result.get("deleted", "?"),
+                result.get("chunkScanned", "?"),
+                result.get("chunkDeleted", "?"),
             )
         else:
             logger.warning(
@@ -2148,9 +2354,12 @@ def health() -> dict[str, Any]:
     return {
         "ok": True,
         "search_index": SEARCH_INDEX_NAME,
+        "chunk_search_index": CHUNK_SEARCH_INDEX_NAME,
         "chat_log_index": CHAT_LOG_INDEX,
         "title_vector_field": TITLE_VECTOR_FIELD,
         "content_vector_field": CONTENT_VECTOR_FIELD,
+        "chunk_vector_field": CHUNK_VECTOR_FIELD,
+        "chunk_text_field": CHUNK_TEXT_FIELD,
         "llm_model": LLM_MODEL,
     }
 
@@ -2158,6 +2367,7 @@ def health() -> dict[str, Any]:
 def search(req: SearchRequest) -> dict[str, Any]:
     try:
         body, date_filter = _build_search_body(req)
+        _log_search_body("OpenSearch /api/chatbot/search body", SEARCH_INDEX_NAME, body)
         try:
             res = es.search(index=SEARCH_INDEX_NAME, body=body)
         except Exception as search_exc:
@@ -2178,6 +2388,7 @@ def search(req: SearchRequest) -> dict[str, Any]:
                     search_mode="text",
                 )
                 body, date_filter = _build_search_body(fallback_req)
+                _log_search_body("OpenSearch /api/chatbot/search fallback body", SEARCH_INDEX_NAME, body)
                 res = es.search(index=SEARCH_INDEX_NAME, body=body)
             else:
                 raise
@@ -2308,3 +2519,4 @@ def get_chat(chat_id: str) -> dict[str, Any]:
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("chatbot_agent_api:app", host="0.0.0.0", port=int(os.getenv("CHATBOT_API_PORT", "5100")), reload=True)
+

@@ -133,6 +133,7 @@ export const searchChatDocuments = async ({
   perPage = 20,
   limit,
   searchMode = 'hybrid',
+  exactPhrase = false,
 } = {}) => {
   const resolvedPerPage = Math.max(1, Math.min(limit ?? perPage ?? 20, 50))
   const response = await fetch(resolveChatbotUrl('/api/chatbot/search'), {
@@ -151,6 +152,7 @@ export const searchChatDocuments = async ({
       page: Math.max(1, Number(page) || 1),
       per_page: resolvedPerPage,
       search_mode: searchMode ?? 'hybrid',
+      exact_phrase: searchMode === 'text' ? Boolean(exactPhrase) : false,
     }),
   })
   const payload = await handleJsonResponse(response)
