@@ -55,6 +55,12 @@ CHUNK_SEARCH_INDEX_NAME = (
     or os.getenv("SEARCH_CHUNK_INDEX_NAME")
     or DEFAULT_CHUNK_SEARCH_INDEX_NAME
 )
+DEFAULT_OCR_DOCUMENT_INDEX_NAME = "dms-ocr-document"
+OCR_DOCUMENT_INDEX_NAME = (
+    os.getenv("CHATBOT_OCR_DOCUMENT_INDEX_NAME")
+    or os.getenv("OCR_DOCUMENT_INDEX_NAME")
+    or DEFAULT_OCR_DOCUMENT_INDEX_NAME
+)
 CHAT_LOG_INDEX = os.getenv("CHAT_LOG_INDEX", "chat_logs_dms")
 TITLE_VECTOR_FIELD = os.getenv("SEARCH_TITLE_VECTOR_FIELD", "chatbot_title_embedding")
 CONTENT_VECTOR_FIELD = os.getenv("SEARCH_CONTENT_VECTOR_FIELD", "chatbot_ocr_content_embedding")
@@ -68,16 +74,18 @@ CLASSIFIER_TIMEOUT_SECONDS = int(os.getenv("CHATBOT_CLASSIFIER_TIMEOUT_SECONDS",
 # DMS Java backend base URL used for housekeeping and other backend calls.
 DMS_BASE_URL = os.getenv("DMS_BASE_URL", "http://localhost:8080")
 
-MAX_CONTEXT_LENGTH = int(os.getenv("MAX_CONTEXT_LENGTH", "5000"))
-WARNING_THRESHOLD = int(os.getenv("WARNING_THRESHOLD", "4000"))
+MAX_CONTEXT_LENGTH = int(os.getenv("MAX_CONTEXT_LENGTH", "30000"))
+WARNING_THRESHOLD = int(os.getenv("WARNING_THRESHOLD", "16000"))
 VERBOSE_LOGS = os.getenv("CHATBOT_VERBOSE_LOGS", "false").lower() == "true"
 DEBUG_SEARCH_BODY = os.getenv("CHATBOT_DEBUG_SEARCH_BODY", "true").lower() == "true"
+RAG_MAX_SELECTED_PAGES = int(os.getenv("CHATBOT_RAG_MAX_SELECTED_PAGES", "10"))
 
 _raw_origins = os.getenv("CHATBOT_CORS_ORIGINS", "*")
 CORS_ORIGINS = ["*"] if _raw_origins.strip() == "*" else [x.strip() for x in _raw_origins.split(",") if x.strip()]
 
 # Lazy-loaded optional embedding model
 _embedding_model = None
+_ocr_pages_cache: dict[str, dict[int, str]] = {}
 
 
 def _truncate_for_log(value: Any, max_length: int = 1200) -> str:
@@ -289,7 +297,7 @@ class SummarizeRequest(BaseModel):
 #
 #   hybrid_search template shape:
 #     query        : raw user text (used for vector + BM25 hybrid)
-#     search_mode  : "hybrid"  (multi_match + two knn queries via rrf-pipeline)
+#     search_mode  : "hybrid"  (multi_match + two knn queries via rrf-pipeline-dms)
 #     start_date / end_date / owners / categories / tags /
 #     folder_names / folder_paths / metadata_filters  ← optional filters
 #     (match_mode / must_terms / should_terms are NOT used)
@@ -338,7 +346,7 @@ class IntentType(str, Enum):
 class SearchStrategy(str, Enum):
     # Chosen by Agent 1.
     KEYWORD_SEARCH = "keyword_search"   # uses match_mode + must/should_terms
-    HYBRID_SEARCH = "hybrid_search"     # uses vector knn + BM25 via rrf-pipeline
+    HYBRID_SEARCH = "hybrid_search"     # uses vector knn + BM25 via rrf-pipeline-dms
     NO_SEARCH = "no_search"             # skips OpenSearch entirely
 
 
@@ -599,7 +607,7 @@ class KeywordSearchAgent:
 
 class SemanticSearchAgent:
     """
-    Executes a hybrid vector + BM25 search via OpenSearch's rrf-pipeline.
+    Executes a hybrid vector + BM25 search via OpenSearch's rrf-pipeline-dms.
 
     Expected search template fields
     ────────────────────────────────
@@ -625,7 +633,7 @@ class SemanticSearchAgent:
           ]
         }
       },
-      "search_pipeline": "rrf-pipeline"   ← reciprocal-rank fusion
+      "search_pipeline": "rrf-pipeline-dms"   ← reciprocal-rank fusion
     }
     Results are ranked by RRF score combining all three sub-queries.
     Falls back to plain multi_match when the embedding model is unavailable.
@@ -763,15 +771,27 @@ class RagAnswerAgent:
         search_result: dict[str, Any] | None = None,
         top_k: int = 5,
     ) -> dict:
-        # Step 4: retrieve the most relevant chunks for grounded answering.
+        # Step 4: retrieve top chunks, then map to unique pages/documents for grounded answering.
         params = parameters or {}
         _log_verbose("RagAnswerAgent.execute invoked", {"question": question, "chat_id": chat_id, "parameters": params, "top_k": top_k})
-        chunk_search_result = _execute_chunk_search(question, params, top_k=top_k)
-        results = chunk_search_result.get("results", [])[:top_k]
-        used_chunk_context = bool(results)
+        chunk_search_result = _execute_chunk_search(
+            question,
+            params,
+            top_k=top_k,
+            search_strategy=search_strategy,
+        )
+        chunk_hits = (chunk_search_result.get("results", []) or [])[:top_k]
+        _log_top_chunk_hits(question, chunk_hits, top_k)
+        chunk_page_map = _collect_chunk_pages_by_document(chunk_hits, max_total_pages=RAG_MAX_SELECTED_PAGES)
+        chunk_index_map = _collect_chunk_indices_by_document(chunk_hits)
+        logger.info(
+            "Step 4: Selected pages after budget | max_pages=%s selected=%s",
+            RAG_MAX_SELECTED_PAGES,
+            sum(len(pages) for pages in chunk_page_map.values()),
+        )
 
+        results = _hydrate_documents_from_chunk_hits(chunk_hits, limit=top_k)
         if not results:
-            # Backward-compatible fallback for older indexes that have no chunk docs yet.
             resolved_search_result = search_result or await _execute_search_strategy(question, params, search_strategy)
             results = resolved_search_result.get("results", [])[:top_k]
 
@@ -783,9 +803,10 @@ class RagAnswerAgent:
                 "token_usage": {},
             }
 
-        context = _build_chunk_rag_context(results) if used_chunk_context else _build_rag_context(results)
+        context = _build_page_aware_rag_context(results, chunk_page_map, chunk_index_map)
         rag_prompt = (
             f"User question: {question}\n\n"
+            "First, list the most relevant documents and pages that you will use to answer the question. Then, provide a detailed answer based only on the retrieved document context. "
             "Retrieved document context:\n"
             f"{context}\n\n"
             "Answer the question using only the context above. "
@@ -797,21 +818,15 @@ class RagAnswerAgent:
             {
                 "question": question,
                 "doc_count": len(results),
-                "docs": [
-                    _summarize_chunk_result_for_log(item) if used_chunk_context else _summarize_result_for_log(item)
-                    for item in results
-                ],
+                "docs": [_summarize_result_for_log(item) for item in results],
                 "rag_prompt_preview": rag_prompt,
-                "chunk_context": used_chunk_context,
+                "chunk_pages": {doc_id: sorted(list(pages)) for doc_id, pages in chunk_page_map.items()},
+                "chunk_indices": {doc_id: sorted(list(indices)) for doc_id, indices in chunk_index_map.items()},
             },
             verbose_only=True,
         )
         completion = _generate_completion(chat_id, rag_prompt, system_prompt=RAG_SYSTEM_PROMPT)
-        sources = (
-            _build_document_sources_from_chunk_results(results)
-            if used_chunk_context
-            else [_summarize_result_for_log(item) for item in results]
-        )
+        sources = _build_document_sources_with_pages(results, chunk_page_map, chunk_index_map)
         answer_with_sources = f"{completion['answer']}{_format_retrieved_docs_section(sources)}"
         return {
             "answer": answer_with_sources,
@@ -884,13 +899,7 @@ async def _build_agent_stream(question: str, chat_id: Optional[str], intent_resu
     if intent == IntentType.KEYWORD_SEARCH:
         agent_result = prefetched_search_result or await KeywordSearchAgent.execute(question, parameters=params)
         results = agent_result.get("results", [])
-        if results:
-            answer = f"Found {agent_result['total']} documents matching your keyword search.\nTop results:\n"
-            for result in results[:5]:
-                title = result["source"].get("title", "Untitled")
-                answer += f"- {title} (ID: {result['id']})\n"
-        else:
-            answer = "No documents found for your keyword search."
+        answer = _format_document_titles_only(results, limit=10)
         sources = [_summarize_result_for_log(r) for r in results[:5]]
         return _wrap_stream_with_metadata(
             _stream_text_response(answer, resolved_chat_id, intent),
@@ -901,13 +910,7 @@ async def _build_agent_stream(question: str, chat_id: Optional[str], intent_resu
     if intent == IntentType.SEMANTIC_SEARCH:
         agent_result = prefetched_search_result or await SemanticSearchAgent.execute(question, parameters=params)
         results = agent_result.get("results", [])
-        if results:
-            answer = f"Found {agent_result['total']} similar cases.\nMost relevant:\n"
-            for result in results[:5]:
-                title = result["source"].get("title", "Untitled")
-                answer += f"- {title} (ID: {result['id']}, score: {result['score']:.2f})\n"
-        else:
-            answer = "No similar cases found."
+        answer = _format_document_titles_only(results, limit=10)
         sources = [_summarize_result_for_log(r) for r in results[:5]]
         return _wrap_stream_with_metadata(
             _stream_text_response(answer, resolved_chat_id, intent),
@@ -921,12 +924,28 @@ async def _build_agent_stream(question: str, chat_id: Optional[str], intent_resu
         return _stream_text_response(answer, resolved_chat_id, intent, classification_meta)
 
     if intent == IntentType.GENERAL_RAG_QA:
-        chunk_search_result = _execute_chunk_search(question, params, top_k=5)
-        results = chunk_search_result.get("results", [])[:5]
-        used_chunk_context = bool(results)
+        rag_top_k = 10
+        chunk_search_result = _execute_chunk_search(
+            question,
+            params,
+            top_k=rag_top_k,
+            search_strategy=search_strategy,
+        )
+        chunk_hits = (chunk_search_result.get("results", []) or [])[:rag_top_k]
+        _log_top_chunk_hits(question, chunk_hits, rag_top_k)
+        chunk_page_map = _collect_chunk_pages_by_document(chunk_hits, max_total_pages=RAG_MAX_SELECTED_PAGES)
+        chunk_index_map = _collect_chunk_indices_by_document(chunk_hits)
+        logger.info(
+            "Step 4: Selected pages after budget | max_pages=%s selected=%s",
+            RAG_MAX_SELECTED_PAGES,
+            sum(len(pages) for pages in chunk_page_map.values()),
+        )
+
+        results = _hydrate_documents_from_chunk_hits(chunk_hits, limit=rag_top_k)
         if not results:
             search_result = prefetched_search_result or await _execute_search_strategy(question, params, search_strategy)
-            results = search_result.get("results", [])[:5]
+            results = search_result.get("results", [])[:rag_top_k]
+
         if not results:
             return _stream_text_response(
                 "I could not find relevant documents to answer this question.",
@@ -935,7 +954,7 @@ async def _build_agent_stream(question: str, chat_id: Optional[str], intent_resu
                 classification_meta,
             )
 
-        context = _build_chunk_rag_context(results) if used_chunk_context else _build_rag_context(results)
+        context = _build_page_aware_rag_context(results, chunk_page_map, chunk_index_map)
         rag_prompt = (
             f"User question: {question}\n\n"
             "Retrieved document context:\n"
@@ -948,11 +967,9 @@ async def _build_agent_stream(question: str, chat_id: Optional[str], intent_resu
             {
                 "question": question,
                 "doc_count": len(results),
-                "docs": [
-                    _summarize_chunk_result_for_log(item) if used_chunk_context else _summarize_result_for_log(item)
-                    for item in results
-                ],
-                "chunk_context": used_chunk_context,
+                "docs": [_summarize_result_for_log(item) for item in results],
+                "chunk_pages": {doc_id: sorted(list(pages)) for doc_id, pages in chunk_page_map.items()},
+                "chunk_indices": {doc_id: sorted(list(indices)) for doc_id, indices in chunk_index_map.items()},
             },
         )
         generator = _generate_completion_stream(resolved_chat_id, rag_prompt, system_prompt=RAG_SYSTEM_PROMPT)
@@ -960,11 +977,7 @@ async def _build_agent_stream(question: str, chat_id: Optional[str], intent_resu
             generator,
             intent,
             {
-                "sources": (
-                    _build_document_sources_from_chunk_results(results)
-                    if used_chunk_context
-                    else [_summarize_result_for_log(item) for item in results]
-                ),
+                "sources": _build_document_sources_with_pages(results, chunk_page_map, chunk_index_map),
                 **classification_meta,
             },
         )
@@ -1262,7 +1275,8 @@ async def _execute_search_strategy(
     return await SemanticSearchAgent.execute(question, parameters=params)
 
 
-def _call_classifier_llm(prompt: str) -> dict[str, Any] | None:
+def _call_classifier_llm(prompt: str, stage: str = "classifier") -> dict[str, Any] | None:
+    logger.info("Step 2: %s prompt sent to LLM\n%s", stage, prompt)
     response = requests.post(
         LLM_API,
         json={
@@ -1282,9 +1296,21 @@ def _call_classifier_llm(prompt: str) -> dict[str, Any] | None:
         return None
 
     data = response.json()
-    content = data.get("message", {}).get("content", "")
-    content = re.sub(r'```json\s*|\s*```', '', content.strip())
-    return json.loads(content)
+    raw_content = data.get("message", {}).get("content", "")
+    if stage == "Agent2":
+        logger.info("Step 2: Agent2 raw response from LLM\n%s", raw_content)
+
+    content = re.sub(r'```json\s*|\s*```', '', str(raw_content).strip())
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError as exc:
+        logger.warning("Step 2: %s response JSON parse failed: %s | raw=%s", stage, exc, raw_content)
+        return None
+
+    if stage == "Agent2":
+        logger.info("Step 2: Agent2 parsed response | %s", _truncate_for_log(parsed))
+
+    return parsed
 
 
 def _build_search_strategy_prompt(question: str, base_parameters: dict[str, Any]) -> str:
@@ -1303,9 +1329,10 @@ Initial search template:
 Current year: {current_year}
 
 Rules:
-- Choose exactly one search_strategy: keyword_search, hybrid_search, or no_search.
-- keyword_search means literal keyword filtering with the template fields and optional exact_phrase, must_terms, and should_terms.
+- Choose exactly one search_strategy: hybrid_search(most likely!!), keyword_search,  or no_search.
+- Can use the hybrid search then use the hybrid search. Hybrid search is the first choice.
 - hybrid_search means normal document retrieval using the same search template fields as chatbot-template__filters-section and chatbot_api.py.
+- keyword_search only for literal keyword filtering with the template fields and optional exact_phrase, must_terms, and should_terms.
 - no_search means the question is a free open question and does not need document retrieval.
 - Do not decide the final task type here.
 - Do not extract with hardcoded patterns; use the user meaning.
@@ -1414,12 +1441,22 @@ Search results preview:
 
 Rules:
 - Choose exactly one task_type: list_documents, answer_question, or count_results.
-- list_documents means the user mainly wants matching documents or cases listed.
+- list_documents means the user mainly wants matched document candidates (titles/IDs), not synthesized content answers.
 - answer_question means answer the user using searched documents, unless search_strategy=no_search.
 - count_results means count matched documents.
-- If the user asks for a summary, classify as answer_question. Do not use summarize_results or single_doc_summary.
+- If the user asks to find/show/list/recommend documents and does not ask for explanation, summary, comparison, or evidence, choose list_documents.
+- If the user asks for a summary, key points, brief explanation, compare/contrast, or synthesis, classify as answer_question.
+- If the user asks to "list" documents and also asks for key points/summary, classify as answer_question.
+- If the user asks a direct content question (for example "what does it say about...", "why", "how", "which policy", "summarize"), choose answer_question.
 - If search_strategy is no_search, prefer answer_question.
 - Use the search results preview to decide whether the user is asking for listing, answering, counting, or summarizing.
+
+Examples:
+- "list documents about land registration circulars" -> list_documents
+- "show me files related to tenancy" -> list_documents
+- "what do these tenancy documents say about notice period?" -> answer_question
+- "summarize the key points of the retrieved documents" -> answer_question
+- "how many documents mention currency" -> count_results
 
 Response schema:
 {{
@@ -1431,7 +1468,10 @@ Response schema:
 
 
 async def _classify_intent_with_llm(question: str, base_parameters: dict[str, Any]) -> IntentResult | None:
-    search_strategy_payload = _call_classifier_llm(_build_search_strategy_prompt(question, base_parameters))
+    search_strategy_payload = _call_classifier_llm(
+        _build_search_strategy_prompt(question, base_parameters),
+        stage="Agent1",
+    )
     if search_strategy_payload is None:
         return None
 
@@ -1444,7 +1484,8 @@ async def _classify_intent_with_llm(question: str, base_parameters: dict[str, An
         search_result = await _execute_search_strategy(question, merged_parameters, search_strategy)
 
     task_type_payload = _call_classifier_llm(
-        _build_task_type_prompt(question, search_strategy, merged_parameters, search_result)
+        _build_task_type_prompt(question, search_strategy, merged_parameters, search_result),
+        stage="Agent2",
     )
     if task_type_payload is None:
         return None
@@ -1483,9 +1524,49 @@ def _format_retrieved_docs_section(results: list[dict[str, Any]]) -> str:
     lines = ["", "Retrieved documents:"]
     for item in results:
         title = item.get("title") or "Untitled"
-        doc_id = item.get("id") or ""
-        lines.append(f"- {title} (ID: {doc_id})")
+
+        page_label = ""
+        chunk_label = ""
+        selected_pages = item.get("selected_pages")
+        if isinstance(selected_pages, list) and selected_pages:
+            cleaned_pages = sorted({str(page).strip() for page in selected_pages if str(page).strip()}, key=lambda v: _safe_int(v) or 0)
+            if cleaned_pages:
+                page_label = f"(page{','.join(cleaned_pages)})"
+        elif item.get("page"):
+            page_label = f"(page{item.get('page')})"
+        elif item.get("page_start") and item.get("page_end"):
+            start = str(item.get("page_start")).strip()
+            end = str(item.get("page_end")).strip()
+            if start and end:
+                page_label = f"(page{start}-{end})"
+
+        selected_chunk_indices = item.get("selected_chunk_indices")
+        if isinstance(selected_chunk_indices, list) and selected_chunk_indices:
+            cleaned_chunks = sorted({str(chunk).strip() for chunk in selected_chunk_indices if str(chunk).strip()}, key=lambda v: _safe_int(v) or 0)
+            if cleaned_chunks:
+                chunk_label = f"(chunk{','.join(cleaned_chunks)})"
+        elif item.get("chunk_index") is not None:
+            chunk_label = f"(chunk{item.get('chunk_index')})"
+
+        if page_label and chunk_label:
+            lines.append(f"- {title}{page_label}{chunk_label}")
+        elif page_label:
+            lines.append(f"- {title}{page_label}")
+        elif chunk_label:
+            lines.append(f"- {title}{chunk_label}")
+        else:
+            lines.append(f"- {title}")
     return "\n".join(lines)
+
+
+def _format_document_titles_only(results: list[dict[str, Any]], limit: int = 10) -> str:
+    titles = [
+        item.get("source", {}).get("title", "Untitled")
+        for item in (results or [])[:limit]
+    ]
+    if not titles:
+        return "No documents found."
+    return "\n".join(f"- {title}" for title in titles)
 
 
 def _build_rag_context(results: list[dict[str, Any]], max_chars_per_doc: int = 1200) -> str:
@@ -1517,12 +1598,364 @@ def _build_rag_context(results: list[dict[str, Any]], max_chars_per_doc: int = 1
     return "\n\n---\n\n".join(sections)
 
 
+def _safe_int(value: Any) -> int | None:
+    try:
+        if value is None or value == "":
+            return None
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _collect_chunk_pages_by_document(
+    chunk_results: list[dict[str, Any]],
+    max_total_pages: int | None = None,
+) -> dict[str, set[int]]:
+    pages_by_document: dict[str, set[int]] = {}
+    page_budget = max_total_pages if isinstance(max_total_pages, int) and max_total_pages > 0 else None
+    selected_doc_pages: set[tuple[str, int]] = set()
+
+    for item in chunk_results or []:
+        source = item.get("source", {})
+        document_id = str(source.get("document_id") or "").strip()
+        if not document_id:
+            continue
+
+        page_values: list[int] = []
+        page = _safe_int(source.get("page"))
+        if page is not None and page > 0:
+            page_values.append(page)
+
+        page_start = _safe_int(source.get("page_start"))
+        page_end = _safe_int(source.get("page_end"))
+        if page_start is not None and page_end is not None and page_start > 0 and page_end >= page_start:
+            for value in range(page_start, page_end + 1):
+                if value not in page_values:
+                    page_values.append(value)
+
+        if not page_values:
+            continue
+
+        for page_value in page_values:
+            doc_page_key = (document_id, page_value)
+            if doc_page_key in selected_doc_pages:
+                continue
+            if page_budget is not None and len(selected_doc_pages) >= page_budget:
+                return pages_by_document
+
+            selected_doc_pages.add(doc_page_key)
+            pages_by_document.setdefault(document_id, set()).add(page_value)
+
+    return pages_by_document
+
+
+def _collect_chunk_indices_by_document(chunk_results: list[dict[str, Any]]) -> dict[str, set[int]]:
+    chunk_indices_by_document: dict[str, set[int]] = {}
+    for item in chunk_results or []:
+        source = item.get("source", {})
+        document_id = str(source.get("document_id") or "").strip()
+        if not document_id:
+            continue
+        chunk_index = _safe_int(source.get("chunk_index"))
+        if chunk_index is None:
+            continue
+        chunk_indices_by_document.setdefault(document_id, set()).add(chunk_index)
+    return chunk_indices_by_document
+
+
+def _log_top_chunk_hits(question: str, chunk_hits: list[dict[str, Any]], top_k: int) -> None:
+    logger.info(
+        "Step 4: Top chunk hits | top_k=%s returned=%s question=%s",
+        top_k,
+        len(chunk_hits or []),
+        _preview_text(question, 220),
+    )
+    for index, item in enumerate(chunk_hits or [], start=1):
+        logger.info("Step 4: Chunk #%s | %s", index, _truncate_for_log(_summarize_chunk_result_for_log(item), 1200))
+
+
+def _hydrate_documents_from_chunk_hits(chunk_results: list[dict[str, Any]], limit: int = 10) -> list[dict[str, Any]]:
+    ordered_doc_ids: list[str] = []
+    max_score_by_doc: dict[str, float | None] = {}
+
+    for item in chunk_results or []:
+        source = item.get("source", {})
+        document_id = str(source.get("document_id") or "").strip()
+        if not document_id:
+            continue
+
+        score = item.get("score")
+        if document_id not in max_score_by_doc:
+            ordered_doc_ids.append(document_id)
+            max_score_by_doc[document_id] = score
+        else:
+            current_score = max_score_by_doc.get(document_id)
+            if isinstance(score, (int, float)) and (not isinstance(current_score, (int, float)) or score > current_score):
+                max_score_by_doc[document_id] = score
+
+    hydrated_results: list[dict[str, Any]] = []
+    for document_id in ordered_doc_ids:
+        if len(hydrated_results) >= limit:
+            break
+        try:
+            doc = es.get(index=SEARCH_INDEX_NAME, id=document_id)
+        except NotFoundError:
+            continue
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to hydrate document %s from chunk hits: %s", document_id, exc)
+            continue
+
+        source = doc.get("_source", {})
+        hydrated_results.append(
+            {
+                "id": document_id,
+                "score": max_score_by_doc.get(document_id),
+                "source": source,
+                "highlight": {},
+            }
+        )
+
+    return hydrated_results
+
+
+def _extract_ocr_pages_from_response_payload(ocr_response: Any) -> dict[int, str]:
+    if isinstance(ocr_response, str):
+        raw = ocr_response.strip()
+        if not raw:
+            return {}
+        try:
+            ocr_response = json.loads(raw)
+        except Exception:  # noqa: BLE001
+            return {}
+
+    if not isinstance(ocr_response, dict):
+        return {}
+
+    # Handle wrappers where the actual OCR payload is nested as a string/object.
+    nested_response = ocr_response.get("response_json")
+    if nested_response is not None and nested_response is not ocr_response:
+        nested_pages = _extract_ocr_pages_from_response_payload(nested_response)
+        if nested_pages:
+            return nested_pages
+    nested_ocr_response = ocr_response.get("ocr_response_json")
+    if nested_ocr_response is not None and nested_ocr_response is not ocr_response:
+        nested_pages = _extract_ocr_pages_from_response_payload(nested_ocr_response)
+        if nested_pages:
+            return nested_pages
+
+    results = ocr_response.get("results")
+    if not isinstance(results, list):
+        return {}
+    page_map: dict[int, str] = {}
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        page_no = _safe_int(item.get("page_no"))
+        if page_no is None or page_no < 0:
+            continue
+        text = str(item.get("md_content") or "").strip()
+        if not text:
+            continue
+        page_map[page_no] = text
+    return page_map
+
+
+def _fetch_ocr_pages_by_document_id(document_id: str) -> dict[int, str]:
+    if not document_id:
+        return {}
+
+    cached = _ocr_pages_cache.get(document_id)
+    if cached is not None:
+        return cached
+
+    def _extract_from_source(source: dict[str, Any]) -> dict[int, str]:
+        if not isinstance(source, dict):
+            return {}
+        for key in ("response_json", "ocr_response_json"):
+            payload = source.get(key)
+            pages = _extract_ocr_pages_from_response_payload(payload)
+            if pages:
+                return pages
+        return _extract_ocr_pages_from_response_payload(source)
+
+    # Try direct document ID lookup first.
+    try:
+        doc = es.get(index=OCR_DOCUMENT_INDEX_NAME, id=document_id)
+        pages = _extract_from_source(doc.get("_source", {}))
+        if pages:
+            _ocr_pages_cache[document_id] = pages
+            return pages
+    except NotFoundError:
+        pass
+    except Exception as exc:  # noqa: BLE001
+        _log_verbose("OCR index direct lookup failed", {"document_id": document_id, "error": str(exc)})
+
+    # Fallback to term query on document_id.
+    for field in ("document_id.keyword", "document_id"):
+        try:
+            body = {
+                "size": 1,
+                "query": {
+                    "term": {
+                        field: document_id,
+                    }
+                },
+            }
+            res = es.search(index=OCR_DOCUMENT_INDEX_NAME, body=body)
+            hits = (res.get("hits", {}) or {}).get("hits", []) or []
+            if not hits:
+                continue
+            source = (hits[0] or {}).get("_source", {})
+            pages = _extract_from_source(source)
+            if pages:
+                _ocr_pages_cache[document_id] = pages
+                return pages
+        except Exception as exc:  # noqa: BLE001
+            _log_verbose("OCR index term lookup failed", {"document_id": document_id, "field": field, "error": str(exc)})
+
+    _ocr_pages_cache[document_id] = {}
+    return {}
+
+
+def _extract_ocr_pages(source: dict[str, Any], document_id: str) -> dict[int, str]:
+    # User-required source of truth: dms-ocr-document index by document_id.
+    page_map = _fetch_ocr_pages_by_document_id(document_id)
+    if page_map:
+        return page_map
+    # Local payload fallback (for backward compatibility).
+    page_map = _extract_ocr_pages_from_response_payload(source.get("ocr_response_json"))
+    if page_map:
+        return page_map
+    page_map = _extract_ocr_pages_from_response_payload(source.get("response_json"))
+    if page_map:
+        return page_map
+    return {}
+
+
+def _extract_pages_from_plain_content(content: str) -> dict[int, str]:
+    text = str(content or "")
+    if not text:
+        return {}
+
+    marker_matches = list(re.finditer(r"\[\s*Page\s+(\d+)\s*\]", text, flags=re.IGNORECASE))
+    if not marker_matches:
+        return {}
+
+    page_map: dict[int, str] = {}
+    for index, match in enumerate(marker_matches):
+        page_no = _safe_int(match.group(1))
+        if page_no is None or page_no <= 0:
+            continue
+        start = match.end()
+        end = marker_matches[index + 1].start() if index + 1 < len(marker_matches) else len(text)
+        page_text = text[start:end].strip()
+        if page_text:
+            page_map[page_no] = page_text
+    return page_map
+
+
+def _build_page_aware_rag_context(
+    results: list[dict[str, Any]],
+    chunk_pages_by_document: dict[str, set[int]],
+    chunk_indices_by_document: dict[str, set[int]],
+    max_chars_per_page: int = 1200,
+    max_chars_fallback: int = 1200,
+) -> str:
+    sections: list[str] = []
+    for index, item in enumerate(results, start=1):
+        source = item.get("source", {})
+        title = source.get("title", "Untitled")
+        doc_id = str(item.get("id") or "").strip()
+        folder_name = source.get("folder_name", "")
+        folder_path = source.get("folder_path", "")
+        selected_pages = sorted(list(chunk_pages_by_document.get(doc_id, set())))
+        selected_chunks = sorted(list(chunk_indices_by_document.get(doc_id, set())))
+
+        page_map = _extract_ocr_pages(source, doc_id)
+        if not page_map:
+            # Fallback: some records only store a combined text blob with [Page X] markers.
+            combined_text = source.get("ocr_content", "") or source.get("content", "") or ""
+            page_map = _extract_pages_from_plain_content(combined_text)
+        selected_pages_for_content = [page for page in selected_pages if page in page_map]
+
+        # Chunk page_start/page_end are one-based, while OCR response_json.page_no may be zero-based.
+        # Prefer shifted mapping when zero-based OCR pages are detected (page 0 exists).
+        if selected_pages and page_map:
+            shifted_page_map = {page_no + 1: page_text for page_no, page_text in page_map.items()}
+            shifted_selected_pages = [page for page in selected_pages if page in shifted_page_map]
+
+            if 0 in page_map and shifted_selected_pages:
+                page_map = shifted_page_map
+                selected_pages_for_content = shifted_selected_pages
+            elif not selected_pages_for_content and shifted_selected_pages:
+                # Fallback for datasets where page numbering bases differ but page 0 is not present.
+                page_map = shifted_page_map
+                selected_pages_for_content = shifted_selected_pages
+
+        if selected_pages_for_content:
+            page_blocks: list[str] = []
+            for page_no in selected_pages_for_content:
+                page_text = page_map.get(page_no, "")[:max_chars_per_page]
+                page_blocks.append(f"Page {page_no}: {page_text}")
+            content = "\n\n".join(page_blocks)
+        else:
+            if selected_pages:
+                # Do not fall back to full document text here to avoid leaking wrong pages (e.g., only Page 1).
+                content = f"No page-level content found for selected pages {selected_pages}."
+            else:
+                content = source.get("ocr_content", "") or source.get("content", "") or source.get("description", "") or source.get("metadata_text", "")
+                content = (content or "")[:max_chars_fallback]
+
+        sections.append(
+            "\n".join(
+                [
+                    f"Document {index}",
+                    f"Title: {title}",
+                    f"Folder Name: {folder_name}",
+                    f"Folder Path: {folder_path}",
+                    f"Selected Chunks: {selected_chunks}",
+                    f"Selected Pages: {selected_pages}",
+                    f"Content: {content}",
+                ]
+            )
+        )
+    return "\n\n---\n\n".join(sections)
+
+
+def _build_document_sources_with_pages(
+    results: list[dict[str, Any]],
+    chunk_pages_by_document: dict[str, set[int]],
+    chunk_indices_by_document: dict[str, set[int]] | None = None,
+) -> list[dict[str, Any]]:
+    sources: list[dict[str, Any]] = []
+    chunk_indices_map = chunk_indices_by_document or {}
+    for item in results:
+        source = item.get("source", {})
+        doc_id = str(item.get("id") or "").strip()
+        sources.append(
+            {
+                "id": doc_id,
+                "score": item.get("score"),
+                "title": source.get("title", "Untitled"),
+                "folder_name": source.get("folder_name", ""),
+                "folder_path": source.get("folder_path", ""),
+                "created_at": source.get("created_at", ""),
+                "selected_pages": sorted(list(chunk_pages_by_document.get(doc_id, set()))),
+                "selected_chunk_indices": sorted(list(chunk_indices_map.get(doc_id, set()))),
+            }
+        )
+    return sources
+
+
 def _summarize_chunk_result_for_log(result: dict[str, Any]) -> dict[str, Any]:
     source = result.get("source", {})
     return {
         "id": result.get("id"),
         "document_id": source.get("document_id", ""),
         "chunk_index": source.get("chunk_index"),
+        "page": source.get("page"),
+        "page_start": source.get("page_start"),
+        "page_end": source.get("page_end"),
         "score": result.get("score"),
         "title": source.get("title", "Untitled"),
         "folder_name": source.get("folder_name", ""),
@@ -1545,6 +1978,9 @@ def _build_document_sources_from_chunk_results(results: list[dict[str, Any]]) ->
                 "id": document_id,
                 "score": item.get("score"),
                 "title": source.get("title", "Untitled"),
+                "page": source.get("page"),
+                "page_start": source.get("page_start"),
+                "page_end": source.get("page_end"),
                 "folder_name": source.get("folder_name", ""),
                 "folder_path": source.get("folder_path", ""),
                 "created_at": source.get("created_at", ""),
@@ -1560,6 +1996,9 @@ def _build_chunk_rag_context(results: list[dict[str, Any]], max_chars_per_chunk:
         title = source.get("title", "Untitled")
         doc_id = source.get("document_id", "")
         chunk_index = source.get("chunk_index", "")
+        page = source.get("page", "")
+        page_start = source.get("page_start", "")
+        page_end = source.get("page_end", "")
         score = item.get("score")
         folder_name = source.get("folder_name", "")
         folder_path = source.get("folder_path", "")
@@ -1573,6 +2012,9 @@ def _build_chunk_rag_context(results: list[dict[str, Any]], max_chars_per_chunk:
                     f"Chunk ID: {item.get('id', '')}",
                     f"Document ID: {doc_id}",
                     f"Chunk Index: {chunk_index}",
+                    f"Page: {page}",
+                    f"Page Start: {page_start}",
+                    f"Page End: {page_end}",
                     f"Title: {title}",
                     f"Score: {score}",
                     f"Folder Name: {folder_name}",
@@ -1693,7 +2135,12 @@ def _execute_raw_search(body: dict[str, Any], page: int, per_page: int) -> dict:
         return {"total": 0, "results": [], "error": str(exc)}
 
 
-def _execute_chunk_search(query_text: str, parameters: dict[str, Any] | None = None, top_k: int = 5) -> dict:
+def _execute_chunk_search(
+    query_text: str,
+    parameters: dict[str, Any] | None = None,
+    top_k: int = 5,
+    search_strategy: SearchStrategy = SearchStrategy.HYBRID_SEARCH,
+) -> dict:
     params = parameters or {}
     query = (params.get("query") or query_text or "").strip()
     if not query:
@@ -1724,31 +2171,105 @@ def _execute_chunk_search(query_text: str, parameters: dict[str, Any] | None = N
         },
     }
 
-    embedder = _get_embedding_model()
-    if embedder is False:
-        text_query: dict[str, Any] = {"multi_match": {"query": query, "fields": text_fields}}
-        if filter_clauses:
-            text_query = {"bool": {"must": [text_query], "filter": filter_clauses}}
-        body["query"] = text_query
-    else:
-        query_embedding = embedder.encode(f"query: {query}", normalize_embeddings=True).tolist()
-        text_query: dict[str, Any] = {"multi_match": {"query": query, "fields": text_fields}}
-        if filter_clauses:
-            text_query = {
-                "bool": {
-                    "must": [{"multi_match": {"query": query, "fields": text_fields}}],
-                    "filter": filter_clauses,
+    keyword_mode = (
+        search_strategy == SearchStrategy.KEYWORD_SEARCH
+        or params.get("match_mode") in KEYWORD_MATCH_MODES
+        or bool(params.get("exact_phrase") or params.get("must_terms") or params.get("should_terms"))
+    )
+
+    if keyword_mode:
+        must_clauses: list[dict[str, Any]] = []
+        should_clauses: list[dict[str, Any]] = []
+        match_mode = params.get("match_mode")
+
+        if not match_mode:
+            if params.get("must_terms"):
+                match_mode = "all_terms"
+            elif params.get("should_terms"):
+                match_mode = "any_terms"
+
+        exact_phrase = str(params.get("exact_phrase") or "").strip()
+        if match_mode == "exact_phrase" and exact_phrase:
+            must_clauses.append(
+                {
+                    "multi_match": {
+                        "query": exact_phrase,
+                        "fields": text_fields,
+                        "type": "phrase",
+                    }
                 }
-            }
-        knn_query: dict[str, Any] = {"knn": {CHUNK_VECTOR_FIELD: {"vector": query_embedding, "k": max(50, top_k * 6)}}}
+            )
+        elif match_mode == "all_terms":
+            for term in params.get("must_terms", []):
+                must_clauses.append(
+                    {
+                        "multi_match": {
+                            "query": str(term),
+                            "fields": text_fields,
+                            "operator": "and",
+                        }
+                    }
+                )
+        elif match_mode == "any_terms":
+            for term in params.get("should_terms", []):
+                should_clauses.append(
+                    {
+                        "multi_match": {
+                            "query": str(term),
+                            "fields": text_fields,
+                            "operator": "and",
+                        }
+                    }
+                )
+
+        if not must_clauses and not should_clauses:
+            must_clauses.append({"multi_match": {"query": query, "fields": text_fields}})
+
+        bool_query: dict[str, Any] = {"must": must_clauses}
+        if should_clauses:
+            bool_query["should"] = should_clauses
+            bool_query["minimum_should_match"] = 1
+            if not must_clauses:
+                bool_query.pop("must", None)
         if filter_clauses:
-            knn_query["knn"][CHUNK_VECTOR_FIELD]["filter"] = {"bool": {"filter": filter_clauses}}
-        body["query"] = {"hybrid": {"queries": [text_query, knn_query]}}
-        body["search_pipeline"] = "rrf-pipeline"
+            bool_query["filter"] = filter_clauses
+        body["query"] = {"bool": bool_query}
+    else:
+        embedder = _get_embedding_model()
+        if embedder is False:
+            text_query: dict[str, Any] = {"multi_match": {"query": query, "fields": text_fields}}
+            if filter_clauses:
+                text_query = {"bool": {"must": [text_query], "filter": filter_clauses}}
+            body["query"] = text_query
+        else:
+            query_embedding = embedder.encode(f"query: {query}", normalize_embeddings=True).tolist()
+            text_query: dict[str, Any] = {"multi_match": {"query": query, "fields": text_fields}}
+            if filter_clauses:
+                text_query = {
+                    "bool": {
+                        "must": [{"multi_match": {"query": query, "fields": text_fields}}],
+                        "filter": filter_clauses,
+                    }
+                }
+            knn_query: dict[str, Any] = {"knn": {CHUNK_VECTOR_FIELD: {"vector": query_embedding, "k": max(50, top_k * 6)}}}
+            if filter_clauses:
+                knn_query["knn"][CHUNK_VECTOR_FIELD]["filter"] = {"bool": {"filter": filter_clauses}}
+            body["query"] = {"hybrid": {"queries": [text_query, knn_query]}}
+            body["search_pipeline"] = "rrf-pipeline-dms"
 
     try:
         _log_search_body("OpenSearch _execute_chunk_search body", CHUNK_SEARCH_INDEX_NAME, body)
-        _log_verbose("_execute_chunk_search request", {"index": CHUNK_SEARCH_INDEX_NAME, "query": query, "top_k": top_k, "body": body})
+        _log_verbose(
+            "_execute_chunk_search request",
+            {
+                "index": CHUNK_SEARCH_INDEX_NAME,
+                "query": query,
+                "top_k": top_k,
+                "search_strategy": search_strategy.value,
+                "keyword_mode": keyword_mode,
+                "body": body,
+            },
+        )
         res = es.search(index=CHUNK_SEARCH_INDEX_NAME, body=body)
         hits_obj = res.get("hits", {})
         hits = hits_obj.get("hits", [])
@@ -1798,24 +2319,12 @@ async def orchestrate_agent_chat(question: str, chat_id: Optional[str] = None) -
     try:
         if intent == IntentType.KEYWORD_SEARCH:
             agent_result = prefetched_search_result or await KeywordSearchAgent.execute(question, parameters=params)
-            if agent_result.get("results"):
-                answer = f"Found {agent_result['total']} documents matching your keyword search.\nTop results:\n"
-                for r in agent_result["results"][:5]:
-                    title = r["source"].get("title", "Untitled")
-                    answer += f"- {title} (ID: {r['id']})\n"
-            else:
-                answer = "No documents found for your keyword search."
+            answer = _format_document_titles_only(agent_result.get("results", []), limit=10)
             response_payload = {"answer": answer, "search_results": agent_result}
 
         elif intent == IntentType.SEMANTIC_SEARCH:
             agent_result = prefetched_search_result or await SemanticSearchAgent.execute(question, parameters=params)
-            if agent_result.get("results"):
-                answer = f"Found {agent_result['total']} similar cases.\nMost relevant:\n"
-                for r in agent_result["results"][:5]:
-                    title = r["source"].get("title", "Untitled")
-                    answer += f"- {title} (ID: {r['id']}, score: {r['score']:.2f})\n"
-            else:
-                answer = "No similar cases found."
+            answer = _format_document_titles_only(agent_result.get("results", []), limit=10)
             response_payload = {"answer": answer, "search_results": agent_result}
 
         elif intent == IntentType.STATS_COUNT:
@@ -2114,6 +2623,22 @@ def _build_llm_payload(messages: list[dict[str, str]], stream: bool) -> dict[str
     _log_verbose("Built LLM payload", _summarize_llm_payload_for_log(payload))
     return payload
 
+
+def _log_agent3_prompt(messages: list[dict[str, str]], stream: bool) -> None:
+    logger.info(
+        "Step 5: Agent3 prompt sent to LLM | stream=%s\n%s",
+        stream,
+        json.dumps(messages, ensure_ascii=False, indent=2),
+    )
+
+
+def _log_agent3_response(response_text: str, stream: bool) -> None:
+    logger.info(
+        "Step 5: Agent3 response from LLM | stream=%s\n%s",
+        stream,
+        response_text,
+    )
+
 def _generate_completion(chat_id: Optional[str], user_prompt: str, system_prompt: Optional[str] = None) -> dict[str, Any]:
     # Step 5: send the prepared prompt to the LLM and collect the answer.
     resolved_chat_id, messages = _build_messages(chat_id, user_prompt, system_prompt=system_prompt)
@@ -2131,6 +2656,7 @@ def _generate_completion(chat_id: Optional[str], user_prompt: str, system_prompt
     if total_tokens > WARNING_THRESHOLD:
         logger.warning("Chat %s approaching token limit (%s/%s)", resolved_chat_id, total_tokens, MAX_CONTEXT_LENGTH)
     payload = _build_llm_payload(messages, stream=False)
+    _log_agent3_prompt(messages, stream=False)
     _log_workflow_step(
         5,
         "Send non-stream LLM request",
@@ -2148,6 +2674,7 @@ def _generate_completion(chat_id: Optional[str], user_prompt: str, system_prompt
         verbose_only=True,
     )
     assistant_response = remove_deepthink(body.get("message", {}).get("content", ""))
+    _log_agent3_response(assistant_response, stream=False)
     payload["messages"].append({"role": "assistant", "content": assistant_response})
     token_usage = _build_token_usage(messages, assistant_response, body)
     _save_chat_log(resolved_chat_id, payload, assistant_response, token_usage)
@@ -2160,6 +2687,7 @@ def _generate_completion(chat_id: Optional[str], user_prompt: str, system_prompt
 def _generate_completion_stream(chat_id: Optional[str], user_prompt: str, system_prompt: Optional[str] = None):
     resolved_chat_id, messages = _build_messages(chat_id, user_prompt, system_prompt=system_prompt)
     total_tokens = _count_tokens_approx(messages)
+    print(f"Total tokens in context: {total_tokens}")
     if total_tokens > MAX_CONTEXT_LENGTH:
         error_obj = {
             "exceed_tokens": "context_length_exceeded",
@@ -2172,9 +2700,12 @@ def _generate_completion_stream(chat_id: Optional[str], user_prompt: str, system
             yield f"data: {json.dumps(error_obj)}\n\n"
         return _error_stream()
     payload = _build_llm_payload(messages, stream=True)
+    _log_agent3_prompt(messages, stream=True)
     def _event_generator():
         assistant_response = ""
         final_event: dict[str, Any] = {}
+        chunk_count = 0
+        fallback_message = "I could not generate a complete answer from the model output. Please rephrase the question or try again."
         try:
             _log_workflow_step(
                 5,
@@ -2204,9 +2735,53 @@ def _generate_completion_stream(chat_id: Optional[str], user_prompt: str, system
                 chunk = data.get("message", {}).get("content")
                 if not chunk:
                     continue
+                chunk_count += 1
                 assistant_response += chunk
                 yield f"data: {json.dumps({'chunk': chunk, 'chat_id': resolved_chat_id, 'complete': False})}\n\n"
             cleaned = assistant_response.strip()
+            logger.info(
+                "Step 5: Stream completion stats | chat_id=%s chunk_count=%s response_chars=%s",
+                resolved_chat_id,
+                chunk_count,
+                len(cleaned),
+            )
+            if not cleaned:
+                logger.warning(
+                    "Step 5: Empty streamed assistant response; attempting non-stream fallback | chat_id=%s",
+                    resolved_chat_id,
+                )
+                fallback_payload = _build_llm_payload(messages, stream=False)
+                fallback_response = requests.post(
+                    LLM_API,
+                    json=fallback_payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=90,
+                )
+                if fallback_response.ok:
+                    fallback_body = fallback_response.json()
+                    fallback_text = remove_deepthink((fallback_body.get("message", {}) or {}).get("content", "")).strip()
+                    if fallback_text:
+                        cleaned = fallback_text
+                        final_event = fallback_body
+                        logger.info(
+                            "Step 5: Non-stream fallback recovered response | chat_id=%s response_chars=%s",
+                            resolved_chat_id,
+                            len(cleaned),
+                        )
+                    else:
+                        logger.warning("Step 5: Non-stream fallback returned empty content | chat_id=%s", resolved_chat_id)
+                else:
+                    logger.warning(
+                        "Step 5: Non-stream fallback failed with HTTP %s | chat_id=%s",
+                        fallback_response.status_code,
+                        resolved_chat_id,
+                    )
+
+                if not cleaned:
+                    cleaned = fallback_message
+
+                yield f"data: {json.dumps({'chunk': cleaned, 'chat_id': resolved_chat_id, 'complete': False})}\n\n"
+            _log_agent3_response(cleaned, stream=True)
             payload["messages"].append({"role": "assistant", "content": cleaned})
             token_usage = _build_token_usage(messages, cleaned, final_event)
             _save_chat_log(resolved_chat_id, payload, cleaned, token_usage)
@@ -2293,7 +2868,7 @@ def _build_search_body(req: SearchRequest) -> tuple[dict[str, Any], dict[str, st
             content_knn["knn"][CONTENT_VECTOR_FIELD]["filter"] = {"bool": {"filter": filter_clauses}}
         hybrid_queries.append(content_knn)
         body["query"] = {"hybrid": {"queries": hybrid_queries}}
-        body["search_pipeline"] = "rrf-pipeline"
+        body["search_pipeline"] = "rrf-pipeline-dms"
         return body, date_filter
     if filter_clauses:
         body["query"] = {"bool": {"filter": filter_clauses}}

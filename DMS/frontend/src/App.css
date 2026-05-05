@@ -2398,6 +2398,25 @@
   gap: 0.35rem;
 }
 
+.chatbot-panel__source-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.chatbot-panel__source-group-title {
+  font-size: 0.84rem;
+  color: #334155;
+  font-weight: 600;
+}
+
+.chatbot-panel__source-page-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
 .chatbot-panel__sources-heading {
   margin: 0 0 0.4rem;
   font-size: 0.82rem;
@@ -2424,6 +2443,15 @@
 .chatbot-panel__source-item:hover {
   background: #e0f2fe;
   border-color: #1a5276;
+}
+
+.chatbot-panel__source-item--page {
+  width: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.3rem 0.55rem;
+  border-radius: 999px;
 }
 
 /* Template-mirrored chatbot layout */

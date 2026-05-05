@@ -103,6 +103,41 @@ function formatRetrievedDocsMessage(sources = []) {
   return lines.join('\n')
 }
 
+function buildSourcePageGroups(sources = []) {
+  if (!Array.isArray(sources) || !sources.length) {
+    return []
+  }
+
+  const groups = []
+  for (const source of sources) {
+    const docId = source?.id || ''
+    const title = source?.title || 'Untitled'
+    const selectedPages = Array.isArray(source?.selected_pages)
+      ? source.selected_pages
+      : []
+
+    const normalizedPages = selectedPages
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value) && value > 0)
+      .sort((a, b) => a - b)
+
+    const fallbackPage = Number(source?.page || source?.page_start || 0)
+    const resolvedFallbackPage = Number.isFinite(fallbackPage) && fallbackPage > 0 ? fallbackPage : null
+    const pages = normalizedPages.length
+      ? normalizedPages
+      : (resolvedFallbackPage ? [resolvedFallbackPage] : [])
+
+    groups.push({
+      key: `${docId || title}-group`,
+      id: docId,
+      title,
+      pages,
+    })
+  }
+
+  return groups
+}
+
 function nowIsoString() {
   return new Date().toISOString()
 }
@@ -658,11 +693,14 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, onDoc
         setLastIntent('selected_document_chat')
       }
       const completedAnswer = (data.answer || '').trim()
-      updateLastAiMessage(() => ({
-        content: completedAnswer || 'No response was generated.',
-        loading: false,
-        timestamp: nowIsoString(),
-      }))
+      updateLastAiMessage((last) => {
+        const streamedAnswer = last.loading ? '' : (last.content || '').trim()
+        return {
+          content: completedAnswer || streamedAnswer || 'No response was generated.',
+          loading: false,
+          timestamp: nowIsoString(),
+        }
+      })
       if (data?.sources?.length) {
         appendMessage('ai', '', false, { kind: 'sources', sources: data.sources })
       }
@@ -1020,15 +1058,38 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, onDoc
                         ? (
                           <div className="chatbot-panel__sources-list">
                             <p className="chatbot-panel__sources-heading">Retrieved documents</p>
-                            {(message.sources || []).map((source) => (
-                              <button
-                                key={source.id || source.title}
-                                type="button"
-                                className="chatbot-panel__source-item"
-                                onClick={() => onDocumentMaximize && onDocumentMaximize(source.id)}
-                              >
-                                {source.title || 'Untitled'}
-                              </button>
+                            {buildSourcePageGroups(message.sources || []).map((group, groupIndex) => (
+                              <div key={group.key} className="chatbot-panel__source-group">
+                                <span className="chatbot-panel__source-group-title">doc{groupIndex + 1}: {group.title}</span>
+                                <div className="chatbot-panel__source-page-actions">
+                                  {group.pages.length
+                                  ? group.pages.map((page) => (
+                                    <button
+                                      key={`${group.key}-page-${page}`}
+                                      type="button"
+                                      className="chatbot-panel__source-item chatbot-panel__source-item--page"
+                                      onClick={() => {
+                                        onDocumentMaximize && onDocumentMaximize(group.id, page)
+                                      }}
+                                      disabled={!group.id}
+                                    >
+                                      page{page}
+                                    </button>
+                                  ))
+                                  : (
+                                    <button
+                                      type="button"
+                                      className="chatbot-panel__source-item chatbot-panel__source-item--page"
+                                      onClick={() => {
+                                        onDocumentMaximize && onDocumentMaximize(group.id, null)
+                                      }}
+                                      disabled={!group.id}
+                                    >
+                                      open
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
                             ))}
                           </div>
                         )

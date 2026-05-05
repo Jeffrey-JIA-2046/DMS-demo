@@ -142,6 +142,7 @@ public class DocumentOcrProcessingService {
         payload.put("title", StringUtils.hasText(document.getTitle()) ? document.getTitle() : document.getId());
         payload.put("description", document.getDescription());
         payload.put("ocr_text", ocrText);
+        payload.put("ocr_response_json", new LinkedHashMap<>(savedOcrPayload));
         payload.put("category", document.getCategory());
         payload.put("owner", document.getOwner());
         payload.put("tags", normalizeTags(document.getTags()));

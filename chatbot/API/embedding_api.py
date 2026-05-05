@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import json
 from datetime import datetime
 from typing import Any, Optional
 from uuid import uuid4
@@ -97,6 +98,7 @@ class EmbeddingJobRequest(BaseModel):
     title: str = ""
     description: Optional[str] = None
     ocr_text: str = Field(min_length=1)
+    ocr_response_json: Optional[dict[str, Any]] = None
     category: Optional[str] = None
     owner: Optional[str] = None
     tags: list[str] = Field(default_factory=list)
@@ -274,6 +276,146 @@ def chunk_text(text: str) -> list[str]:
     return [chunk for chunk in chunks if chunk]
 
 
+def extract_page_entries_from_ocr_response(ocr_response_json: Any) -> list[dict[str, Any]]:
+    def _to_object(value: Any) -> Any:
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except Exception:  # noqa: BLE001
+                return value
+        return value
+
+    normalized = _to_object(ocr_response_json)
+    if not isinstance(normalized, dict):
+        return []
+
+    raw_results = normalized.get("results")
+    if not isinstance(raw_results, list):
+        for key in ("response_json", "ocr_response_json", "data", "payload"):
+            nested = _to_object(normalized.get(key))
+            if isinstance(nested, dict) and isinstance(nested.get("results"), list):
+                raw_results = nested.get("results")
+                break
+
+    if not isinstance(raw_results, list):
+        return []
+
+    page_entries: list[dict[str, Any]] = []
+    for idx, item in enumerate(raw_results):
+        item = _to_object(item)
+        if not isinstance(item, dict):
+            continue
+        content = clean_text(
+            item.get("md_content")
+            or item.get("md_content_nohf")
+            or item.get("content")
+            or item.get("text")
+            or ""
+        )
+        if not content:
+            continue
+
+        raw_page_no = item.get("page_no")
+        if raw_page_no is None:
+            raw_page_no = item.get("pageNo")
+        if raw_page_no is None:
+            raw_page_no = item.get("page")
+        page_number: Optional[int] = None
+        if isinstance(raw_page_no, int):
+            # OCR response page_no is zero-based in practice.
+            page_number = raw_page_no + 1 if raw_page_no >= 0 else None
+        elif isinstance(raw_page_no, str) and raw_page_no.strip().isdigit():
+            parsed = int(raw_page_no.strip())
+            page_number = parsed + 1 if parsed >= 0 else None
+
+        if page_number is None:
+            page_number = idx + 1
+
+        page_entries.append({"page": page_number, "text": content})
+
+    return page_entries
+
+
+def build_chunk_records_from_page_entries(page_entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    sentence_records: list[dict[str, Any]] = []
+    for entry in page_entries:
+        page_number = entry["page"]
+        page_text = clean_text(entry["text"])
+        if not page_text:
+            continue
+
+        sentences = segment_text(page_text, detect_primary_language(page_text))
+        if not sentences:
+            sentences = [page_text]
+
+        for sentence in sentences:
+            sentence_records.append({"text": sentence, "page": page_number})
+
+    if not sentence_records:
+        return []
+
+    if len(sentence_records) == 1:
+        single = sentence_records[0]
+        return [
+            {
+                "text": single["text"],
+                "page": single["page"],
+                "page_start": single["page"],
+                "page_end": single["page"],
+            }
+        ]
+
+    chunk_records: list[dict[str, Any]] = []
+    current_chunk_sentences: list[str] = []
+    current_chunk_pages: list[int] = []
+    current_length = 0
+
+    for index, sentence_record in enumerate(sentence_records):
+        sentence = sentence_record["text"]
+        sentence_page = sentence_record["page"]
+        sentence_lang = detect_primary_language(sentence)
+        sentence_length = calculate_chunk_size(sentence, sentence_lang)
+
+        current_chunk_sentences.append(sentence)
+        current_chunk_pages.append(sentence_page)
+        current_length += sentence_length
+
+        if current_length >= MAX_CHUNK_SIZE or index == len(sentence_records) - 1:
+            page_start = min(current_chunk_pages)
+            page_end = max(current_chunk_pages)
+            chunk_records.append(
+                {
+                    "text": " ".join(current_chunk_sentences),
+                    "page": page_start,
+                    "page_start": page_start,
+                    "page_end": page_end,
+                }
+            )
+
+            if index < len(sentence_records) - 1:
+                # Keep one-sentence overlap between adjacent chunks for continuity.
+                current_chunk_sentences = [sentence]
+                current_chunk_pages = [sentence_page]
+                current_length = sentence_length
+            else:
+                current_chunk_sentences = []
+                current_chunk_pages = []
+                current_length = 0
+
+    return [record for record in chunk_records if record.get("text")]
+
+
+def build_chunk_records(ocr_text: str, ocr_response_json: Any = None) -> list[dict[str, Any]]:
+    page_entries = extract_page_entries_from_ocr_response(ocr_response_json)
+    if not page_entries:
+        raise ValueError("ocr_response_json.results with page_no and md_content is required for page-aware embedding")
+
+    chunk_records = build_chunk_records_from_page_entries(page_entries)
+    if not chunk_records:
+        raise ValueError("ocr_response_json.results has no usable md_content for embedding")
+    return chunk_records
+
+
 def generate_embeddings(texts: list[str]) -> list[list[float]]:
     cleaned = [clean_text(text) for text in texts if clean_text(text)]
     if not cleaned:
@@ -368,6 +510,9 @@ def _default_index_body() -> dict[str, Any]:
                     "type": "nested",
                     "properties": {
                         "text": {"type": "text"},
+                        "page": {"type": "integer"},
+                        "page_start": {"type": "integer"},
+                        "page_end": {"type": "integer"},
                         "embedding": {
                             "type": "knn_vector",
                             "dimension": EMBEDDING_DIMENSION,
@@ -395,6 +540,9 @@ def _default_chunk_index_body() -> dict[str, Any]:
             "properties": {
                 "chunk_id": {"type": "keyword"},
                 "chunk_index": {"type": "integer"},
+                "page": {"type": "integer"},
+                "page_start": {"type": "integer"},
+                "page_end": {"type": "integer"},
                 CHUNK_TEXT_FIELD: {"type": "text"},
                 CHUNK_VECTOR_FIELD: {
                     "type": "knn_vector",
@@ -499,9 +647,8 @@ def _index_document(document_id: str, request: EmbeddingJobRequest) -> dict[str,
     metadata_entries = build_metadata_entries(document_metadata)
     metadata_text = build_metadata_text(document_metadata)
 
-    chunks = chunk_text(ocr_text)
-    if not chunks:
-        chunks = [ocr_text]
+    chunk_records = build_chunk_records(ocr_text, request.ocr_response_json)
+    chunks = [record["text"] for record in chunk_records]
 
     chunk_embeddings = generate_embeddings(chunks)
     if not chunk_embeddings:
@@ -534,8 +681,14 @@ def _index_document(document_id: str, request: EmbeddingJobRequest) -> dict[str,
         "updated_at": now,
         CONTENT_VECTOR_FIELD: content_embedding,
         CHUNKS_FIELD: [
-            {"text": chunk, "embedding": embedding}
-            for chunk, embedding in zip(chunks, chunk_embeddings)
+            {
+                "text": chunk_record["text"],
+                "page": chunk_record.get("page"),
+                "page_start": chunk_record.get("page_start"),
+                "page_end": chunk_record.get("page_end"),
+                "embedding": embedding,
+            }
+            for chunk_record, embedding in zip(chunk_records, chunk_embeddings)
         ],
     }
     if title_embedding is not None:
@@ -567,11 +720,15 @@ def _index_document(document_id: str, request: EmbeddingJobRequest) -> dict[str,
     resolved_created_at = payload.get("created_at")
 
     chunk_count = 0
-    for chunk_index, (chunk_value, chunk_embedding) in enumerate(zip(chunks, chunk_embeddings), start=1):
+    for chunk_index, (chunk_record, chunk_embedding) in enumerate(zip(chunk_records, chunk_embeddings), start=1):
+        chunk_value = chunk_record["text"]
         chunk_id = f"{document_id}::chunk::{chunk_index}"
         chunk_doc = {
             "chunk_id": chunk_id,
             "chunk_index": chunk_index,
+            "page": chunk_record.get("page"),
+            "page_start": chunk_record.get("page_start"),
+            "page_end": chunk_record.get("page_end"),
             CHUNK_TEXT_FIELD: chunk_value,
             CHUNK_VECTOR_FIELD: chunk_embedding,
             "document_id": document_id,
@@ -648,6 +805,12 @@ def health() -> dict[str, Any]:
 def create_embedding_job(body: EmbeddingJobRequest, background_tasks: BackgroundTasks) -> EmbeddingJobStartResponse:
     if not clean_text(body.ocr_text):
         raise HTTPException(status_code=400, detail="ocr_text cannot be empty.")
+
+    if not extract_page_entries_from_ocr_response(body.ocr_response_json):
+        raise HTTPException(
+            status_code=400,
+            detail="ocr_response_json must include OCR pages in results with page_no and md_content.",
+        )
 
     job_id = str(uuid4())
     with _jobs_lock:

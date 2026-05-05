@@ -490,6 +490,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   const [movingDocumentId, setMovingDocumentId] = useState(null)
   const [expandedDocumentId, setExpandedDocumentId] = useState(null)
   const [expandedDocument, setExpandedDocument] = useState(null)
+  const [expandedRequestedPage, setExpandedRequestedPage] = useState(1)
   const [expandedLoading, setExpandedLoading] = useState(false)
   const [expandedError, setExpandedError] = useState('')
   const [chatbotOpen, setChatbotOpen] = useState(false)
@@ -1171,11 +1172,15 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     setOcrWorkspaceOpen(true)
   }
 
-  const handleDocumentMaximize = async (id) => {
+  const handleDocumentMaximize = async (id, requestedPage = null) => {
     if (!id) return
+    const normalizedRequestedPage = Number.isFinite(Number(requestedPage)) && Number(requestedPage) > 0
+      ? Math.floor(Number(requestedPage))
+      : 1
     setDetailsInitialTab('content')
     setSelectedId(id)
     setExpandedDocumentId(id)
+    setExpandedRequestedPage(normalizedRequestedPage)
     setExpandedDocument(null)
     setExpandedLoading(true)
     setExpandedError('')
@@ -1194,6 +1199,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   const closeExpandedViewer = () => {
     setExpandedDocumentId(null)
     setExpandedDocument(null)
+    setExpandedRequestedPage(1)
     setExpandedError('')
     setExpandedLoading(false)
   }
@@ -1409,6 +1415,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
         title: embeddingDocument?.title ?? '',
         description: embeddingDocument?.description ?? '',
         ocr_text: ocrText,
+        ocr_response_json: ocrResult && typeof ocrResult === 'object' ? ocrResult : null,
         category: embeddingDocument?.category ?? null,
         owner: embeddingDocument?.owner ?? null,
         tags: Array.isArray(embeddingDocument?.tags) ? embeddingDocument.tags : [],
@@ -2658,7 +2665,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
             {expandedError && <p className="feedback feedback--error">{expandedError}</p>}
             {!expandedLoading && !expandedError && expandedDocument && (
               <DocumentDetails
-                key={`expanded-${expandedDocument.id}`}
+                key={`expanded-${expandedDocument.id}-${expandedRequestedPage}`}
                 document={expandedDocument}
                 onUploadVersion={handleUploadVersion}
                 onArchive={handleArchive}
@@ -2670,6 +2677,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
                 busy={busy}
                 downloadUrlBuilder={buildDownloadUrl}
                 initialTab="content"
+                initialRequestedPage={expandedRequestedPage}
                 showPdfTextPreview={false}
               />
             )}

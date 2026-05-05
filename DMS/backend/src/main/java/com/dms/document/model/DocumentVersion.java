@@ -1,6 +1,7 @@
 package com.dms.document.model;
 
 import java.time.Instant;
+import java.util.Base64;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -79,12 +80,28 @@ public class DocumentVersion {
         this.sizeBytes = sizeBytes;
     }
 
+    @JsonIgnore
     public byte[] getContent() {
         return content;
     }
 
+    @JsonIgnore
     public void setContent(byte[] content) {
         this.content = content;
+    }
+
+    @JsonProperty("content")
+    public String getContentBase64() {
+        return content == null ? null : Base64.getEncoder().encodeToString(content);
+    }
+
+    @JsonProperty("content")
+    public void setContentBase64(String contentBase64) {
+        if (contentBase64 == null || contentBase64.isBlank()) {
+            this.content = null;
+            return;
+        }
+        this.content = Base64.getDecoder().decode(contentBase64);
     }
 
     public Instant getCreatedAt() {

@@ -102,6 +102,7 @@ export default function DocumentDetails({
   busy,
   downloadUrlBuilder,
   initialTab = 'content',
+  initialRequestedPage = 1,
   showPdfTextPreview = true,
 }) {
   const [editing, setEditing] = useState(false)
@@ -281,6 +282,9 @@ export default function DocumentDetails({
   }
 
   useEffect(() => {
+    const normalizedInitialPage = Number.isFinite(Number(initialRequestedPage)) && Number(initialRequestedPage) > 0
+      ? Math.floor(Number(initialRequestedPage))
+      : 1
     setForm(buildFormState(document))
     setEditing(false)
     setFileInputKey((prev) => prev + 1)
@@ -288,14 +292,14 @@ export default function DocumentDetails({
     setActiveDetailsSection(normalizeDetailsSectionTab('metadata'))
     setPreviewState(createPreviewState())
     setPdfPager({ pageNumber: 1, pageCount: 0, renderingPage: false, status: 'idle' })
-    setRequestedPdfPage(1)
-    setPdfPageInput('1')
+    setRequestedPdfPage(normalizedInitialPage)
+    setPdfPageInput(String(normalizedInitialPage))
     lastRequestedVersionRef.current = null
     setPrinting(false)
     setMetadataErrors({})
     setApprovalModal(null)
     setApprovalNote('')
-  }, [document, resolvedInitialTab])
+  }, [document, resolvedInitialTab, initialRequestedPage])
 
   useEffect(() => {
     console.debug('[DocumentDetails] preview effect trigger', { activeTab, documentId: document?.id, previewReloadKey, lastRequestedVersion: lastRequestedVersionRef.current })

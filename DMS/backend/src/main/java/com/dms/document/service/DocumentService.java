@@ -27,6 +27,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -107,6 +108,9 @@ public class DocumentService {
     private final Clock clock;
     private final CodeTableRepository codeTableRepository;
     private final ChatbotDocumentIndexService chatbotDocumentIndexService;
+
+    @Value("${app.documents.max-upload-bytes:104857600}")
+    private long maxUploadBytes;
 
     public DocumentService(
         DocumentRepository documentRepository,
@@ -1298,8 +1302,9 @@ public class DocumentService {
         if (file == null || file.isEmpty()) {
             throw new InvalidDocumentException("A non-empty file is required");
         }
-        if (file.getSize() > 25 * 1024 * 1024L) {
-            throw new InvalidDocumentException("Files larger than 25 MB are not allowed");
+        if (file.getSize() > maxUploadBytes) {
+            long maxUploadMb = Math.max(1L, maxUploadBytes / (1024L * 1024L));
+            throw new InvalidDocumentException("Files larger than " + maxUploadMb + " MB are not allowed");
         }
         return file;
     }

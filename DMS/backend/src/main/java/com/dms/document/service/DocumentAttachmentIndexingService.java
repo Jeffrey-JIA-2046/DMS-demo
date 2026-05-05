@@ -12,10 +12,12 @@ import java.util.Optional;
 import java.util.Set;
 
 import org.opensearch.client.opensearch.OpenSearchClient;
+import org.opensearch.client.opensearch._types.ErrorCause;
 import org.opensearch.client.opensearch._types.Refresh;
 import org.opensearch.client.opensearch.core.GetRequest;
 import org.opensearch.client.opensearch.core.IndexRequest;
 import org.opensearch.client.opensearch.core.DeleteRequest;
+import org.opensearch.client.opensearch._types.OpenSearchException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -76,15 +78,26 @@ public class DocumentAttachmentIndexingService {
         payload.put("max_chars", 200000);
 
         try {
-            IndexRequest.Builder<Map<String, Object>> builder = new IndexRequest.Builder<Map<String, Object>>()
-                .index(attachmentsIndex)
-                .id(version.getId())
-                .document(payload)
-                .refresh(Refresh.WaitFor)
-                .pipeline(attachmentsPipeline);
-            openSearchClient.index(builder.build());
-        } catch (IOException ex) {
-            log.warn("Failed to index attachment for document {} version {}: {}", document.getId(), version.getId(), ex.getMessage());
+            indexAttachmentDocument(version.getId(), payload, true);
+        } catch (Exception ex) {
+            log.warn(
+                "Failed to index attachment content for document {} version {}: {}. Retrying metadata-only indexing.",
+                document.getId(),
+                version.getId(),
+                formatOpenSearchError(ex)
+            );
+            try {
+                payload.remove("data");
+                payload.remove("max_chars");
+                indexAttachmentDocument(version.getId(), payload, false);
+            } catch (Exception retryEx) {
+                log.warn(
+                    "Attachment metadata-only indexing also failed for document {} version {}: {}",
+                    document.getId(),
+                    version.getId(),
+                    formatOpenSearchError(retryEx)
+                );
+            }
         }
     }
 
@@ -209,16 +222,41 @@ public class DocumentAttachmentIndexingService {
         payload.put("max_chars", 200000);
 
         try {
-            IndexRequest.Builder<Map<String, Object>> builder = new IndexRequest.Builder<Map<String, Object>>()
-                .index(attachmentsIndex)
-                .id(version.getId())
-                .document(payload)
-                .refresh(Refresh.WaitFor)
-                .pipeline(attachmentsPipeline);
-            openSearchClient.index(builder.build());
-        } catch (IOException ex) {
-            log.debug("On-demand attachment preview indexing failed for version {}: {}", version.getId(), ex.getMessage());
+            indexAttachmentDocument(version.getId(), payload, true);
+        } catch (Exception ex) {
+            log.debug(
+                "On-demand attachment preview indexing failed for version {}: {}",
+                version.getId(),
+                formatOpenSearchError(ex)
+            );
         }
+    }
+
+    private void indexAttachmentDocument(String versionId, Map<String, Object> payload, boolean withPipeline) throws IOException {
+        IndexRequest.Builder<Map<String, Object>> builder = new IndexRequest.Builder<Map<String, Object>>()
+            .index(attachmentsIndex)
+            .id(versionId)
+            .document(payload)
+            .refresh(Refresh.WaitFor);
+
+        if (withPipeline && StringUtils.hasText(attachmentsPipeline)) {
+            builder.pipeline(attachmentsPipeline);
+        }
+
+        openSearchClient.index(builder.build());
+    }
+
+    private String formatOpenSearchError(Exception ex) {
+        if (ex instanceof OpenSearchException openSearchException) {
+            ErrorCause cause = openSearchException.error();
+            if (cause != null) {
+                String reason = cause.reason();
+                if (StringUtils.hasText(reason)) {
+                    return reason;
+                }
+            }
+        }
+        return ex.getMessage();
     }
 
     private String sanitizePreviewText(String text) {
