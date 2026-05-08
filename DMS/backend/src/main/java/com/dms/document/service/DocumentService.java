@@ -536,6 +536,7 @@ public class DocumentService {
             document.addVersion(buildVersion(document, safeFile, now, 1));
 
             Document saved = documentRepository.save(document);
+            persistDocumentVersions(saved);
             indexLatestAttachment(saved);
             createApprovalTask(saved, approver, now);
             workflowService.startWorkflowForDocument(saved, username);
@@ -565,6 +566,7 @@ public class DocumentService {
             document.setOcrStatusUpdatedAt(now);
             document.setUpdatedAt(now);
             Document saved = documentRepository.save(document);
+            persistDocumentVersions(saved);
             indexLatestAttachment(saved);
             documentOcrProcessingService.markDocumentOcrUnavailable(saved.getId());
             return toDetails(saved);
@@ -727,15 +729,17 @@ public class DocumentService {
 
         // Legacy records may have null version IDs. Treat null/"null" as latest.
         if (!StringUtils.hasText(versionId) || "null".equalsIgnoreCase(versionId.trim())) {
-            return document.getVersions().stream()
+            DocumentVersion latest = document.getVersions().stream()
                 .max(Comparator.comparingInt(DocumentVersion::getVersionNumber))
                 .orElseThrow(() -> new ResourceNotFoundException("No versions found for document"));
+            return loadVersionContent(document.getId(), latest.getId());
         }
 
-        return document.getVersions().stream()
+        DocumentVersion selected = document.getVersions().stream()
             .filter(version -> versionId.equals(version.getId()))
             .findFirst()
             .orElseThrow(() -> new ResourceNotFoundException("Version not found"));
+        return loadVersionContent(document.getId(), selected.getId());
     }
 
     @Transactional(readOnly = true)
@@ -751,13 +755,82 @@ public class DocumentService {
     }
 
     @Transactional(readOnly = true)
+    public DocumentVersionRepository.VersionStorageHealth getVersionStorageHealth() {
+        try {
+            return documentVersionRepository.getStorageHealth();
+        } catch (IOException ex) {
+            throw new RuntimeException("Failed to read version storage health", ex);
+        }
+    }
+
+    @Transactional
+    public VersionHousekeepingResult runVersionHousekeeping(boolean dryRun) {
+        try {
+            DocumentVersionRepository.VersionStorageHealth before = documentVersionRepository.getStorageHealth();
+            List<String> scannedIds = documentVersionRepository.findDistinctOsDocumentIds();
+            List<String> orphanIds = new ArrayList<>();
+            int deletedRows = 0;
+
+            for (String documentId : scannedIds) {
+                if (!documentRepository.findById(documentId).isPresent()) {
+                    orphanIds.add(documentId);
+                    if (!dryRun) {
+                        deletedRows += documentVersionRepository.deleteByOsDocumentId(documentId);
+                    }
+                }
+            }
+
+            DocumentVersionRepository.VersionStorageHealth after = documentVersionRepository.getStorageHealth();
+            return new VersionHousekeepingResult(
+                scannedIds.size(),
+                orphanIds.size(),
+                deletedRows,
+                orphanIds,
+                dryRun,
+                before,
+                after
+            );
+        } catch (IOException ex) {
+            throw new RuntimeException("Failed to run version housekeeping", ex);
+        }
+    }
+
+    @Transactional(readOnly = true)
     public DocumentVersion getLatestVersion(String documentId, String username) {
         AppUser user = requireUser(username);
         Document document = findDocument(documentId);
         assertCanRead(resolveFolderForAccess(document), user);
-        return document.getVersions().stream()
+        DocumentVersion latest = document.getVersions().stream()
             .max(Comparator.comparingInt(DocumentVersion::getVersionNumber))
             .orElseThrow(() -> new ResourceNotFoundException("No versions found for document"));
+        return loadVersionContent(document.getId(), latest.getId());
+    }
+
+    private void persistDocumentVersions(Document document) throws IOException {
+        if (document == null || document.getVersions() == null || document.getVersions().isEmpty()) {
+            return;
+        }
+        for (DocumentVersion version : document.getVersions()) {
+            if (version == null) {
+                continue;
+            }
+            if (!StringUtils.hasText(version.getDocumentId())) {
+                version.setDocumentId(document.getId());
+            }
+            documentVersionRepository.save(version);
+        }
+    }
+
+    private DocumentVersion loadVersionContent(String documentId, String versionId) {
+        if (!StringUtils.hasText(documentId) || !StringUtils.hasText(versionId)) {
+            throw new ResourceNotFoundException("Version not found");
+        }
+        try {
+            return documentVersionRepository.findByIdAndDocumentId(versionId, documentId)
+                .orElseThrow(() -> new ResourceNotFoundException("Version not found"));
+        } catch (IOException ex) {
+            throw new RuntimeException("Failed to load document version", ex);
+        }
     }
 
     @Transactional(readOnly = true)
@@ -1649,6 +1722,17 @@ public class DocumentService {
             copySystemDateMetadata(existingMetadata, merged);
         }
         return merged;
+    }
+
+    public record VersionHousekeepingResult(
+        int scannedDocumentIds,
+        int orphanDocumentIds,
+        int deletedRows,
+        List<String> orphanIds,
+        boolean dryRun,
+        DocumentVersionRepository.VersionStorageHealth before,
+        DocumentVersionRepository.VersionStorageHealth after
+    ) {
     }
 
     private void copySystemDateMetadata(Map<String, String> source, Map<String, String> target) {

@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dev Housekeeping Job</title>
+  <style>
+    :root {
+      --bg: #f4f1e8;
+      --panel: #fffef8;
+      --text: #232323;
+      --muted: #666;
+      --ok: #1f7a3f;
+      --warn: #b85a00;
+      --danger: #9f1a1a;
+      --line: #d9d0bf;
+      --accent: #0d5f8f;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Trebuchet MS", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 15% 20%, #fef5dd 0%, transparent 35%),
+        radial-gradient(circle at 80% 10%, #dff1ff 0%, transparent 40%),
+        var(--bg);
+      min-height: 100vh;
+    }
+
+    .wrap {
+      width: min(980px, 94vw);
+      margin: 24px auto;
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--panel);
+      box-shadow: 0 10px 26px rgba(0, 0, 0, 0.06);
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.7rem;
+      letter-spacing: 0.3px;
+    }
+
+    p.hint {
+      margin: 0 0 20px;
+      color: var(--muted);
+    }
+
+    .grid {
+      display: grid;
+      gap: 14px;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      margin-bottom: 14px;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+      background: #fff;
+    }
+
+    .card h2 {
+      margin: 0 0 10px;
+      font-size: 1rem;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    button {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 9px 12px;
+      background: #faf8ef;
+      color: var(--text);
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    button.primary {
+      background: var(--accent);
+      color: #fff;
+      border-color: #0b4f77;
+    }
+
+    button.warn {
+      background: #ffe9d3;
+      border-color: #efc391;
+      color: #603209;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .status {
+      margin: 4px 0 14px;
+      min-height: 24px;
+      font-weight: 600;
+    }
+
+    .status.ok { color: var(--ok); }
+    .status.warn { color: var(--warn); }
+    .status.error { color: var(--danger); }
+
+    pre {
+      margin: 0;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #151515;
+      color: #d6ffd6;
+      overflow: auto;
+      min-height: 220px;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .small {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-bottom: 6px;
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <h1>Dev Housekeeping Job Runner</h1>
+    <p class="hint">Manual tools for version-storage health checks and orphan cleanup.</p>
+
+    <div id="status" class="status"></div>
+
+    <section class="grid">
+      <article class="card">
+        <h2>Version Storage</h2>
+        <div class="actions">
+          <button data-action="versions-health" class="primary">Health Check</button>
+          <button data-action="versions-dry" class="warn">Housekeeping Dry Run</button>
+          <button data-action="versions-run">Housekeeping Execute</button>
+        </div>
+      </article>
+
+      <article class="card">
+        <h2>OpenSearch Versions Content</h2>
+        <div class="actions">
+          <button data-action="os-versions-content-dry" class="warn">Dry Run</button>
+          <button data-action="os-versions-content-run">Execute Remove content</button>
+        </div>
+      </article>
+
+      <article class="card">
+        <h2>Chatbot Index</h2>
+        <div class="actions">
+          <button data-action="chatbot-run">Run Chatbot Housekeeping</button>
+          <button data-action="chatbot-chunk-title-embedding-dry" class="warn">Chunk Vectors Dry Run</button>
+          <button data-action="chatbot-chunk-title-embedding-run">Chunk Vectors Execute</button>
+          <button data-action="chatbot-chunk-ocr-content-dry" class="warn">Chunk OCR Content Dry Run</button>
+          <button data-action="chatbot-chunk-ocr-content-run">Chunk OCR Content Execute</button>
+        </div>
+      </article>
+    </section>
+
+    <div class="small">Response output</div>
+    <pre id="output">Ready.</pre>
+  </main>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const outputEl = document.getElementById('output');
+    const buttons = Array.from(document.querySelectorAll('button[data-action]'));
+
+    const routes = {
+      'versions-health': { method: 'GET', url: '/api/documents/versions/health' },
+      'versions-dry': { method: 'POST', url: '/api/documents/versions/housekeeping?dryRun=true' },
+      'versions-run': { method: 'POST', url: '/api/documents/versions/housekeeping?dryRun=false' },
+      'os-versions-content-dry': { method: 'POST', url: '/api/documents/versions-content/housekeeping?dryRun=true' },
+      'os-versions-content-run': { method: 'POST', url: '/api/documents/versions-content/housekeeping?dryRun=false' },
+      'chatbot-run': { method: 'POST', url: '/api/chatbot/index/housekeeping' },
+      'chatbot-chunk-title-embedding-dry': { method: 'POST', url: '/api/chatbot/index/chunks/vectors/backfill?dryRun=true' },
+      'chatbot-chunk-title-embedding-run': { method: 'POST', url: '/api/chatbot/index/chunks/vectors/backfill?dryRun=false' },
+      'chatbot-chunk-ocr-content-dry': { method: 'POST', url: '/api/chatbot/index/chunks/ocr-content/backfill?dryRun=true' },
+      'chatbot-chunk-ocr-content-run': { method: 'POST', url: '/api/chatbot/index/chunks/ocr-content/backfill?dryRun=false' }
+    };
+
+    function setStatus(message, type) {
+      statusEl.textContent = message;
+      statusEl.className = 'status ' + (type || '');
+    }
+
+    function setBusy(busy) {
+      buttons.forEach((button) => {
+        button.disabled = busy;
+      });
+    }
+
+    async function runAction(action) {
+      const route = routes[action];
+      if (!route) {
+        setStatus('Unknown action.', 'error');
+        return;
+      }
+
+      if (action === 'versions-run') {
+        const ok = window.confirm('Run destructive housekeeping now? This removes orphaned rows from document_versions.');
+        if (!ok) {
+          setStatus('Execution cancelled.', 'warn');
+          return;
+        }
+      }
+
+      if (action === 'os-versions-content-run') {
+        const ok = window.confirm('Run destructive housekeeping now? This removes versions.content from OpenSearch documents.');
+        if (!ok) {
+          setStatus('Execution cancelled.', 'warn');
+          return;
+        }
+      }
+
+      if (action === 'chatbot-chunk-title-embedding-run') {
+        const ok = window.confirm('Run chunk vectors backfill now? This updates title_embedding and chatbot_ocr_content_embedding in dms-documents-chatbot-chunks-a.');
+        if (!ok) {
+          setStatus('Execution cancelled.', 'warn');
+          return;
+        }
+      }
+
+      if (action === 'chatbot-chunk-ocr-content-run') {
+        const ok = window.confirm('Run chunk ocr_content backfill now? This updates ocr_content in dms-documents-chatbot-chunks-a.');
+        if (!ok) {
+          setStatus('Execution cancelled.', 'warn');
+          return;
+        }
+      }
+
+      setBusy(true);
+      setStatus('Running: ' + action + ' ...', 'warn');
+
+      try {
+        const response = await fetch(route.url, {
+          method: route.method,
+          headers: {
+            'Accept': 'application/json'
+          }
+        });
+
+        let payload;
+        const text = await response.text();
+        try {
+          payload = text ? JSON.parse(text) : {};
+        } catch (_) {
+          payload = { raw: text };
+        }
+
+        outputEl.textContent = JSON.stringify({
+          action,
+          status: response.status,
+          ok: response.ok,
+          payload
+        }, null, 2);
+
+        if (response.ok) {
+          setStatus('Completed: ' + action, 'ok');
+        } else {
+          setStatus('Request failed (' + response.status + ') for ' + action, 'error');
+        }
+      } catch (error) {
+        outputEl.textContent = String(error && error.stack ? error.stack : error);
+        setStatus('Request error for ' + action, 'error');
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    buttons.forEach((button) => {
+      button.addEventListener('click', () => {
+        runAction(button.dataset.action);
+      });
+    });
+  </script>
+</body>
+</html>

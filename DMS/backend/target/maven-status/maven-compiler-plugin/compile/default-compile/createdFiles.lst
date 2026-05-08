@@ -1,6 +1,7 @@
 com\dms\user\config\UserManagementDataInitializer.class
 com\dms\codetable\dto\CodeTableItemResponse.class
 com\dms\document\repository\DocumentFolderRepository.class
+com\dms\chatbot\service\ChatbotDocumentIndexService$DocumentVectors.class
 com\dms\workflow\service\WorkflowService$1.class
 com\dms\document\dto\DocumentFolderTreeNode.class
 com\dms\document\model\FolderMetadataField.class
@@ -19,6 +20,7 @@ com\dms\extraction\service\DocumentExtractionProcessingService.class
 com\dms\job\service\JobManagementService.class
 com\dms\user\controller\UserManagementController.class
 com\dms\document\dto\FolderPermissionEntryDto.class
+com\dms\document\service\DocumentVersionsContentHousekeepingService.class
 com\dms\document\dto\DocumentFolderRequest.class
 com\dms\document\dto\DocumentApprovalNoteResponse.class
 com\dms\workflow\model\WorkflowStepLog.class
@@ -28,11 +30,13 @@ com\dms\extraction\service\DocumentExtractionProcessingService$1.class
 com\dms\knowledge\repository\KnowledgeTopicRepository.class
 com\dms\chatbot\client\DeepSeekClient$ChatResponse.class
 com\dms\config\MysqlToOpenSearchDocumentMigration$1.class
+com\dms\document\service\DocumentService$VersionHousekeepingResult.class
 com\dms\chatbot\service\ChatbotDocumentIndexService$ChunkHousekeepingResult.class
 com\dms\exception\InvalidDocumentException.class
 com\dms\workflow\repository\WorkflowRepository.class
 com\dms\document\dto\FolderPermissionsResponse.class
 com\dms\document\dto\DocumentApprovalInfo.class
+com\dms\dev\controller\DevHousekeepController.class
 com\dms\ocr\repository\DocumentOcrResultRepository.class
 com\dms\retention\dto\RetentionRuleRequest.class
 com\dms\config\OpenSearchConfig.class
@@ -128,6 +132,7 @@ com\dms\ocr\service\DocumentOcrProcessingService.class
 com\dms\knowledge\repository\KnowledgeTopicMemberRepository.class
 com\dms\workflow\controller\WorkflowController.class
 com\dms\task\model\TaskType.class
+com\dms\document\service\DocumentVersionsContentHousekeepingService$VersionsContentHousekeepingResult.class
 com\dms\codetable\controller\CodeTablePublicController.class
 com\dms\knowledge\model\KnowledgeContribution.class
 com\dms\codetable\repository\CodeTableRepository.class
@@ -159,7 +164,9 @@ com\dms\workflow\model\WorkflowInstance.class
 com\dms\knowledge\specification\KnowledgeTopicSpecifications.class
 com\dms\chatbot\dto\DocumentQuestionRequest.class
 com\dms\knowledge\repository\KnowledgeTopicStarRepository.class
+com\dms\chatbot\service\ChatbotDocumentIndexService$ChunkOcrContentBackfillResult.class
 com\dms\workflow\service\WorkflowService.class
+com\dms\chatbot\service\ChatbotDocumentIndexService$ChunkVectorBackfillResult.class
 com\dms\retention\model\RetentionRule.class
 com\dms\reminder\service\ReminderManagementService.class
 com\dms\job\model\JobType.class
@@ -202,6 +209,7 @@ com\dms\document\specification\DocumentQueryBuilder.class
 com\dms\retention\model\RetentionDateBasis.class
 com\dms\config\ClockConfig.class
 com\dms\ocr\service\DocumentOcrResultService.class
+com\dms\document\repository\DocumentVersionRepository$VersionStorageHealth.class
 com\dms\document\dto\DocumentFilter.class
 com\dms\security\crypto\AesPasswordEncoder.class
 com\dms\user\model\AppUser.class

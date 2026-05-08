@@ -243,7 +243,14 @@ public class DocumentRepository extends BaseOpenSearchRepository<Document> {
     @Override
     public java.util.Optional<Document> findById(String id) throws IOException {
         if (openSearchEnabled || dataSource == null) {
-            return super.findById(id);
+            SearchRequest request = new SearchRequest.Builder()
+                .index(getIndexName())
+                .size(1)
+                .query(q -> q.ids(i -> i.values(id)))
+                .source(s -> s.filter(f -> f.excludes("versions.content")))
+                .build();
+            SearchResponse<Document> response = openSearchClient.search(request, Document.class);
+            return extractHits(response).stream().findFirst();
         }
         return findAll().stream().filter(document -> id.equals(document.getId())).findFirst();
     }
@@ -251,7 +258,23 @@ public class DocumentRepository extends BaseOpenSearchRepository<Document> {
     @Override
     public Document save(Document entity) throws IOException {
         if (openSearchEnabled || dataSource == null) {
-            return super.save(entity);
+            String id = entity != null ? entity.getId() : null;
+            @SuppressWarnings("unchecked")
+            Map<String, Object> payload = objectMapper.convertValue(entity, Map.class);
+            stripVersionContentForOpenSearch(payload);
+
+            var response = openSearchClient.index(i -> {
+                var builder = i.index(documentsIndex).document(payload).refresh(Refresh.WaitFor);
+                if (id != null && !id.isBlank()) {
+                    builder.id(id);
+                }
+                return builder;
+            });
+
+            if ((id == null || id.isBlank()) && entity != null) {
+                entity.setId(response.id());
+            }
+            return entity;
         }
 
         try (Connection conn = dataSource.getConnection()) {
@@ -415,9 +438,28 @@ public class DocumentRepository extends BaseOpenSearchRepository<Document> {
         }
     }
 
+    @SuppressWarnings("unchecked")
+    private void stripVersionContentForOpenSearch(Map<String, Object> payload) {
+        if (payload == null) {
+            return;
+        }
+        Object versionsObj = payload.get("versions");
+        if (!(versionsObj instanceof List<?> versions)) {
+            return;
+        }
+        for (Object item : versions) {
+            if (!(item instanceof Map<?, ?> rawMap)) {
+                continue;
+            }
+            Map<String, Object> version = (Map<String, Object>) rawMap;
+            version.remove("content");
+        }
+    }
+
     @Override
     public void deleteById(String id) throws IOException {
         if (openSearchEnabled || dataSource == null) {
+            cleanupVersionStorageForDocument(id);
             super.deleteById(id);
             return;
         }
@@ -448,6 +490,25 @@ public class DocumentRepository extends BaseOpenSearchRepository<Document> {
             }
         } catch (Exception ex) {
             throw new IOException("Failed to delete document from MySQL", ex);
+        }
+    }
+
+    private void cleanupVersionStorageForDocument(String documentId) throws IOException {
+        if (dataSource == null || !StringUtils.hasText(documentId)) {
+            return;
+        }
+        Long numericId = parseLong(documentId);
+        try (Connection conn = dataSource.getConnection()) {
+            try (PreparedStatement ps = conn.prepareStatement(
+                "DELETE FROM document_versions WHERE os_document_id = ?" + (numericId != null ? " OR document_id = ?" : ""))) {
+                ps.setString(1, documentId);
+                if (numericId != null) {
+                    ps.setLong(2, numericId);
+                }
+                ps.executeUpdate();
+            }
+        } catch (Exception ex) {
+            throw new IOException("Failed to cleanup document versions from MySQL", ex);
         }
     }
 

@@ -65,6 +65,8 @@ CONTENT_VECTOR_FIELD = os.getenv("SEARCH_CONTENT_VECTOR_FIELD", "chatbot_ocr_con
 CHUNKS_FIELD = os.getenv("SEARCH_CHUNKS_FIELD", "chatbot_ocr_content_chunks")
 CHUNK_TEXT_FIELD = os.getenv("SEARCH_CHUNK_TEXT_FIELD", "chunk_text")
 CHUNK_VECTOR_FIELD = os.getenv("SEARCH_CHUNK_VECTOR_FIELD", "chunk_embedding")
+CHUNK_TITLE_VECTOR_FIELD = os.getenv("SEARCH_CHUNK_TITLE_VECTOR_FIELD", "title_embedding")
+CHUNK_CONTENT_VECTOR_FIELD = os.getenv("SEARCH_CHUNK_CONTENT_VECTOR_FIELD", CONTENT_VECTOR_FIELD)
 
 _raw_origins = os.getenv("EMBEDDING_CORS_ORIGINS", "*")
 CORS_ORIGINS = ["*"] if _raw_origins.strip() == "*" else [o.strip() for o in _raw_origins.split(",") if o.strip()]
@@ -544,7 +546,26 @@ def _default_chunk_index_body() -> dict[str, Any]:
                 "page_start": {"type": "integer"},
                 "page_end": {"type": "integer"},
                 CHUNK_TEXT_FIELD: {"type": "text"},
+                "ocr_content": {"type": "text"},
                 CHUNK_VECTOR_FIELD: {
+                    "type": "knn_vector",
+                    "dimension": EMBEDDING_DIMENSION,
+                    "method": {
+                        "name": "hnsw",
+                        "space_type": "cosinesimil",
+                        "engine": "faiss",
+                    },
+                },
+                CHUNK_TITLE_VECTOR_FIELD: {
+                    "type": "knn_vector",
+                    "dimension": EMBEDDING_DIMENSION,
+                    "method": {
+                        "name": "hnsw",
+                        "space_type": "cosinesimil",
+                        "engine": "faiss",
+                    },
+                },
+                CHUNK_CONTENT_VECTOR_FIELD: {
                     "type": "knn_vector",
                     "dimension": EMBEDDING_DIMENSION,
                     "method": {
@@ -576,7 +597,13 @@ def _default_chunk_index_body() -> dict[str, Any]:
                     },
                 },
                 "folder_breadcrumbs": {"type": "text"},
-                "document_metadata": {"type": "object", "enabled": True},
+                "document_metadata": {
+                    "properties": {
+                        "archiveDate": {"type": "date"},
+                        "documentDate": {"type": "date"},
+                        "expiryDate": {"type": "date"},
+                    }
+                },
                 "metadata_text": {"type": "text"},
                 "metadata_entries": {
                     "type": "nested",
@@ -730,7 +757,10 @@ def _index_document(document_id: str, request: EmbeddingJobRequest) -> dict[str,
             "page_start": chunk_record.get("page_start"),
             "page_end": chunk_record.get("page_end"),
             CHUNK_TEXT_FIELD: chunk_value,
+            "ocr_content": ocr_text,
             CHUNK_VECTOR_FIELD: chunk_embedding,
+            CHUNK_TITLE_VECTOR_FIELD: title_embedding,
+            CHUNK_CONTENT_VECTOR_FIELD: content_embedding,
             "document_id": document_id,
             "title": resolved_title,
             "category": resolved_category,
@@ -761,6 +791,8 @@ def _index_document(document_id: str, request: EmbeddingJobRequest) -> dict[str,
         "title_vector_field": TITLE_VECTOR_FIELD,
         "content_vector_field": CONTENT_VECTOR_FIELD,
         "chunk_vector_field": CHUNK_VECTOR_FIELD,
+        "chunk_title_vector_field": CHUNK_TITLE_VECTOR_FIELD,
+        "chunk_content_vector_field": CHUNK_CONTENT_VECTOR_FIELD,
         "updated_at": now,
     }
 
@@ -797,6 +829,8 @@ def health() -> dict[str, Any]:
         "title_vector_field": TITLE_VECTOR_FIELD,
         "content_vector_field": CONTENT_VECTOR_FIELD,
         "chunk_vector_field": CHUNK_VECTOR_FIELD,
+        "chunk_title_vector_field": CHUNK_TITLE_VECTOR_FIELD,
+        "chunk_content_vector_field": CHUNK_CONTENT_VECTOR_FIELD,
         "job_count": len(_jobs),
     }
 

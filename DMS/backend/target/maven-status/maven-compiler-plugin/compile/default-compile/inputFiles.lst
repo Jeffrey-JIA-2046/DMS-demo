@@ -27,6 +27,7 @@ C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\config\MysqlToOpenSearchDocum
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\config\OpenSearchConfig.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\config\OpenSearchIndexInitializer.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\config\WebConfig.java
+C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\dev\controller\DevHousekeepController.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\controller\DocumentController.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\controller\DocumentFolderController.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\dto\ApproverOptionResponse.java
@@ -66,6 +67,7 @@ C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\service\DocumentAtta
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\service\DocumentFolderPermissionService.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\service\DocumentFolderService.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\service\DocumentService.java
+C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\service\DocumentVersionsContentHousekeepingService.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\service\FolderPermissionEvaluator.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\service\FolderPermissionSnapshot.java
 C:\test\DMS-demo\DMS\backend\src\main\java\com\dms\document\specification\DocumentQueryBuilder.java

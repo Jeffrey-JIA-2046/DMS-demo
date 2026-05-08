@@ -49,12 +49,17 @@ SEARCH_INDEX_NAME = (
     or (os.getenv("SEARCH_INDEX_NAME") if os.getenv("SEARCH_INDEX_NAME") not in {None, "", "dms-documents"} else None)
     or DEFAULT_SEARCH_INDEX_NAME
 )
-DEFAULT_CHUNK_SEARCH_INDEX_NAME = "dms-documents-chatbot-chunks"
+DEFAULT_SEARCH_PIPELINE_NAME = "rrf-pipeline-dms-3" if SEARCH_INDEX_NAME == "dms-documents-chatbot" else "rrf-pipeline-dms"
+SEARCH_PIPELINE_NAME = os.getenv("CHATBOT_SEARCH_PIPELINE_NAME", DEFAULT_SEARCH_PIPELINE_NAME)
+DEFAULT_CHUNK_SEARCH_INDEX_NAME = "dms-documents-chatbot-chunks-a"
 CHUNK_SEARCH_INDEX_NAME = (
     os.getenv("CHATBOT_CHUNK_SEARCH_INDEX_NAME")
     or os.getenv("SEARCH_CHUNK_INDEX_NAME")
     or DEFAULT_CHUNK_SEARCH_INDEX_NAME
 )
+CHUNK_SEARCH_PIPELINE_NAME = os.getenv("CHATBOT_CHUNK_SEARCH_PIPELINE_NAME", "rrf-pipeline-dms-4")
+SEARCH_PREFERENCE = os.getenv("CHATBOT_SEARCH_PREFERENCE", "rag-debug-fixed").strip()
+CHUNK_SEARCH_PREFERENCE = os.getenv("CHATBOT_CHUNK_SEARCH_PREFERENCE", SEARCH_PREFERENCE).strip()
 DEFAULT_OCR_DOCUMENT_INDEX_NAME = "dms-ocr-document"
 OCR_DOCUMENT_INDEX_NAME = (
     os.getenv("CHATBOT_OCR_DOCUMENT_INDEX_NAME")
@@ -66,6 +71,8 @@ TITLE_VECTOR_FIELD = os.getenv("SEARCH_TITLE_VECTOR_FIELD", "chatbot_title_embed
 CONTENT_VECTOR_FIELD = os.getenv("SEARCH_CONTENT_VECTOR_FIELD", "chatbot_ocr_content_embedding")
 CHUNK_VECTOR_FIELD = os.getenv("SEARCH_CHUNK_VECTOR_FIELD", "chunk_embedding")
 CHUNK_TEXT_FIELD = os.getenv("SEARCH_CHUNK_TEXT_FIELD", "chunk_text")
+CHUNK_TITLE_VECTOR_FIELD = os.getenv("SEARCH_CHUNK_TITLE_VECTOR_FIELD", "title_embedding")
+CHUNK_CONTENT_VECTOR_FIELD = os.getenv("SEARCH_CHUNK_CONTENT_VECTOR_FIELD", "chatbot_ocr_content_embedding")
 
 LLM_API = os.getenv("LLM_API", "http://localhost:11434/api/chat")
 LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-r1:14b")
@@ -78,7 +85,10 @@ MAX_CONTEXT_LENGTH = int(os.getenv("MAX_CONTEXT_LENGTH", "30000"))
 WARNING_THRESHOLD = int(os.getenv("WARNING_THRESHOLD", "16000"))
 VERBOSE_LOGS = os.getenv("CHATBOT_VERBOSE_LOGS", "false").lower() == "true"
 DEBUG_SEARCH_BODY = os.getenv("CHATBOT_DEBUG_SEARCH_BODY", "true").lower() == "true"
-RAG_MAX_SELECTED_PAGES = int(os.getenv("CHATBOT_RAG_MAX_SELECTED_PAGES", "10"))
+DEBUG_SEARCH_BODY_FILE = os.getenv("CHATBOT_DEBUG_SEARCH_BODY_FILE", "./debug_search_body.json")
+RAG_LLM_TOP_K = int(os.getenv("CHATBOT_RAG_LLM_TOP_K", "10"))
+RAG_MAX_SELECTED_PAGES = int(os.getenv("CHATBOT_RAG_MAX_SELECTED_PAGES", "20"))
+RAG_MAX_PAGES_PER_DOCUMENT = int(os.getenv("CHATBOT_RAG_MAX_PAGES_PER_DOCUMENT", "5"))
 
 _raw_origins = os.getenv("CHATBOT_CORS_ORIGINS", "*")
 CORS_ORIGINS = ["*"] if _raw_origins.strip() == "*" else [x.strip() for x in _raw_origins.split(",") if x.strip()]
@@ -211,11 +221,26 @@ def _log_workflow_step(step: int, title: str, payload: Any | None = None, verbos
 def _log_search_body(label: str, index_name: str, body: dict[str, Any]) -> None:
     if not DEBUG_SEARCH_BODY:
         return
+    # Keep this file focused on the chunk retrieval body used for RAG answer generation.
+    if label != "OpenSearch _execute_chunk_search body":
+        return
+
     try:
-        rendered = json.dumps(body, ensure_ascii=False, indent=2)
+        file_path = os.path.abspath(DEBUG_SEARCH_BODY_FILE)
+        parent_dir = os.path.dirname(file_path)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
+        with open(file_path, "w", encoding="utf-8") as handle:
+            json.dump(body, handle, ensure_ascii=False, indent=2)
     except Exception:  # noqa: BLE001
-        rendered = repr(body)
-    logger.info("%s | index=%s\n%s", label, index_name, rendered)
+        logger.exception("Failed to write search body debug JSON file")
+
+
+def _build_search_request_kwargs(preference: str | None = None) -> dict[str, Any]:
+    resolved_preference = (preference or "").strip()
+    if not resolved_preference:
+        return {}
+    return {"params": {"preference": resolved_preference}}
 
 # ---------------------------------------------------------------------------
 # App and clients
@@ -696,7 +721,8 @@ class StatsAgent:
                 }
             )
         try:
-            res = es.search(index=SEARCH_INDEX_NAME, body=body)
+            search_kwargs = _build_search_request_kwargs(SEARCH_PREFERENCE)
+            res = es.search(index=SEARCH_INDEX_NAME, body=body, **search_kwargs)
             total = res["hits"]["total"]["value"]
             return {
                 "count": total,
@@ -769,7 +795,7 @@ class RagAnswerAgent:
         parameters: dict[str, Any] | None = None,
         search_strategy: SearchStrategy = SearchStrategy.HYBRID_SEARCH,
         search_result: dict[str, Any] | None = None,
-        top_k: int = 5,
+        top_k: int = RAG_LLM_TOP_K,
     ) -> dict:
         # Step 4: retrieve top chunks, then map to unique pages/documents for grounded answering.
         params = parameters or {}
@@ -780,9 +806,19 @@ class RagAnswerAgent:
             top_k=top_k,
             search_strategy=search_strategy,
         )
-        chunk_hits = (chunk_search_result.get("results", []) or [])[:top_k]
+        all_chunk_hits = chunk_search_result.get("results", []) or []
+        logger.info(
+            "Step 4: Chunk retrieval returned=%s; selected_top_k=%s for LLM context",
+            len(all_chunk_hits),
+            top_k,
+        )
+        chunk_hits = all_chunk_hits[:top_k]
         _log_top_chunk_hits(question, chunk_hits, top_k)
-        chunk_page_map = _collect_chunk_pages_by_document(chunk_hits, max_total_pages=RAG_MAX_SELECTED_PAGES)
+        chunk_page_map = _collect_chunk_pages_by_document(
+            chunk_hits,
+            max_total_pages=RAG_MAX_SELECTED_PAGES,
+            max_pages_per_document=RAG_MAX_PAGES_PER_DOCUMENT,
+        )
         chunk_index_map = _collect_chunk_indices_by_document(chunk_hits)
         logger.info(
             "Step 4: Selected pages after budget | max_pages=%s selected=%s",
@@ -924,16 +960,26 @@ async def _build_agent_stream(question: str, chat_id: Optional[str], intent_resu
         return _stream_text_response(answer, resolved_chat_id, intent, classification_meta)
 
     if intent == IntentType.GENERAL_RAG_QA:
-        rag_top_k = 10
+        rag_top_k = RAG_LLM_TOP_K
         chunk_search_result = _execute_chunk_search(
             question,
             params,
             top_k=rag_top_k,
             search_strategy=search_strategy,
         )
-        chunk_hits = (chunk_search_result.get("results", []) or [])[:rag_top_k]
+        all_chunk_hits = chunk_search_result.get("results", []) or []
+        logger.info(
+            "Step 4: Chunk retrieval returned=%s; selected_top_k=%s for LLM context",
+            len(all_chunk_hits),
+            rag_top_k,
+        )
+        chunk_hits = all_chunk_hits[:rag_top_k]
         _log_top_chunk_hits(question, chunk_hits, rag_top_k)
-        chunk_page_map = _collect_chunk_pages_by_document(chunk_hits, max_total_pages=RAG_MAX_SELECTED_PAGES)
+        chunk_page_map = _collect_chunk_pages_by_document(
+            chunk_hits,
+            max_total_pages=RAG_MAX_SELECTED_PAGES,
+            max_pages_per_document=RAG_MAX_PAGES_PER_DOCUMENT,
+        )
         chunk_index_map = _collect_chunk_indices_by_document(chunk_hits)
         logger.info(
             "Step 4: Selected pages after budget | max_pages=%s selected=%s",
@@ -1441,10 +1487,10 @@ Search results preview:
 
 Rules:
 - Choose exactly one task_type: list_documents, answer_question, or count_results.
-- list_documents means the user mainly wants matched document candidates (titles/IDs), not synthesized content answers.
+- list_documents means the user mainly wants matched document candidates (titles/IDs), not synthesized content answers, just some keyword search
 - answer_question means answer the user using searched documents, unless search_strategy=no_search.
 - count_results means count matched documents.
-- If the user asks to find/show/list/recommend documents and does not ask for explanation, summary, comparison, or evidence, choose list_documents.
+
 - If the user asks for a summary, key points, brief explanation, compare/contrast, or synthesis, classify as answer_question.
 - If the user asks to "list" documents and also asks for key points/summary, classify as answer_question.
 - If the user asks a direct content question (for example "what does it say about...", "why", "how", "which policy", "summarize"), choose answer_question.
@@ -1610,9 +1656,11 @@ def _safe_int(value: Any) -> int | None:
 def _collect_chunk_pages_by_document(
     chunk_results: list[dict[str, Any]],
     max_total_pages: int | None = None,
+    max_pages_per_document: int | None = None,
 ) -> dict[str, set[int]]:
     pages_by_document: dict[str, set[int]] = {}
     page_budget = max_total_pages if isinstance(max_total_pages, int) and max_total_pages > 0 else None
+    per_document_budget = max_pages_per_document if isinstance(max_pages_per_document, int) and max_pages_per_document > 0 else None
     selected_doc_pages: set[tuple[str, int]] = set()
 
     for item in chunk_results or []:
@@ -1639,6 +1687,9 @@ def _collect_chunk_pages_by_document(
         for page_value in page_values:
             doc_page_key = (document_id, page_value)
             if doc_page_key in selected_doc_pages:
+                continue
+            current_doc_pages = pages_by_document.get(document_id, set())
+            if per_document_budget is not None and len(current_doc_pages) >= per_document_budget:
                 continue
             if page_budget is not None and len(selected_doc_pages) >= page_budget:
                 return pages_by_document
@@ -2069,7 +2120,8 @@ def _execute_search(req: SearchRequest) -> dict:
             {"request": req.model_dump(), "body": _summarize_search_body_for_log(body), "date_filter": date_filter},
             verbose_only=True,
         )
-        res = es.search(index=SEARCH_INDEX_NAME, body=body)
+        search_kwargs = _build_search_request_kwargs(SEARCH_PREFERENCE)
+        res = es.search(index=SEARCH_INDEX_NAME, body=body, **search_kwargs)
         hits_obj = res.get("hits", {})
         hits = hits_obj.get("hits", [])
         total_obj = hits_obj.get("total", 0)
@@ -2104,7 +2156,8 @@ def _execute_raw_search(body: dict[str, Any], page: int, per_page: int) -> dict:
     try:
         _log_search_body("OpenSearch _execute_raw_search body", SEARCH_INDEX_NAME, body)
         _log_verbose("_execute_raw_search request", {"page": page, "per_page": per_page, "body": body})
-        res = es.search(index=SEARCH_INDEX_NAME, body=body)
+        search_kwargs = _build_search_request_kwargs(SEARCH_PREFERENCE)
+        res = es.search(index=SEARCH_INDEX_NAME, body=body, **search_kwargs)
         hits_obj = res.get("hits", {})
         hits = hits_obj.get("hits", [])
         total_obj = hits_obj.get("total", 0)
@@ -2157,10 +2210,10 @@ def _execute_chunk_search(
     )
     filter_clauses = _build_filter_clauses(req, {}) if effective_filters else []
 
-    text_fields = [f"{CHUNK_TEXT_FIELD}^2", "title", "metadata_text", "folder_name", "folder_path"]
+    text_fields = ["title^2", "ocr_content", CHUNK_TEXT_FIELD, "metadata_text", "folder_name", "folder_path"]
     body: dict[str, Any] = {
         "from": 0,
-        "size": max(10, top_k),
+        "size": max(100, top_k),
         "highlight": {
             "fields": {
                 CHUNK_TEXT_FIELD: {"type": "unified", "number_of_fragments": 3, "fragment_size": 260},
@@ -2243,6 +2296,8 @@ def _execute_chunk_search(
             body["query"] = text_query
         else:
             query_embedding = embedder.encode(f"query: {query}", normalize_embeddings=True).tolist()
+            knn_k = max(60, top_k * 6)
+
             text_query: dict[str, Any] = {"multi_match": {"query": query, "fields": text_fields}}
             if filter_clauses:
                 text_query = {
@@ -2251,14 +2306,51 @@ def _execute_chunk_search(
                         "filter": filter_clauses,
                     }
                 }
-            knn_query: dict[str, Any] = {"knn": {CHUNK_VECTOR_FIELD: {"vector": query_embedding, "k": max(50, top_k * 6)}}}
+
+            title_knn_query: dict[str, Any] = {
+                "knn": {
+                    CHUNK_TITLE_VECTOR_FIELD: {
+                        "vector": query_embedding,
+                        "k": knn_k,
+                    }
+                }
+            }
+            content_knn_query: dict[str, Any] = {
+                "knn": {
+                    CHUNK_CONTENT_VECTOR_FIELD: {
+                        "vector": query_embedding,
+                        "k": knn_k,
+                    }
+                }
+            }
+            chunk_knn_query: dict[str, Any] = {
+                "knn": {
+                    CHUNK_VECTOR_FIELD: {
+                        "vector": query_embedding,
+                        "k": knn_k,
+                    }
+                }
+            }
             if filter_clauses:
-                knn_query["knn"][CHUNK_VECTOR_FIELD]["filter"] = {"bool": {"filter": filter_clauses}}
-            body["query"] = {"hybrid": {"queries": [text_query, knn_query]}}
-            body["search_pipeline"] = "rrf-pipeline-dms"
+                title_knn_query["knn"][CHUNK_TITLE_VECTOR_FIELD]["filter"] = {"bool": {"filter": filter_clauses}}
+                content_knn_query["knn"][CHUNK_CONTENT_VECTOR_FIELD]["filter"] = {"bool": {"filter": filter_clauses}}
+                chunk_knn_query["knn"][CHUNK_VECTOR_FIELD]["filter"] = {"bool": {"filter": filter_clauses}}
+
+            body["query"] = {
+                "hybrid": {
+                    "queries": [
+                        text_query,
+                        title_knn_query,
+                        content_knn_query,
+                        chunk_knn_query,
+                    ]
+                }
+            }
+            body["search_pipeline"] = CHUNK_SEARCH_PIPELINE_NAME
 
     try:
         _log_search_body("OpenSearch _execute_chunk_search body", CHUNK_SEARCH_INDEX_NAME, body)
+        search_kwargs = _build_search_request_kwargs(CHUNK_SEARCH_PREFERENCE)
         _log_verbose(
             "_execute_chunk_search request",
             {
@@ -2267,10 +2359,11 @@ def _execute_chunk_search(
                 "top_k": top_k,
                 "search_strategy": search_strategy.value,
                 "keyword_mode": keyword_mode,
+                "preference": CHUNK_SEARCH_PREFERENCE,
                 "body": body,
             },
         )
-        res = es.search(index=CHUNK_SEARCH_INDEX_NAME, body=body)
+        res = es.search(index=CHUNK_SEARCH_INDEX_NAME, body=body, **search_kwargs)
         hits_obj = res.get("hits", {})
         hits = hits_obj.get("hits", [])
         total_obj = hits_obj.get("total", 0)
@@ -2868,14 +2961,13 @@ def _build_search_body(req: SearchRequest) -> tuple[dict[str, Any], dict[str, st
             content_knn["knn"][CONTENT_VECTOR_FIELD]["filter"] = {"bool": {"filter": filter_clauses}}
         hybrid_queries.append(content_knn)
         body["query"] = {"hybrid": {"queries": hybrid_queries}}
-        body["search_pipeline"] = "rrf-pipeline-dms"
+        body["search_pipeline"] = SEARCH_PIPELINE_NAME
         return body, date_filter
     if filter_clauses:
         body["query"] = {"bool": {"filter": filter_clauses}}
     else:
         body["query"] = {"match_all": {}}
 
-    print("search body:", json.dumps(body, indent=2))
     return body, date_filter
 
 # ---------------------------------------------------------------------------
@@ -2930,10 +3022,16 @@ def health() -> dict[str, Any]:
         "ok": True,
         "search_index": SEARCH_INDEX_NAME,
         "chunk_search_index": CHUNK_SEARCH_INDEX_NAME,
+        "search_pipeline": SEARCH_PIPELINE_NAME,
+        "chunk_search_pipeline": CHUNK_SEARCH_PIPELINE_NAME,
+        "search_preference": SEARCH_PREFERENCE,
+        "chunk_search_preference": CHUNK_SEARCH_PREFERENCE,
         "chat_log_index": CHAT_LOG_INDEX,
         "title_vector_field": TITLE_VECTOR_FIELD,
         "content_vector_field": CONTENT_VECTOR_FIELD,
         "chunk_vector_field": CHUNK_VECTOR_FIELD,
+        "chunk_title_vector_field": CHUNK_TITLE_VECTOR_FIELD,
+        "chunk_content_vector_field": CHUNK_CONTENT_VECTOR_FIELD,
         "chunk_text_field": CHUNK_TEXT_FIELD,
         "llm_model": LLM_MODEL,
     }
@@ -2944,7 +3042,8 @@ def search(req: SearchRequest) -> dict[str, Any]:
         body, date_filter = _build_search_body(req)
         _log_search_body("OpenSearch /api/chatbot/search body", SEARCH_INDEX_NAME, body)
         try:
-            res = es.search(index=SEARCH_INDEX_NAME, body=body)
+            search_kwargs = _build_search_request_kwargs(SEARCH_PREFERENCE)
+            res = es.search(index=SEARCH_INDEX_NAME, body=body, **search_kwargs)
         except Exception as search_exc:
             if (req.search_mode or "").lower() == "hybrid":
                 logger.warning("Hybrid query failed, falling back to text search: %s", search_exc)
@@ -2964,7 +3063,8 @@ def search(req: SearchRequest) -> dict[str, Any]:
                 )
                 body, date_filter = _build_search_body(fallback_req)
                 _log_search_body("OpenSearch /api/chatbot/search fallback body", SEARCH_INDEX_NAME, body)
-                res = es.search(index=SEARCH_INDEX_NAME, body=body)
+                search_kwargs = _build_search_request_kwargs(SEARCH_PREFERENCE)
+                res = es.search(index=SEARCH_INDEX_NAME, body=body, **search_kwargs)
             else:
                 raise
         hits_obj = res.get("hits", {})

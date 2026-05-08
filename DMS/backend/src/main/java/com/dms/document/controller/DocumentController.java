@@ -33,8 +33,10 @@ import com.dms.document.dto.DocumentUploadRequest;
 import com.dms.document.dto.PageResponse;
 import com.dms.document.model.DocumentStatus;
 import com.dms.document.model.DocumentVersion;
+import com.dms.document.repository.DocumentVersionRepository;
 import com.dms.document.service.DocumentService;
 import com.dms.document.service.DocumentAttachmentIndexingService;
+import com.dms.document.service.DocumentVersionsContentHousekeepingService;
 import com.dms.ocr.client.DotsOcrClient;
 import com.dms.ocr.service.DocumentOcrProcessingService;
 import com.dms.ocr.service.DocumentOcrResultService;
@@ -52,14 +54,16 @@ public class DocumentController {
     private final DocumentOcrResultService documentOcrResultService;
     private final DocumentOcrProcessingService documentOcrProcessingService;
     private final DocumentAttachmentIndexingService documentAttachmentIndexingService;
+    private final DocumentVersionsContentHousekeepingService documentVersionsContentHousekeepingService;
 
-    public DocumentController(DocumentService documentService, AuditService auditService, DotsOcrClient dotsOcrClient, DocumentOcrResultService documentOcrResultService, DocumentOcrProcessingService documentOcrProcessingService, DocumentAttachmentIndexingService documentAttachmentIndexingService) {
+    public DocumentController(DocumentService documentService, AuditService auditService, DotsOcrClient dotsOcrClient, DocumentOcrResultService documentOcrResultService, DocumentOcrProcessingService documentOcrProcessingService, DocumentAttachmentIndexingService documentAttachmentIndexingService, DocumentVersionsContentHousekeepingService documentVersionsContentHousekeepingService) {
         this.documentService = documentService;
         this.auditService = auditService;
         this.dotsOcrClient = dotsOcrClient;
         this.documentOcrResultService = documentOcrResultService;
         this.documentOcrProcessingService = documentOcrProcessingService;
         this.documentAttachmentIndexingService = documentAttachmentIndexingService;
+        this.documentVersionsContentHousekeepingService = documentVersionsContentHousekeepingService;
     }
 
     @GetMapping
@@ -109,6 +113,25 @@ public class DocumentController {
     @GetMapping("/{id}")
     public DocumentDetailsResponse get(@PathVariable String id, java.security.Principal principal) {
         return documentService.getDocument(id, principal != null ? principal.getName() : null);
+    }
+
+    @GetMapping("/versions/health")
+    public DocumentVersionRepository.VersionStorageHealth getVersionStorageHealth() {
+        return documentService.getVersionStorageHealth();
+    }
+
+    @PostMapping("/versions/housekeeping")
+    public DocumentService.VersionHousekeepingResult runVersionHousekeeping(
+        @RequestParam(value = "dryRun", required = false, defaultValue = "true") boolean dryRun
+    ) {
+        return documentService.runVersionHousekeeping(dryRun);
+    }
+
+    @PostMapping("/versions-content/housekeeping")
+    public DocumentVersionsContentHousekeepingService.VersionsContentHousekeepingResult runVersionsContentHousekeeping(
+        @RequestParam(value = "dryRun", required = false, defaultValue = "true") boolean dryRun
+    ) {
+        return documentVersionsContentHousekeepingService.run(dryRun);
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

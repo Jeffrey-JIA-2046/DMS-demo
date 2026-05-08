@@ -27,6 +27,7 @@ import com.dms.document.model.Document;
 import com.dms.document.model.DocumentFolder;
 import com.dms.document.model.DocumentVersion;
 import com.dms.document.repository.DocumentRepository;
+import com.dms.document.repository.DocumentVersionRepository;
 import com.dms.embedding.client.EmbeddingApiClient;
 import com.dms.exception.ResourceNotFoundException;
 import com.dms.extraction.service.DocumentExtractionProcessingService;
@@ -41,6 +42,7 @@ public class DocumentOcrProcessingService {
     private int ocrBatchPageLimit;
 
     private final DocumentRepository documentRepository;
+    private final DocumentVersionRepository documentVersionRepository;
     private final DotsOcrClient dotsOcrClient;
     private final DocumentOcrResultService documentOcrResultService;
     private final DocumentExtractionProcessingService documentExtractionProcessingService;
@@ -49,6 +51,7 @@ public class DocumentOcrProcessingService {
 
     public DocumentOcrProcessingService(
         DocumentRepository documentRepository,
+        DocumentVersionRepository documentVersionRepository,
         DotsOcrClient dotsOcrClient,
         DocumentOcrResultService documentOcrResultService,
         DocumentExtractionProcessingService documentExtractionProcessingService,
@@ -56,6 +59,7 @@ public class DocumentOcrProcessingService {
         Clock clock
     ) {
         this.documentRepository = documentRepository;
+        this.documentVersionRepository = documentVersionRepository;
         this.dotsOcrClient = dotsOcrClient;
         this.documentOcrResultService = documentOcrResultService;
         this.documentExtractionProcessingService = documentExtractionProcessingService;
@@ -105,10 +109,12 @@ public class DocumentOcrProcessingService {
                 .max(Comparator.comparingInt(DocumentVersion::getVersionNumber))
                 .orElseThrow(() -> new ResourceNotFoundException("No versions found for document"));
 
+            byte[] content = resolveVersionContent(document.getId(), version);
+
             Map<String, Object> response = ocrPdfInBatches(
                 version.getFileName(),
                 version.getContentType(),
-                version.getContent(),
+                content,
                 prompt,
                 confidence
             );
@@ -127,6 +133,20 @@ public class DocumentOcrProcessingService {
         } catch (IOException ex) {
             throw new RuntimeException("Failed to process OCR for stored document", ex);
         }
+    }
+
+    private byte[] resolveVersionContent(String documentId, DocumentVersion version) throws IOException {
+        if (version != null && version.getContent() != null && version.getContent().length > 0) {
+            return version.getContent();
+        }
+        if (version == null || !StringUtils.hasText(version.getId()) || !StringUtils.hasText(documentId)) {
+            throw new ResourceNotFoundException("Document version content not found");
+        }
+
+        return documentVersionRepository.findByIdAndDocumentId(version.getId(), documentId)
+            .map(DocumentVersion::getContent)
+            .filter(bytes -> bytes != null && bytes.length > 0)
+            .orElseThrow(() -> new ResourceNotFoundException("Document version content not found"));
     }
 
     @SuppressWarnings("unchecked")
