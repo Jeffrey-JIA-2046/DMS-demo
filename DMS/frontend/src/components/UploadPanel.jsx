@@ -311,6 +311,8 @@ const pickStringConstraintValue = (constraint, preferredValues = []) => {
 }
 
 const initialState = {
+  uploadMode: 'existing',
+  aiDetectPrompt: '',
   title: '',
   description: '',
   owner: '',
@@ -606,12 +608,16 @@ export default function UploadPanel({
 
   const handleSubmit = (event) => {
     event.preventDefault()
+    const normalizedUploadMode = String(form.uploadMode || 'existing').trim().toLowerCase() === 'ai_filing'
+      ? 'ai_filing'
+      : 'existing'
+    const isAiFiling = normalizedUploadMode === 'ai_filing'
     if (!file) {
       setError('Select a file before uploading')
       toast && toast('Select a file before uploading', { type: 'error' })
       return
     }
-    if (!form.folderId) {
+    if (!isAiFiling && !form.folderId) {
       setError('Pick a destination folder before uploading')
       toast && toast('Pick a destination folder before uploading', { type: 'error' })
       return
@@ -657,6 +663,8 @@ export default function UploadPanel({
 
     onSubmit({
       ...form,
+      uploadMode: normalizedUploadMode,
+      isAiFiling,
       owner: currentOwner,
       approverId: normalizedApproverId,
       supervisorId: normalizedSupervisorId,
@@ -1230,8 +1238,49 @@ export default function UploadPanel({
             Close
           </button>
         </header>
+        <section className="upload-panel__mode-switch" aria-label="Upload mode selector">
+          <p className="upload-panel__mode-title">Upload Mode</p>
+          <div className="upload-panel__mode-tabs" role="tablist" aria-label="Upload mode">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={form.uploadMode !== 'ai_filing'}
+              className={form.uploadMode !== 'ai_filing' ? 'primary' : 'ghost'}
+              onClick={() => handleChange('uploadMode', 'existing')}
+              disabled={busy}
+            >
+              Mode 1 : Normal
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={form.uploadMode === 'ai_filing'}
+              className={form.uploadMode === 'ai_filing' ? 'primary' : 'ghost'}
+              onClick={() => handleChange('uploadMode', 'ai_filing')}
+              disabled={busy}
+            >
+              Mode2 : AI Filing
+            </button>
+          </div>
+          <small>
+            {form.uploadMode === 'ai_filing'
+              ? 'AI filing uses OCR on first 5 pages to detect type and route to mapped folder.'
+              : 'Existing mode uploads to the folder you select below.'}
+          </small>
+        </section>
         <div className="upload-panel__layout">
           <div className="upload-panel__primary">
+            {form.uploadMode === 'ai_filing' && (
+              <label>
+                <span>AI Detect Prompt (optional)</span>
+                <textarea
+                  value={form.aiDetectPrompt || ''}
+                  onChange={(e) => handleChange('aiDetectPrompt', e.target.value)}
+                  placeholder="Optional business rule to help classify letters/minutes/reports/bills"
+                  rows={3}
+                />
+              </label>
+            )}
             <label>
               <span>Document Category</span>
               <select value={form.category} onChange={(e) => handleChange('category', e.target.value)}>
@@ -1469,106 +1518,108 @@ export default function UploadPanel({
             </label>
           </div>
 
-          <div className="upload-panel__secondary">
-            <section className="folder-section">
-              <div className="folder-section__header">
-                <span>Destination folder</span>
-                {!isFolderLocked && (
-                  <button type="button" className="ghost" onClick={() => setShowFolderForm((prev) => !prev)}>
-                    {showFolderForm ? 'Close form' : 'New folder'}
-                  </button>
+          {form.uploadMode !== 'ai_filing' && (
+            <div className="upload-panel__secondary">
+              <section className="folder-section">
+                <div className="folder-section__header">
+                  <span>Destination folder</span>
+                  {!isFolderLocked && (
+                    <button type="button" className="ghost" onClick={() => setShowFolderForm((prev) => !prev)}>
+                      {showFolderForm ? 'Close form' : 'New folder'}
+                    </button>
+                  )}
+                </div>
+                {isFolderLocked ? (
+                  <p className="folder-selection">Target folder: {selectedFolderSummary || 'Selected folder'}</p>
+                ) : (
+                  <>
+                    {foldersLoading ? (
+                      <p className="pill pill--info">Loading folders…</p>
+                    ) : folders?.length ? (
+                      <FolderTree nodes={folders} selectedId={form.folderId} onSelect={handleFolderSelect} />
+                    ) : (
+                      <p className="empty-state">Create a folder to start uploading documents.</p>
+                    )}
+                    {folderError && <p className="feedback feedback--error">{folderError}</p>}
+                    {form.folderId && selectedFolderSummary && <p className="folder-selection">Selected: {selectedFolderSummary}</p>}
+                    {!form.folderId && <p className="folder-selection folder-selection--warning">Select a folder before uploading.</p>}
+                  </>
                 )}
-              </div>
-              {isFolderLocked ? (
-                <p className="folder-selection">Target folder: {selectedFolderSummary || 'Selected folder'}</p>
-              ) : (
-                <>
-                  {foldersLoading ? (
-                    <p className="pill pill--info">Loading folders…</p>
-                  ) : folders?.length ? (
-                    <FolderTree nodes={folders} selectedId={form.folderId} onSelect={handleFolderSelect} />
-                  ) : (
-                    <p className="empty-state">Create a folder to start uploading documents.</p>
-                  )}
-                  {folderError && <p className="feedback feedback--error">{folderError}</p>}
-                  {form.folderId && selectedFolderSummary && <p className="folder-selection">Selected: {selectedFolderSummary}</p>}
-                  {!form.folderId && <p className="folder-selection folder-selection--warning">Select a folder before uploading.</p>}
-                </>
-              )}
-              {form.folderId && (
-                <div className="metadata-template-summary">
-                  <p className="metadata-template-summary__title">Folder metadata</p>
-                  {selectedTemplate.length ? (
-                    <ul className="metadata-template-summary__list">
-                      {selectedTemplate.map((field) => (
-                        <li key={field.key}>
-                          <strong>{field.label}</strong>
-                          <span>{describeMetadataField(field)}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="metadata-template-summary__empty">No custom metadata fields for this folder.</p>
-                  )}
-                </div>
-              )}
-              {form.folderId && selectedTemplate.length > 0 && (
-                <div className="metadata-input-card">
-                  <MetadataFieldInputs
-                    template={selectedTemplate}
-                    values={metadataValues}
-                    errors={metadataErrors}
-                    onChange={handleMetadataValueChange}
-                    disabled={busy}
-                    codeTableItems={codeTableItems}
-                  />
-                </div>
-              )}
-              {!isFolderLocked && showFolderForm && (
-                <div className="folder-form">
-                  <label>
-                    <span>Folder name</span>
-                    <input value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)} placeholder="Q1 Reports" />
-                  </label>
-                  <label className="checkbox">
-                    <input
-                      type="checkbox"
-                      checked={nestUnderSelection}
-                      onChange={(e) => {
-                        const checked = e.target.checked
-                        setNestUnderSelection(checked)
-                        if (!checked) {
-                          setInheritMetadataTemplate(false)
-                        }
+                {form.folderId && (
+                  <div className="metadata-template-summary">
+                    <p className="metadata-template-summary__title">Folder metadata</p>
+                    {selectedTemplate.length ? (
+                      <ul className="metadata-template-summary__list">
+                        {selectedTemplate.map((field) => (
+                          <li key={field.key}>
+                            <strong>{field.label}</strong>
+                            <span>{describeMetadataField(field)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="metadata-template-summary__empty">No custom metadata fields for this folder.</p>
+                    )}
+                  </div>
+                )}
+                {form.folderId && selectedTemplate.length > 0 && (
+                  <div className="metadata-input-card">
+                    <MetadataFieldInputs
+                      template={selectedTemplate}
+                      values={metadataValues}
+                      errors={metadataErrors}
+                      onChange={handleMetadataValueChange}
+                      disabled={busy}
+                      codeTableItems={codeTableItems}
+                    />
+                  </div>
+                )}
+                {!isFolderLocked && showFolderForm && (
+                  <div className="folder-form">
+                    <label>
+                      <span>Folder name</span>
+                      <input value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)} placeholder="Q1 Reports" />
+                    </label>
+                    <label className="checkbox">
+                      <input
+                        type="checkbox"
+                        checked={nestUnderSelection}
+                        onChange={(e) => {
+                          const checked = e.target.checked
+                          setNestUnderSelection(checked)
+                          if (!checked) {
+                            setInheritMetadataTemplate(false)
+                          }
+                        }}
+                      />
+                      <span>Nest inside currently selected folder</span>
+                    </label>
+                    <label className="checkbox">
+                      <input
+                        type="checkbox"
+                        checked={inheritMetadataTemplate}
+                        onChange={(e) => setInheritMetadataTemplate(e.target.checked)}
+                        disabled={!nestUnderSelection || !form.folderId}
+                      />
+                      <span>Metadata template inherit from parent folder</span>
+                    </label>
+                    <MetadataTemplateBuilder
+                      value={templateFields}
+                      onChange={(next) => {
+                        setTemplateFields(next)
+                        setTemplateError('')
                       }}
+                      disabled={folderBusy || (inheritMetadataTemplate && nestUnderSelection && Boolean(form.folderId))}
+                      error={templateError}
                     />
-                    <span>Nest inside currently selected folder</span>
-                  </label>
-                  <label className="checkbox">
-                    <input
-                      type="checkbox"
-                      checked={inheritMetadataTemplate}
-                      onChange={(e) => setInheritMetadataTemplate(e.target.checked)}
-                      disabled={!nestUnderSelection || !form.folderId}
-                    />
-                    <span>Metadata template inherit from parent folder</span>
-                  </label>
-                  <MetadataTemplateBuilder
-                    value={templateFields}
-                    onChange={(next) => {
-                      setTemplateFields(next)
-                      setTemplateError('')
-                    }}
-                    disabled={folderBusy || (inheritMetadataTemplate && nestUnderSelection && Boolean(form.folderId))}
-                    error={templateError}
-                  />
-                  <button type="button" className="primary" onClick={handleFolderCreate} disabled={folderBusy || !newFolderName.trim()}>
-                    Create folder
-                  </button>
-                </div>
-              )}
-            </section>
-          </div>
+                    <button type="button" className="primary" onClick={handleFolderCreate} disabled={folderBusy || !newFolderName.trim()}>
+                      Create folder
+                    </button>
+                  </div>
+                )}
+              </section>
+            </div>
+          )}
         </div>
         {error && <p className="feedback feedback--error">{error}</p>}
         <div className="upload-panel__actions">

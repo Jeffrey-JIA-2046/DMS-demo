@@ -841,12 +841,25 @@ class RagAnswerAgent:
 
         context = _build_page_aware_rag_context(results, chunk_page_map, chunk_index_map)
         rag_prompt = (
-            f"User question: {question}\n\n"
-            "First, list the most relevant documents and pages that you will use to answer the question. Then, provide a detailed answer based only on the retrieved document context. "
+            f"""User question: {question}\n\n
+            "First, list the most relevant documents and pages that you will use to answer the question. Then, provide a detailed answer based only on the retrieved document context. 
+            CRITICAL RULES:
+                - Do NOT answer before reading all context
+                - list the docs you have read from the retrieved context to support your answer
+                - Do NOT skip or ignore any part of the context
+                - If information is spread across multiple documents/pages, combine it
+                - If the context contains conflicting information, acknowledge it
+                - If the answer is incomplete even after reading all context, explicitly state what information is missing
+                - Never invent information not present in the context
+            
+            
             "Retrieved document context:\n"
-            f"{context}\n\n"
-            "Answer the question using only the context above. "
-            "If the answer is incomplete or uncertain, say what is missing."
+
+            {context}\n\n"
+            
+            "If the answer is incomplete or uncertain, say what is missing.
+            
+            """
         )
         _log_workflow_step(
             4,
@@ -1002,11 +1015,30 @@ async def _build_agent_stream(question: str, chat_id: Optional[str], intent_resu
 
         context = _build_page_aware_rag_context(results, chunk_page_map, chunk_index_map)
         rag_prompt = (
-            f"User question: {question}\n\n"
-            "Retrieved document context:\n"
+            f"""User question: {question}\n\n
+
+            INSTRUCTIONS - FOLLOW STRICTLY:
+            1. FIRST, review ALL documents and pages in the context above thoroughly.
+            2. SECOND, identify which documents/pages contain information relevant to answering the question.
+            3. THIRD, extract and synthesize the relevant information from ALL relevant sources.
+            4. FOURTH, provide a comprehensive answer based ONLY on the context.
+            5. FINALLY, if the answer draws from multiple sources, cite them explicitly (e.g., "According to Document X..." or "On Page Y...").
+
+            CRITICAL RULES:
+            - Do NOT answer before reading all context, list the docs you have read from the retrieved context.
+            - Do NOT skip or ignore any part of the context
+            - If information is spread across multiple documents/pages, combine it
+            - If the context contains conflicting information, acknowledge it
+            - If the answer is incomplete even after reading all context, explicitly state what information is missing
+            - Never invent information not present in the context
+            
+
+            Retrieved document context:\n
             f"{context}\n\n"
+
             "Answer the question using only the context above. "
-            "If the answer is incomplete or uncertain, say what is missing."
+            "If the answer is incomplete or uncertain, say what is missing.
+            """
         )
         _log_verbose(
             "_build_agent_stream RAG documents",
@@ -1391,7 +1423,7 @@ Rules:
 
 
 Examples:
-- Query: documents containing "金融" and "貨幣"
+- Query: documents containing phrase "金融" and "貨幣"
   Return: search_strategy="keyword_search", match_mode="all_terms", must_terms=["金融", "貨幣"]
 - Query: find similar tenancy cases
   Return: search_strategy="hybrid_search"
@@ -1460,6 +1492,37 @@ def _merge_task_classifier_parameters(base_parameters: dict[str, Any], classifie
     return merged
 
 
+
+'''
+Rules:
+- Choose exactly one task_type: list_documents, answer_question, or count_results.
+- list_documents means the user mainly wants matched document candidates (titles/IDs), not synthesized content answers, just some keyword search
+- answer_question means answer the user using searched documents, unless search_strategy=no_search.
+- count_results means count matched documents.
+
+- If the user asks for a summary, key points, brief explanation, compare/contrast, or synthesis, classify as answer_question.
+- If the user asks to "list" documents and also asks for key points/summary, classify as answer_question.
+- If the user asks a direct content question (for example "what does it say about...", "why", "how", "which policy", "summarize"), choose answer_question.
+- If search_strategy is no_search, prefer answer_question.
+- Use the search results preview to decide whether the user is asking for listing, answering, counting, or summarizing.
+
+Examples:
+- "list documents about land registration circulars" -> list_documents
+- "show me files related to tenancy" -> list_documents
+- "what do these tenancy documents say about notice period?" -> answer_question
+- "summarize the key points of the retrieved documents" -> answer_question
+- "how many documents mention currency" -> count_results
+
+Response schema:
+{{
+  "task_type": "list_documents|answer_question|count_results",
+  "confidence": 0.0,
+  "doc_id": null,
+  "requires_summary": false
+}}"""
+
+'''
+
 def _build_task_type_prompt(
     question: str,
     search_strategy: SearchStrategy,
@@ -1487,22 +1550,35 @@ Search results preview:
 
 Rules:
 - Choose exactly one task_type: list_documents, answer_question, or count_results.
-- list_documents means the user mainly wants matched document candidates (titles/IDs), not synthesized content answers, just some keyword search
-- answer_question means answer the user using searched documents, unless search_strategy=no_search.
-- count_results means count matched documents.
 
-- If the user asks for a summary, key points, brief explanation, compare/contrast, or synthesis, classify as answer_question.
-- If the user asks to "list" documents and also asks for key points/summary, classify as answer_question.
-- If the user asks a direct content question (for example "what does it say about...", "why", "how", "which policy", "summarize"), choose answer_question.
+- list_documents: Use ONLY when the user explicitly wants to SEE/BROWSE document titles/IDs/metadata without any content analysis, synthesis, or summarization. 
+  * Keywords: "list", "show me", "display", "find documents" (without content requirements)
+  * Example: "list documents about land registration" -> list_documents
+  * Example: "show me files related to tenancy" -> list_documents
+
+- answer_question: Use when the user wants to UNDERSTAND, ANALYZE, or GET INFORMATION from documents, including:
+  * Looking for similar cases or precedents (even if they say "find a similar case")
+  * Asking "what", "why", "how", "which" questions about content
+  * Requesting summaries, key points, brief explanations, comparisons, or synthesis
+  * Processing applications and seeking guidance from similar cases
+  * Combining search with analysis (e.g., "find...please list the most relevant ones with key points summarized")
+  * Finding cases with specific characteristics for decision support
+  
+  * Keywords: "similar case", "what does it say", "summarize", "key points", "brief explanation", "compare", "contrast", "process", "guidance"
+  * Example: "I am processing a filing application... Please locate a similar case." -> answer_question
+  * Example: "Find previous legal advice cases... Please list the most relevant ones with their key points summarized briefly." -> answer_question
+  * Example: "what do these tenancy documents say about notice period?" -> answer_question
+  * Example: "summarize the key points of the retrieved documents" -> answer_question
+
+- count_results: Use ONLY when the user asks for a numerical count of matching documents.
+  * Keywords: "how many", "count"
+  * Example: "how many documents mention currency" -> count_results
+
 - If search_strategy is no_search, prefer answer_question.
-- Use the search results preview to decide whether the user is asking for listing, answering, counting, or summarizing.
 
-Examples:
-- "list documents about land registration circulars" -> list_documents
-- "show me files related to tenancy" -> list_documents
-- "what do these tenancy documents say about notice period?" -> answer_question
-- "summarize the key points of the retrieved documents" -> answer_question
-- "how many documents mention currency" -> count_results
+- CRITICAL: When users ask to find a "similar case" or "locate a similar case", they want to understand the case details, not just see document titles. This is answer_question.
+- CRITICAL: When users ask to find cases AND summarize/synthesize/explain them, this is answer_question, not list_documents.
+
 
 Response schema:
 {{

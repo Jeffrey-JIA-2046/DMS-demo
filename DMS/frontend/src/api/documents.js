@@ -1,5 +1,7 @@
 import { resolveApiUrl, authHeaders, handleJsonResponse } from './httpClient'
 
+const UPLOAD_AI_API_BASE_URL = (import.meta.env.VITE_UPLOAD_AI_API_BASE_URL ?? 'http://localhost:5201').replace(/\/$/, '')
+
 export const listDocuments = async ({ page = 0, size = 12, filters = {} }) => {
   const params = new URLSearchParams({ page, size })
   if (filters.query) params.set('q', filters.query)
@@ -133,6 +135,24 @@ export const uploadDocument = async (metadata, file) => {
     headers: { ...authHeaders() },
     body: formData,
   })
+  return handleJsonResponse(response)
+}
+
+export const uploadDocumentAiFiling = async (metadata, file, { detectPrompt = '' } = {}) => {
+  const formData = new FormData()
+  formData.append('mode', 'ai_filing')
+  formData.append('metadata_json', JSON.stringify(metadata))
+  formData.append('file', file)
+  if (detectPrompt && String(detectPrompt).trim().length) {
+    formData.append('detect_prompt', String(detectPrompt).trim())
+  }
+
+  const response = await fetch(`${UPLOAD_AI_API_BASE_URL}/upload`, {
+    method: 'POST',
+    headers: { ...authHeaders() },
+    body: formData,
+  })
+
   return handleJsonResponse(response)
 }
 

@@ -3409,6 +3409,32 @@
   align-items: start;
 }
 
+.upload-panel__mode-switch {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 14px;
+  background: rgba(248, 250, 252, 0.85);
+}
+
+.upload-panel__mode-title {
+  margin: 0;
+  font-weight: 700;
+  color: var(--ink-strong);
+}
+
+.upload-panel__mode-tabs {
+  display: flex;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.upload-panel__mode-tabs > button {
+  min-width: 190px;
+}
+
 .upload-panel__primary,
 .upload-panel__secondary {
   display: flex;

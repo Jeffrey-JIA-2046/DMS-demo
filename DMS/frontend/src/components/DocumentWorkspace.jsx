@@ -21,6 +21,7 @@ import {
   updateDocument,
   updateFolderPermissions,
   uploadDocument,
+  uploadDocumentAiFiling,
   uploadVersion,
   getStoredDocumentOcr,
   runStoredDocumentOcr,
@@ -1898,23 +1899,57 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     setBusy(true)
     setError('')
     try {
-      const created = await uploadDocument({
+      const normalizedPayload = {
         ...payload,
         tags: normalizeTags(payload.tags),
         metadata: payload.metadata ?? {},
-      }, file)
+      }
+
+      const normalizedMode = String(payload?.uploadMode || '').trim().toLowerCase()
+      const useAiFiling = Boolean(
+        payload?.isAiFiling
+        || normalizedMode === 'ai_filing'
+        || normalizedMode === 'ai-filing'
+        || normalizedMode === 'mode2'
+      )
+      const { uploadMode: _uploadMode, isAiFiling: _isAiFiling, aiDetectPrompt: _aiDetectPrompt, ...uploadMetadata } = normalizedPayload
+      let created = null
+      let aiResult = null
+
+      if (useAiFiling) {
+        aiResult = await uploadDocumentAiFiling(uploadMetadata, file, {
+          detectPrompt: payload?.aiDetectPrompt || '',
+        })
+        created = aiResult?.uploaded || null
+      } else {
+        created = await uploadDocument(uploadMetadata, file)
+      }
+
       setUploadOpen(false)
       if (created?.id) {
         setSelectedId(created.id)
         setSelectedDocument(created)
       }
       await loadDocuments()
-      toast && toast(
-        payload?.runOcr
-          ? 'Upload complete. OCR is running in the background.'
-          : 'Upload complete',
-        { type: 'success' }
-      )
+
+      if (useAiFiling) {
+        const detectedType = aiResult?.detection?.doc_type
+        const routedFolderId = aiResult?.routing?.target_folder_id
+        const preOcrConfirmed = aiResult?.pre_ocr?.performed === true
+        toast && toast(
+          detectedType
+            ? `AI filing complete (${preOcrConfirmed ? 'pre-OCR done' : 'pre-OCR unknown'}). Detected ${detectedType} and routed to folder ${routedFolderId || 'mapped target'}.`
+            : `AI filing complete (${preOcrConfirmed ? 'pre-OCR done' : 'pre-OCR unknown'}).`,
+          { type: 'success' }
+        )
+      } else {
+        toast && toast(
+          payload?.runOcr
+            ? 'Upload complete. OCR is running in the background.'
+            : 'Upload complete',
+          { type: 'success' }
+        )
+      }
     } catch (err) {
       setError(err.message)
       toast && toast(err.message || 'Upload failed', { type: 'error' })
