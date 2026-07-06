@@ -486,7 +486,16 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   const [folderLoading, setFolderLoading] = useState(false)
   const [folderBusy, setFolderBusy] = useState(false)
   const [folderError, setFolderError] = useState('')
-  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [workspaceBlockOrder, setWorkspaceBlockOrder] = useState(['library', 'workspace', 'details', 'filters'])
+  const [draggingWorkspaceBlock, setDraggingWorkspaceBlock] = useState(null)
+  const [workspaceBlockSizes, setWorkspaceBlockSizes] = useState({
+    library: { width: 360, height: 560 },
+    workspace: { width: 760, height: 560 },
+    details: { width: 420, height: 560 },
+    filters: { width: 420, height: 420 },
+  })
+  const [resizingWorkspaceBlock, setResizingWorkspaceBlock] = useState(null)
+  const workspaceResizeStateRef = useRef(null)
   const [draggedDocumentId, setDraggedDocumentId] = useState(null)
   const [movingDocumentId, setMovingDocumentId] = useState(null)
   const [expandedDocumentId, setExpandedDocumentId] = useState(null)
@@ -1852,6 +1861,8 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
           .map((condition) => ({
             field: condition.field,
             value: condition.value,
+            operator: condition.operator || 'contains',
+            group: Number.isFinite(Number(condition.group)) ? Number(condition.group) : 0,
             join: condition.join || '',
           }))
       : []
@@ -1859,16 +1870,21 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     const hasDocColumnTokens = Array.isArray(normalizedConditions)
       ? normalizedConditions.map((condition) => condition.field).filter(Boolean)
       : []
+    const nextQuery = String(nextFilters?.query || '').trim()
+    const defaultQuickSearchColumns = ['title', 'description', 'documentMetadata', 'folderName', 'folderMetadata', 'tags', 'owner', 'category']
+    const effectiveSearchColumns = hasDocColumnTokens.length
+      ? hasDocColumnTokens
+      : (nextQuery.length ? defaultQuickSearchColumns : (Array.isArray(nextFilters?.searchColumns) ? nextFilters.searchColumns : ['title']))
 
-    // Condition-builder search should be authoritative; clear quick-text query to avoid accidental extra filtering.
-    setFilterQueryLocal('')
+    // Keep the list filter box synchronized with the quick-search text.
+    setFilterQueryLocal(nextQuery)
 
     setFilters((prev) => ({
       ...nextFilters,
-      folderId: prev.folderId,
-      query: '',
+      folderId: null,
+      query: nextQuery,
       conditions: normalizedConditions,
-      searchColumns: hasDocColumnTokens,
+      searchColumns: effectiveSearchColumns,
       conditionOperator: 'AND',
     }))
     setPageState((prev) => ({ ...prev, page: 0 }))
@@ -1894,6 +1910,32 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   }
 
   const handleFolderClear = () => handleFolderSelect(null)
+
+  const handleChatbotDocumentFocus = useCallback(async (documentId, context = {}) => {
+    if (!documentId) {
+      return
+    }
+    setDetailsInitialTab('content')
+    setSelectedId(documentId)
+    setPageState((prev) => ({ ...prev, page: 0 }))
+
+    const hintedFolderId = context?.folderId ?? null
+    if (hintedFolderId) {
+      setFilters((prev) => ({ ...prev, folderId: hintedFolderId }))
+      return
+    }
+
+    try {
+      const detail = await fetchDocument(documentId)
+      setSelectedDocument(detail)
+      const resolvedFolderId = detail?.folder?.id ?? detail?.folderId ?? detail?.folder_id ?? null
+      if (resolvedFolderId) {
+        setFilters((prev) => ({ ...prev, folderId: resolvedFolderId }))
+      }
+    } catch {
+      // Keep document focus even if folder resolution fails.
+    }
+  }, [])
 
   const handleUpload = async (payload, file) => {
     setBusy(true)
@@ -2444,245 +2486,387 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     }
   }
 
+  const handleWorkspaceBlockDragStart = (blockId) => {
+    setDraggingWorkspaceBlock(blockId)
+  }
+
+  const handleWorkspaceBlockDrop = (targetBlockId) => {
+    if (!draggingWorkspaceBlock || draggingWorkspaceBlock === targetBlockId) {
+      setDraggingWorkspaceBlock(null)
+      return
+    }
+    setWorkspaceBlockOrder((prev) => {
+      const next = [...prev]
+      const fromIndex = next.indexOf(draggingWorkspaceBlock)
+      const toIndex = next.indexOf(targetBlockId)
+      if (fromIndex < 0 || toIndex < 0) {
+        return prev
+      }
+      const [moved] = next.splice(fromIndex, 1)
+      next.splice(toIndex, 0, moved)
+      return next
+    })
+    setDraggingWorkspaceBlock(null)
+  }
+
+  const handleWorkspaceBlockResizeStart = (blockId, event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const pointerX = event.clientX
+    const pointerY = event.clientY
+    if (!Number.isFinite(pointerX) || !Number.isFinite(pointerY)) {
+      return
+    }
+    const current = workspaceBlockSizes[blockId] ?? { width: 360, height: 420 }
+    workspaceResizeStateRef.current = {
+      blockId,
+      startX: pointerX,
+      startY: pointerY,
+      startWidth: current.width,
+      startHeight: current.height,
+    }
+    setResizingWorkspaceBlock(blockId)
+    document.body.style.cursor = 'nwse-resize'
+    document.body.style.userSelect = 'none'
+  }
+
+  useEffect(() => {
+    if (!resizingWorkspaceBlock) {
+      return undefined
+    }
+
+    const onMouseMove = (event) => {
+      const state = workspaceResizeStateRef.current
+      if (!state || state.blockId !== resizingWorkspaceBlock) {
+        return
+      }
+      const dx = event.clientX - state.startX
+      const dy = event.clientY - state.startY
+      const nextWidth = Math.max(280, Math.min(1200, state.startWidth + dx))
+      const nextHeight = Math.max(220, Math.min(900, state.startHeight + dy))
+      setWorkspaceBlockSizes((prev) => ({
+        ...prev,
+        [resizingWorkspaceBlock]: {
+          width: nextWidth,
+          height: nextHeight,
+        },
+      }))
+    }
+
+    const onMouseUp = () => {
+      workspaceResizeStateRef.current = null
+      setResizingWorkspaceBlock(null)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+    }
+  }, [resizingWorkspaceBlock])
+
   return (
-    <section className="workspace">
-      <div
-        className={`workspace__filters-flyout ${filtersOpen ? 'is-visible' : ''}`}
-        onMouseEnter={() => setFiltersOpen(true)}
-        onMouseLeave={() => setFiltersOpen(false)}
-      >
-        <div className="workspace__filters card">
-          <div className="workspace__filters-header">
-            <div>
-              <p className="eyebrow">Control Tower</p>
-              <h2>Search documents</h2>
-            </div>
-            <button className="ghost" type="button" onClick={() => setFiltersOpen(false)}>
-              Hide
-            </button>
-          </div>
-          <DocumentFilters
-            value={filters}
-            onSearch={handleSearchSubmit}
-            onReset={() => handleFilterChange(buildDefaultFilters())}
-            folderMetadataFields={folderMetadataFieldOptions}
+    <section className="workspace workspace--block-layout">
+      {workspaceBlockOrder.map((blockId) => {
+        const cardStyle = {
+          width: `${workspaceBlockSizes[blockId]?.width ?? 360}px`,
+          height: `${workspaceBlockSizes[blockId]?.height ?? 420}px`,
+        }
+        const dragHandle = (
+          <button
+            type="button"
+            className="workspace__drag-handle workspace__drag-handle--card"
+            title="Drag to reorder"
+            draggable
+            onDragStart={() => handleWorkspaceBlockDragStart(blockId)}
+            onDragEnd={() => setDraggingWorkspaceBlock(null)}
+          >
+            ⠿
+          </button>
+        )
+        const resizeHandle = (
+          <div
+            className="workspace__resize-handle workspace__resize-handle--card"
+            title="Resize card"
+            onMouseDown={(event) => handleWorkspaceBlockResizeStart(blockId, event)}
           />
-          {error && <p className="feedback feedback--error">{error}</p>}
-        </div>
-      </div>
-      <div className="workspace__folders">
-        <FolderBrowser
-          nodes={folderTree}
-          loading={folderLoading}
-          error={folderError}
-          busy={folderBusy}
-          selectedId={filters.folderId}
-          onSelect={handleFolderSelect}
-          onClear={handleFolderClear}
-          onRefresh={loadFolderTree}
-          onCreateFolder={handleFolderCreate}
-          onUpdateFolder={handleFolderUpdate}
-          onDeleteFolder={handleFolderDelete}
-          draggingDocumentId={draggedDocumentId}
-          onDocumentDrop={handleDocumentMove}
-          canManagePermissions={canManageFolderPermissions}
-          onLoadPermissionTemplate={handleLoadPermissionTemplate}
-          onLoadFolderPermissions={handleLoadFolderPermissions}
-        />
-      </div>
-      <div className="workspace__content">
-        <div
-          className="workspace__filters-hitbox workspace__filters-hitbox--top"
-          onMouseEnter={() => setFiltersOpen(true)}
-        />
-        <div className="workspace__content-actions">
-          <p className="folder-selection">
-            {filters.folderId && workspaceSelectionPath?.length ? (
-              <>
-                Selected:{' '}
-                {workspaceSelectionPath.map((part, i) => (
-                  <span key={i} className="folder-selection__part">
-                    <span className="folder-selection__icon" aria-hidden>
-                      📁
+        )
+        const cardClassName = `${draggingWorkspaceBlock === blockId ? 'is-dragging' : ''} ${resizingWorkspaceBlock === blockId ? 'is-resizing' : ''}`.trim()
+        const onCardDragOver = (event) => event.preventDefault()
+        const onCardDrop = () => handleWorkspaceBlockDrop(blockId)
+
+        if (blockId === 'library') {
+          return (
+            <FolderBrowser
+              key={blockId}
+              cardClassName={cardClassName}
+              cardStyle={cardStyle}
+              onCardDragOver={onCardDragOver}
+              onCardDrop={onCardDrop}
+              onCardDragStart={() => handleWorkspaceBlockDragStart(blockId)}
+              onCardDragEnd={() => setDraggingWorkspaceBlock(null)}
+              onCardResizeStart={(event) => handleWorkspaceBlockResizeStart(blockId, event)}
+              cardDragging={draggingWorkspaceBlock === blockId}
+              cardResizing={resizingWorkspaceBlock === blockId}
+              nodes={folderTree}
+              loading={folderLoading}
+              error={folderError}
+              busy={folderBusy}
+              selectedId={filters.folderId}
+              onSelect={handleFolderSelect}
+              onClear={handleFolderClear}
+              onRefresh={loadFolderTree}
+              onCreateFolder={handleFolderCreate}
+              onUpdateFolder={handleFolderUpdate}
+              onDeleteFolder={handleFolderDelete}
+              draggingDocumentId={draggedDocumentId}
+              onDocumentDrop={handleDocumentMove}
+              canManagePermissions={canManageFolderPermissions}
+              onLoadPermissionTemplate={handleLoadPermissionTemplate}
+              onLoadFolderPermissions={handleLoadFolderPermissions}
+            />
+          )
+        }
+
+        if (blockId === 'workspace') {
+          const workspaceSelectionInfo = (
+            <p className="folder-selection">
+              {filters.folderId && workspaceSelectionPath?.length ? (
+                <>
+                  Selected:{' '}
+                  {workspaceSelectionPath.map((part, i) => (
+                    <span key={i} className="folder-selection__part">
+                      <span className="folder-selection__icon" aria-hidden>
+                        📁
+                      </span>
+                      <button
+                        type="button"
+                        className={`folder-selection__link ${part.id === filters.folderId ? 'is-current' : ''}`}
+                        onClick={() => handleFolderSelect(part.id)}
+                      >
+                        {part.name}
+                      </button>
+                      {i < workspaceSelectionPath.length - 1 && <span className="folder-selection__sep"> / </span>}
                     </span>
-                    <button
-                      type="button"
-                      className={`folder-selection__link ${part.id === filters.folderId ? 'is-current' : ''}`}
-                      onClick={() => handleFolderSelect(part.id)}
-                    >
-                      {part.name}
-                    </button>
-                    {i < workspaceSelectionPath.length - 1 && <span className="folder-selection__sep"> / </span>}
-                  </span>
-                ))}
-              </>
-            ) : (
-              'Showing all documents'
-            )}
-          </p>
-        </div>
-        <DocumentList
-          items={documents}
-          loading={loading}
-          selectedId={selectedId}
-          onSelect={(id) => {
-            setDetailsInitialTab('content')
-            setSelectedId(id)
-          }}
-          sort={sort}
-          onSortChange={(s) => { setSort(s); setPageState((p) => ({ ...p, page: 0 })) }}
-          filterQuery={filters.query}
-          onFilterQueryChange={(q) => setFilterQueryLocal(q)}
-          onHover={(id) => { setSelectedId(id); setChatbotOpen(true) }}
-          pageMeta={pageMeta}
-          onPageChange={handlePageChange}
-          pageSize={pageState.size}
-          onPageSizeChange={handlePageSizeChange}
-          onDragStart={handleDocumentDragStart}
-          onDragEnd={handleDocumentDragEnd}
-          draggingId={draggedDocumentId}
-          movingId={movingDocumentId}
-          onMaximize={handleDocumentMaximize}
-          onUpload={() => { if (documentPermissions?.write) setUploadOpen(true) }}
-          onOcrSelected={handleOpenOcrWorkspace}
-          canRunOcrOnSelected={!!selectedId && selectedLooksPdf}
-          canUpload={documentPermissions?.write ?? false}
-          onCreateTopicFromDocument={handleCreateTopicFromDocument}
-          onFindRelatedTopics={handleFindRelatedTopicsFromDocument}
-          onContextAction={async (documentId, action) => {
-            // Actions: copy, paste, generateLink, checkout
-            try {
-              if (action === 'copy') {
-                const doc = documents.find((d) => d.id === documentId)
-                if (doc) {
-                  window.localStorage.setItem('copiedDocument', JSON.stringify({ id: doc.id, title: doc.title, description: doc.description, category: doc.category, tags: doc.tags }))
-                  toast && toast('Document copied to local clipboard', { type: 'success' })
-                }
-                return
-              }
-              if (action === 'paste') {
-                const raw = window.localStorage.getItem('copiedDocument')
-                if (!raw) {
-                  toast && toast('No document in clipboard to paste', { type: 'info' })
-                  return
-                }
-                if (!(documentPermissions?.write ?? false)) {
-                  toast && toast('Insufficient permissions to copy documents', { type: 'error' })
-                  return
-                }
-                if (!filters.folderId) {
-                  toast && toast('Select a target folder before pasting a document', { type: 'warning' })
-                  return
-                }
+                  ))}
+                </>
+              ) : (
+                'Showing all documents'
+              )}
+            </p>
+          )
 
-                const copied = JSON.parse(raw)
-                if (!copied?.id) {
-                  toast && toast('Copied document info is invalid', { type: 'error' })
-                  return
-                }
+          return (
+            <DocumentList
+              key={blockId}
+              cardClassName={cardClassName}
+              cardStyle={cardStyle}
+              onCardDragOver={onCardDragOver}
+              onCardDrop={onCardDrop}
+              dragHandle={dragHandle}
+              resizeHandle={resizeHandle}
+              workspaceSelectionInfo={workspaceSelectionInfo}
+              items={documents}
+              loading={loading}
+              selectedId={selectedId}
+              onSelect={(id) => {
+                setDetailsInitialTab('content')
+                setSelectedId(id)
+              }}
+              sort={sort}
+              onSortChange={(s) => { setSort(s); setPageState((p) => ({ ...p, page: 0 })) }}
+              filterQuery={filters.query}
+              onFilterQueryChange={(q) => setFilterQueryLocal(q)}
+              onHover={(id) => { setSelectedId(id); setChatbotOpen(true) }}
+              pageMeta={pageMeta}
+              onPageChange={handlePageChange}
+              pageSize={pageState.size}
+              onPageSizeChange={handlePageSizeChange}
+              onDragStart={handleDocumentDragStart}
+              onDragEnd={handleDocumentDragEnd}
+              draggingId={draggedDocumentId}
+              movingId={movingDocumentId}
+              onMaximize={handleDocumentMaximize}
+              onUpload={() => { if (documentPermissions?.write) setUploadOpen(true) }}
+              onOcrSelected={handleOpenOcrWorkspace}
+              canRunOcrOnSelected={!!selectedId && selectedLooksPdf}
+              canUpload={documentPermissions?.write ?? false}
+              onCreateTopicFromDocument={handleCreateTopicFromDocument}
+              onFindRelatedTopics={handleFindRelatedTopicsFromDocument}
+              onContextAction={async (documentId, action) => {
+                try {
+                  if (action === 'copy') {
+                    const doc = documents.find((d) => d.id === documentId)
+                    if (doc) {
+                      window.localStorage.setItem('copiedDocument', JSON.stringify({ id: doc.id, title: doc.title, description: doc.description, category: doc.category, tags: doc.tags }))
+                      toast && toast('Document copied to local clipboard', { type: 'success' })
+                    }
+                    return
+                  }
+                  if (action === 'paste') {
+                    const raw = window.localStorage.getItem('copiedDocument')
+                    if (!raw) {
+                      toast && toast('No document in clipboard to paste', { type: 'info' })
+                      return
+                    }
+                    if (!(documentPermissions?.write ?? false)) {
+                      toast && toast('Insufficient permissions to copy documents', { type: 'error' })
+                      return
+                    }
+                    if (!filters.folderId) {
+                      toast && toast('Select a target folder before pasting a document', { type: 'warning' })
+                      return
+                    }
 
-                const detail = await fetchDocument(copied.id)
-                const downloadResponse = await fetch(buildDownloadUrl(copied.id), { headers: { ...authHeaders() } })
-                if (!downloadResponse.ok) {
-                  throw new Error(`Failed to retrieve source document file (${downloadResponse.status})`)
-                }
-                const sourceBlob = await downloadResponse.blob()
+                    const copied = JSON.parse(raw)
+                    if (!copied?.id) {
+                      toast && toast('Copied document info is invalid', { type: 'error' })
+                      return
+                    }
 
-                const defaultFileName = detail?.latestVersion?.fileName
-                  || detail?.fileName
-                  || `${safeFileStem(detail?.title || copied.title || 'document')}.bin`
-                const sourceFile = new File([sourceBlob], defaultFileName, {
-                  type: sourceBlob.type || 'application/octet-stream',
-                })
+                    const detail = await fetchDocument(copied.id)
+                    const downloadResponse = await fetch(buildDownloadUrl(copied.id), { headers: { ...authHeaders() } })
+                    if (!downloadResponse.ok) {
+                      throw new Error(`Failed to retrieve source document file (${downloadResponse.status})`)
+                    }
+                    const sourceBlob = await downloadResponse.blob()
 
-                const today = new Date()
-                const nextYear = new Date(today)
-                nextYear.setFullYear(nextYear.getFullYear() + 1)
-                const fallbackDocumentDate = toDateInputValue(today)
-                const fallbackExpiryDate = toDateInputValue(nextYear)
+                    const defaultFileName = detail?.latestVersion?.fileName
+                      || detail?.fileName
+                      || `${safeFileStem(detail?.title || copied.title || 'document')}.bin`
+                    const sourceFile = new File([sourceBlob], defaultFileName, {
+                      type: sourceBlob.type || 'application/octet-stream',
+                    })
 
-                const copyPayload = {
-                  title: `Copy of ${detail?.title || copied.title || 'Document'}`,
-                  description: detail?.description || copied.description || '',
-                  owner: detail?.owner || currentUser?.username || '',
-                  category: detail?.category || copied.category || '',
-                  documentDate: toDateInputValue(detail?.documentDate || detail?.metadata?.documentDate, fallbackDocumentDate),
-                  expiryDate: toDateInputValue(detail?.expiryDate || detail?.metadata?.expiryDate, fallbackExpiryDate),
-                  tags: normalizeTags(detail?.tags || copied.tags || []),
-                  folderId: filters.folderId,
-                  approverId: detail?.approval?.approverId || detail?.approverId || null,
-                  supervisorId: detail?.approval?.supervisorId || detail?.supervisorId || null,
-                  metadata: detail?.metadata || {},
-                }
+                    const today = new Date()
+                    const nextYear = new Date(today)
+                    nextYear.setFullYear(nextYear.getFullYear() + 1)
+                    const fallbackDocumentDate = toDateInputValue(today)
+                    const fallbackExpiryDate = toDateInputValue(nextYear)
 
-                if (!copyPayload.approverId || !String(copyPayload.approverId).trim()) {
-                  const approverIds = normalizeReviewerOptions(await listApproverOptions())
-                  copyPayload.approverId = approverIds[0] || null
-                }
-                if (!copyPayload.supervisorId || !String(copyPayload.supervisorId).trim()) {
-                  const supervisorIds = normalizeReviewerOptions(await listSupervisorOptions())
-                  copyPayload.supervisorId = supervisorIds[0] || null
-                }
-                if (!copyPayload.approverId || !copyPayload.supervisorId) {
-                  throw new Error('Unable to paste document: approver/supervisor setup is incomplete. Please configure reviewer options and try again.')
-                }
+                    const copyPayload = {
+                      title: `Copy of ${detail?.title || copied.title || 'Document'}`,
+                      description: detail?.description || copied.description || '',
+                      owner: detail?.owner || currentUser?.username || '',
+                      category: detail?.category || copied.category || '',
+                      documentDate: toDateInputValue(detail?.documentDate || detail?.metadata?.documentDate, fallbackDocumentDate),
+                      expiryDate: toDateInputValue(detail?.expiryDate || detail?.metadata?.expiryDate, fallbackExpiryDate),
+                      tags: normalizeTags(detail?.tags || copied.tags || []),
+                      folderId: filters.folderId,
+                      approverId: detail?.approval?.approverId || detail?.approverId || null,
+                      supervisorId: detail?.approval?.supervisorId || detail?.supervisorId || null,
+                      metadata: detail?.metadata || {},
+                    }
 
-                await handleUpload(copyPayload, sourceFile)
-                toast && toast('Document copied to selected folder', { type: 'success' })
-                return
-              }
-              if (action === 'generateLink') {
-                const url = buildDocumentAccessUrl(documentId)
-                await navigator.clipboard.writeText(url)
-                toast && toast('Document access link copied to clipboard', { type: 'success' })
-                return
-              }
-              if (action === 'checkout') {
-                // toggle checkout by setting metadata.checkedOutBy to current user or removing it
-                const target = documents.find((d) => d.id === documentId)
-                if (!target) return
-                const checkedOutBy = target.metadata?.checkedOutBy
-                const me = currentUser?.username ?? null
-                const metadata = { ...(target.metadata ?? {}) }
-                if (checkedOutBy && checkedOutBy === me) {
-                  delete metadata.checkedOutBy
-                } else {
-                  metadata.checkedOutBy = me
+                    if (!copyPayload.approverId || !String(copyPayload.approverId).trim()) {
+                      const approverIds = normalizeReviewerOptions(await listApproverOptions())
+                      copyPayload.approverId = approverIds[0] || null
+                    }
+                    if (!copyPayload.supervisorId || !String(copyPayload.supervisorId).trim()) {
+                      const supervisorIds = normalizeReviewerOptions(await listSupervisorOptions())
+                      copyPayload.supervisorId = supervisorIds[0] || null
+                    }
+                    if (!copyPayload.approverId || !copyPayload.supervisorId) {
+                      throw new Error('Unable to paste document: approver/supervisor setup is incomplete. Please configure reviewer options and try again.')
+                    }
+
+                    await handleUpload(copyPayload, sourceFile)
+                    toast && toast('Document copied to selected folder', { type: 'success' })
+                    return
+                  }
+                  if (action === 'generateLink') {
+                    const url = buildDocumentAccessUrl(documentId)
+                    await navigator.clipboard.writeText(url)
+                    toast && toast('Document access link copied to clipboard', { type: 'success' })
+                    return
+                  }
+                  if (action === 'checkout') {
+                    const target = documents.find((d) => d.id === documentId)
+                    if (!target) return
+                    const checkedOutBy = target.metadata?.checkedOutBy
+                    const me = currentUser?.username ?? null
+                    const metadata = { ...(target.metadata ?? {}) }
+                    if (checkedOutBy && checkedOutBy === me) {
+                      delete metadata.checkedOutBy
+                    } else {
+                      metadata.checkedOutBy = me
+                    }
+                    await handleMetadataUpdate(documentId, { metadata })
+                  }
+                } catch (err) {
+                  toast && toast(err.message || 'Context action failed', { type: 'error' })
                 }
-                await handleMetadataUpdate(documentId, { metadata })
-                return
-              }
-            } catch (err) {
-              toast && toast(err.message || 'Context action failed', { type: 'error' })
-            }
-          }}
-        />
-        {error && <p className="feedback feedback--error">{error}</p>}
-      </div>
-      <div className="workspace__details">
-        <DocumentDetails
-          key={selectedDocument?.id ?? 'empty'}
-          document={selectedDocument}
-          onUploadVersion={handleUploadVersion}
-          onArchive={handleArchive}
-          onSaveMetadata={handleMetadataUpdate}
-          onAddApprovalNote={handleApprovalNote}
-          onApprove={(id, payload) => handleApprovalDecision(id, payload, 'approve')}
-          onReject={(id, note) => handleApprovalDecision(id, note, 'reject')}
-          onDelegate={handleDelegateApproval}
-          busy={busy}
-          initialTab={detailsInitialTab}
-          downloadUrlBuilder={buildDownloadUrl}
-        />
-        <ChatbotPanel
-          selectedDocument={selectedDocument}
-          onDocumentSelect={setSelectedId}
-          onDocumentMaximize={handleDocumentMaximize}
-          open={chatbotOpen}
-          onOpenChange={setChatbotOpen}
-          folders={folderTree}
-        />
-      </div>
+              }}
+            />
+          )
+        }
+
+        if (blockId === 'details') {
+          return [
+            <DocumentDetails
+              key={`${blockId}-details`}
+              cardClassName={cardClassName}
+              cardStyle={cardStyle}
+              onCardDragOver={onCardDragOver}
+              onCardDrop={onCardDrop}
+              dragHandle={dragHandle}
+              resizeHandle={resizeHandle}
+              document={selectedDocument}
+              onUploadVersion={handleUploadVersion}
+              onArchive={handleArchive}
+              onSaveMetadata={handleMetadataUpdate}
+              onAddApprovalNote={handleApprovalNote}
+              onApprove={(id, payload) => handleApprovalDecision(id, payload, 'approve')}
+              onReject={(id, note) => handleApprovalDecision(id, note, 'reject')}
+              onDelegate={handleDelegateApproval}
+              busy={busy}
+              initialTab={detailsInitialTab}
+              downloadUrlBuilder={buildDownloadUrl}
+            />,
+            <ChatbotPanel
+              key={`${blockId}-chatbot`}
+              selectedDocument={selectedDocument}
+              onDocumentSelect={handleChatbotDocumentFocus}
+              onDocumentMaximize={handleDocumentMaximize}
+              open={chatbotOpen}
+              onOpenChange={setChatbotOpen}
+              folders={folderTree}
+            />,
+          ]
+        }
+
+        return (
+          <div
+            key={blockId}
+            className={`card workspace__filters workspace-card ${cardClassName}`.trim()}
+            style={cardStyle}
+            onDragOver={onCardDragOver}
+            onDrop={onCardDrop}
+          >
+            {dragHandle}
+            {resizeHandle}
+            <div className="workspace-card__viewport">
+              <div className="workspace__filters-header">
+                <div>
+                  <p className="eyebrow">Control Tower</p>
+                  <h2>Search documents</h2>
+                </div>
+              </div>
+              <DocumentFilters
+                value={filters}
+                onSearch={handleSearchSubmit}
+                onReset={() => handleFilterChange(buildDefaultFilters())}
+                folderMetadataFields={folderMetadataFieldOptions}
+              />
+              {error && <p className="feedback feedback--error">{error}</p>}
+            </div>
+          </div>
+        )
+      })}
       {expandedDocumentId && (
         <div className="document-viewer-modal" role="dialog" aria-modal="true">
           <div className="document-viewer-modal__backdrop" onClick={closeExpandedViewer} />

@@ -78,6 +78,8 @@ public class DocumentController {
         @RequestParam(value = "searchOperator", required = false) String searchOperator,
         @RequestParam(value = "conditionField", required = false) List<String> conditionFields,
         @RequestParam(value = "conditionValue", required = false) List<String> conditionValues,
+        @RequestParam(value = "conditionOp", required = false) List<String> conditionOperators,
+        @RequestParam(value = "conditionGroup", required = false) List<Integer> conditionGroups,
         @RequestParam(value = "conditionJoin", required = false) List<String> conditionJoins,
         @RequestParam(value = "conditionOperator", required = false) String conditionOperator,
         @org.springframework.data.web.PageableDefault(size = 20, page = 0) org.springframework.data.domain.Pageable pageable,
@@ -94,6 +96,8 @@ public class DocumentController {
             searchOperator,
             conditionFields,
             conditionValues,
+            conditionOperators,
+            conditionGroups,
             conditionJoins,
             conditionOperator
         );

@@ -16,6 +16,8 @@ public record DocumentFilter(
     String searchOperator,
     List<String> conditionFields,
     List<String> conditionValues,
+    List<String> conditionOperators,
+    List<Integer> conditionGroups,
     List<String> conditionJoins,
     String conditionOperator
 ) {

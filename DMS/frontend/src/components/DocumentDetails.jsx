@@ -104,6 +104,12 @@ export default function DocumentDetails({
   initialTab = 'content',
   initialRequestedPage = 1,
   showPdfTextPreview = true,
+  cardClassName = '',
+  cardStyle,
+  onCardDragOver,
+  onCardDrop,
+  dragHandle = null,
+  resizeHandle = null,
 }) {
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState(() => buildFormState(document))
@@ -623,14 +629,31 @@ export default function DocumentDetails({
 
   if (!document) {
     return (
-      <div className="card details-card">
-        <p className="empty-state">Select a document to see its metadata and version history.</p>
+      <div
+        className={`card details-card workspace-card ${cardClassName}`.trim()}
+        style={cardStyle}
+        onDragOver={onCardDragOver}
+        onDrop={onCardDrop}
+      >
+        {dragHandle}
+        {resizeHandle}
+        <div className="workspace-card__viewport">
+          <p className="empty-state">Select a document to see its metadata and version history.</p>
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="card details-card">
+    <div
+      className={`card details-card workspace-card ${cardClassName}`.trim()}
+      style={cardStyle}
+      onDragOver={onCardDragOver}
+      onDrop={onCardDrop}
+    >
+      {dragHandle}
+      {resizeHandle}
+      <div className="workspace-card__viewport">
       <div className="details-card__header">
         <div>
           <p className="eyebrow">Details</p>
@@ -1094,6 +1117,7 @@ export default function DocumentDetails({
             )}
           </div>
         )}
+      </div>
       {editing && (
         <div className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="metadata-modal-title">
           <div className="modal-layer__backdrop" onClick={handleCancelEdit} />

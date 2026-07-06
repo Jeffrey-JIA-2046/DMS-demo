@@ -160,6 +160,7 @@ export const searchChatDocuments = async ({
     const source = item?.source ?? {}
     return {
       documentId: item?.id,
+      folderId: source.folder?.id ?? source.folder_id ?? source.folderId ?? null,
       relevanceScore: Number.isFinite(Number(item?.score)) ? Number(item.score) : null,
       title: source.title ?? source.document_title ?? source.name ?? 'Untitled',
       owner: source.owner ?? source.author ?? source.publisher ?? '',

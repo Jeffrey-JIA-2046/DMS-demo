@@ -75,8 +75,8 @@ CHUNK_TITLE_VECTOR_FIELD = os.getenv("SEARCH_CHUNK_TITLE_VECTOR_FIELD", "title_e
 CHUNK_CONTENT_VECTOR_FIELD = os.getenv("SEARCH_CHUNK_CONTENT_VECTOR_FIELD", "chatbot_ocr_content_embedding")
 
 LLM_API = os.getenv("LLM_API", "http://localhost:11434/api/chat")
-LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-r1:14b")
-CLASSIFIER_TIMEOUT_SECONDS = int(os.getenv("CHATBOT_CLASSIFIER_TIMEOUT_SECONDS", "20"))
+LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-r1:32b")
+CLASSIFIER_TIMEOUT_SECONDS = int(os.getenv("CHATBOT_CLASSIFIER_TIMEOUT_SECONDS", "30"))
 
 # DMS Java backend base URL used for housekeeping and other backend calls.
 DMS_BASE_URL = os.getenv("DMS_BASE_URL", "http://localhost:8080")
@@ -284,6 +284,7 @@ class SearchRequest(BaseModel):
     search_mode: str = "hybrid"
     exact_phrase: bool = False
     owners: list[str] = Field(default_factory=list)
+    category: list[str] = Field(default_factory=list)
     categories: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     folder_names: list[str] = Field(default_factory=list)
@@ -452,7 +453,7 @@ SEARCH_FILTER_KEYS = (
     "start_date",
     "end_date",
     "owners",
-    "categories",
+    "category",
     "tags",
     "folder_names",
     "folder_paths",
@@ -471,7 +472,7 @@ def _summarize_search_template_for_log(parameters: dict[str, Any]) -> dict[str, 
         "start_date": parameters.get("start_date", ""),
         "end_date": parameters.get("end_date", ""),
         "owners": parameters.get("owners", []),
-        "categories": parameters.get("categories", []),
+        "category": parameters.get("category", []),
         "tags": parameters.get("tags", []),
         "folder_names": parameters.get("folder_names", []),
         "folder_paths": parameters.get("folder_paths", []),
@@ -842,16 +843,16 @@ class RagAnswerAgent:
         context = _build_page_aware_rag_context(results, chunk_page_map, chunk_index_map)
         rag_prompt = (
             f"""User question: {question}\n\n
-            "First, list the most relevant documents and pages that you will use to answer the question. Then, provide a detailed answer based only on the retrieved document context. 
-            CRITICAL RULES:
-                - Do NOT answer before reading all context
-                - list the docs you have read from the retrieved context to support your answer
-                - Do NOT skip or ignore any part of the context
-                - If information is spread across multiple documents/pages, combine it
-                - If the context contains conflicting information, acknowledge it
-                - If the answer is incomplete even after reading all context, explicitly state what information is missing
-                - Never invent information not present in the context
-            
+            "Step 1 - Identify relevant sources: List which documents/pages contain information needed to answer the question. Skip documents that are clearly irrelevant.
+
+            Step 2 - Answer the question: Based only on the sources you identified, provide a clear and direct answer. Include specific details like dates, amounts, and document references.
+
+            Rules:
+            - Only use information present in the documents
+            - Do not make up or assume information
+            - If information is missing or unclear, state what is missing
+            - If simple math is needed (e.g., totals, differences), calculate it" 
+
             
             "Retrieved document context:\n"
 
@@ -931,6 +932,25 @@ def _wrap_stream_with_metadata(generator, intent: IntentType, extra_meta: Option
             yield f"data: {json.dumps(payload)}\n\n"
 
     return _wrapped()
+
+
+'''
+ INSTRUCTIONS - FOLLOW STRICTLY:
+            1. FIRST, review ALL documents and pages in the context above thoroughly.
+            2. SECOND, identify which documents/pages contain information relevant to answering the question.
+            3. THIRD, extract and synthesize the relevant information from ALL relevant sources.
+            4. FOURTH, provide a comprehensive answer based ONLY on the context.
+            5. FINALLY, if the answer draws from multiple sources, cite them explicitly (e.g., "According to Document X..." or "On Page Y...").
+
+            CRITICAL RULES:
+            - Do NOT answer before reading all context, list the docs you have read from the retrieved context.
+            - Do NOT skip or ignore any part of the context
+            - If information is spread across multiple documents/pages, combine it
+            - If the context contains conflicting information, acknowledge it
+            - If the answer is incomplete even after reading all context, explicitly state what information is missing
+            - Never invent information not present in the context
+            
+'''
 
 
 async def _build_agent_stream(question: str, chat_id: Optional[str], intent_result: IntentResult):
@@ -1017,23 +1037,22 @@ async def _build_agent_stream(question: str, chat_id: Optional[str], intent_resu
         rag_prompt = (
             f"""User question: {question}\n\n
 
-            INSTRUCTIONS - FOLLOW STRICTLY:
-            1. FIRST, review ALL documents and pages in the context above thoroughly.
-            2. SECOND, identify which documents/pages contain information relevant to answering the question.
-            3. THIRD, extract and synthesize the relevant information from ALL relevant sources.
-            4. FOURTH, provide a comprehensive answer based ONLY on the context.
-            5. FINALLY, if the answer draws from multiple sources, cite them explicitly (e.g., "According to Document X..." or "On Page Y...").
+           Instructions:
+            1. Scan all documents to identify which contain information relevant to the question.
+            2. From relevant documents, extract the specific facts, numbers, or details that answer the question.
+            3. State your answer directly, including all specific details (numbers, dates, amounts) from the documents.
+            4. Cite which document and page the information came from.
 
-            CRITICAL RULES:
-            - Do NOT answer before reading all context, list the docs you have read from the retrieved context.
-            - Do NOT skip or ignore any part of the context
-            - If information is spread across multiple documents/pages, combine it
-            - If the context contains conflicting information, acknowledge it
-            - If the answer is incomplete even after reading all context, explicitly state what information is missing
-            - Never invent information not present in the context
-            
 
-            Retrieved document context:\n
+            Important:
+            - Only use information from the provided documents
+            - Have tables, you need to read the tables
+            - Include specific numbers and details in your answer — do not just say "refer to the document"
+            - If the full answer is not available in the documents, state exactly what is missing
+            - If information conflicts between documents, note the conflict
+            **Prioritize Best-Effort Answering**: You MUST try your best to answer the user's question using the provided documents. Do not refuse to answer simply because an exact keyword match is missing.
+
+            Retrieved most relevant documents context:\n
             f"{context}\n\n"
 
             "Answer the question using only the context above. "
@@ -1179,6 +1198,16 @@ def _normalize_classifier_string_list(values: Any) -> list[str]:
     return [str(value).strip() for value in values if str(value).strip()]
 
 
+def _resolve_classifier_category_list(classifier_payload: dict[str, Any], payload_filters: dict[str, Any], merged: dict[str, Any]) -> list[str]:
+    """Resolve category from classifier payload and filters using singular key only."""
+    return _normalize_classifier_string_list(
+        classifier_payload.get(
+            "category",
+            payload_filters.get("category", merged.get("category", [])),
+        )
+    )
+
+
 def _normalize_classifier_metadata_filters(values: Any) -> dict[str, str]:
     if not isinstance(values, dict):
         return {}
@@ -1229,7 +1258,8 @@ def _merge_classifier_parameters(base_parameters: dict[str, Any], classifier_pay
     merged["start_date"] = str(classifier_payload.get("start_date") or payload_filters.get("start_date") or merged.get("start_date") or "").strip()
     merged["end_date"] = str(classifier_payload.get("end_date") or payload_filters.get("end_date") or merged.get("end_date") or "").strip()
     merged["owners"] = _normalize_classifier_string_list(classifier_payload.get("owners", payload_filters.get("owners", merged.get("owners", []))))
-    merged["categories"] = _normalize_classifier_string_list(classifier_payload.get("categories", payload_filters.get("categories", merged.get("categories", []))))
+    merged["category"] = _resolve_classifier_category_list(classifier_payload, payload_filters, merged)
+    merged.pop("categories", None)
     merged["tags"] = _normalize_classifier_string_list(classifier_payload.get("tags", payload_filters.get("tags", merged.get("tags", []))))
     merged["folder_names"] = _normalize_classifier_string_list(classifier_payload.get("folder_names", payload_filters.get("folder_names", merged.get("folder_names", []))))
     merged["folder_paths"] = _normalize_classifier_string_list(classifier_payload.get("folder_paths", payload_filters.get("folder_paths", merged.get("folder_paths", []))))
@@ -1408,13 +1438,22 @@ Current year: {current_year}
 
 Rules:
 - Choose exactly one search_strategy: hybrid_search(most likely!!), keyword_search,  or no_search.
-- Can use the hybrid search then use the hybrid search. Hybrid search is the first choice.
+- Can use the hybrid search then use the hybrid search. Hybrid search is the first choice.(important)
 - hybrid_search means normal document retrieval using the same search template fields as chatbot-template__filters-section and chatbot_api.py.
-- keyword_search only for literal keyword filtering with the template fields and optional exact_phrase, must_terms, and should_terms.
+- keyword_search ONLY for literal keyword filtering with the template fields and optional exact_phrase, must_terms, and should_terms.
 - no_search means the question is a free open question and does not need document retrieval.
 - Do not decide the final task type here.
 - Do not extract with hardcoded patterns; use the user meaning.
-- Fill start_date, end_date, owners, categories, tags, folder_names, folder_paths, and metadata_filters when the user clearly specifies filters.
+- Fill start_date, end_date, owners, category, tags, folder_names, folder_paths, and metadata_filters when the user clearly specifies filters.
+- category is optional. If the user does not specify category, return "category": [].
+- When user mentions category names, map them to these internal codes in "category":
+    * Corporate Secretarial Documents -> CORP_SEC
+    * Form -> FORM
+    * LC paper -> LC_PAPER
+    * License Documents -> LIC
+    * Minutes of Meeting -> MM
+    * Reply letter -> RE_LETTER
+- Do not return raw category labels in "category"; return only mapped codes.
 - If you fill phrase, must_terms, should_terms, or match_mode, search_strategy must be keyword_search.
 - If the user wants documents containing term A and term B, use match_mode="all_terms" and return must_terms.
 - If the user wants documents containing term A or term B, use match_mode="any_terms" and return should_terms.
@@ -1423,21 +1462,21 @@ Rules:
 
 
 Examples:
-- Query: documents containing phrase "金融" and "貨幣"
-  Return: search_strategy="keyword_search", match_mode="all_terms", must_terms=["金融", "貨幣"]
-- Query: find similar tenancy cases
+- Query: find similar cases; cases related to ; relevant ones
   Return: search_strategy="hybrid_search"
+- Query: documents containing phrase "XXX" and "XXX"
+  Return: search_strategy="keyword_search", match_mode="all_terms", must_terms=["XXX", "XXX"]
 - Query: find the docs updated 18/4/2026
   Return: search_strategy="hybrid_search", start_date="2026-04-18", end_date="2026-04-18"
 - Query: show documents created in March 2026
   Return: search_strategy="hybrid_search", start_date="2026-03-01", end_date="2026-03-31"
-- Query: documents from 2025 about currency
-  Return: search_strategy="keyword_search", should_terms=["currency"], start_date="2025-01-01", end_date="2025-12-31"
 
+
+  
 
 Response schema:
 {{
-  "search_strategy": "keyword_search|hybrid_search|no_search",
+  "search_strategy": "hybrid_search|keyword_search|no_search",
   "confidence": 0.0,
   "search_mode": "text|hybrid",
   "match_mode": "exact_phrase|all_terms|any_terms|null",
@@ -1445,8 +1484,8 @@ Response schema:
   "doc_id": null,
   "start_date": "",
   "end_date": "",
-  "owners": [],
-  "categories": [],
+    "owners": [],
+    "category": [],
   "tags": [],
   "folder_names": [],
   "folder_paths": [],
@@ -1495,10 +1534,9 @@ def _merge_task_classifier_parameters(base_parameters: dict[str, Any], classifie
 
 '''
 Rules:
-- Choose exactly one task_type: list_documents, answer_question, or count_results.
+- Choose exactly one task_type: list_documents, answer_question.
 - list_documents means the user mainly wants matched document candidates (titles/IDs), not synthesized content answers, just some keyword search
 - answer_question means answer the user using searched documents, unless search_strategy=no_search.
-- count_results means count matched documents.
 
 - If the user asks for a summary, key points, brief explanation, compare/contrast, or synthesis, classify as answer_question.
 - If the user asks to "list" documents and also asks for key points/summary, classify as answer_question.
@@ -1515,7 +1553,7 @@ Examples:
 
 Response schema:
 {{
-  "task_type": "list_documents|answer_question|count_results",
+  "task_type": "list_documents|answer_question",
   "confidence": 0.0,
   "doc_id": null,
   "requires_summary": false
@@ -1549,7 +1587,7 @@ Search results preview:
 {json.dumps(search_preview, ensure_ascii=False)}
 
 Rules:
-- Choose exactly one task_type: list_documents, answer_question, or count_results.
+- Choose exactly one task_type: list_documents, answer_question.
 
 - list_documents: Use ONLY when the user explicitly wants to SEE/BROWSE document titles/IDs/metadata without any content analysis, synthesis, or summarization. 
   * Keywords: "list", "show me", "display", "find documents" (without content requirements)
@@ -1570,9 +1608,6 @@ Rules:
   * Example: "what do these tenancy documents say about notice period?" -> answer_question
   * Example: "summarize the key points of the retrieved documents" -> answer_question
 
-- count_results: Use ONLY when the user asks for a numerical count of matching documents.
-  * Keywords: "how many", "count"
-  * Example: "how many documents mention currency" -> count_results
 
 - If search_strategy is no_search, prefer answer_question.
 
@@ -1582,7 +1617,7 @@ Rules:
 
 Response schema:
 {{
-  "task_type": "list_documents|answer_question|count_results",
+  "task_type": "list_documents|answer_question",
   "confidence": 0.0,
   "doc_id": null,
   "requires_summary": false
@@ -2635,7 +2670,7 @@ def _build_filter_clauses(req: SearchRequest, date_filter: dict[str, str]) -> li
     owners = _normalize_string_list(req.owners)
     if owners:
         filters.append({"terms": {"owner": owners}})
-    categories = _normalize_string_list(req.categories)
+    categories = _normalize_string_list(req.category or req.categories)
     if categories:
         filters.append({"terms": {"category": categories}})
     tags = _normalize_string_list(req.tags)
@@ -3243,9 +3278,11 @@ def summarize_multiple(req: SummarizeRequest):
         [f"Title: {pr.title}\nDate: {pr.date}\nContent: {pr.content}" for pr in req.press_releases]
     )
     user_prompt = (
-        "你是一位贴心的助手，解答关于这份文件的所有疑问。"
-        f"请列出文件标题，比较并总结这 {len(req.press_releases)} 篇文件，"
-        f"\n\n{combined}"
+        "You are a helpful assistant for document comparison and summarization. "
+        "Determine the dominant language from the provided document context and reply in that language. "
+        "If the context language is mixed or unclear, default to English. "
+        f"Please list document titles, compare, and summarize these {len(req.press_releases)} documents."
+        f"\n\nDocument context:\n{combined}"
     )
     if req.stream:
         generator = _generate_completion_stream(req.chat_id, user_prompt)

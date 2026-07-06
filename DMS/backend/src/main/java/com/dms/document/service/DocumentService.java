@@ -83,9 +83,9 @@ public class DocumentService {
     private static final String SEARCH_COLUMN_OWNER = "owner";
     private static final String SEARCH_COLUMN_CATEGORY = "category";
     private static final String SEARCH_COLUMN_TAGS = "tags";
-    private static final String SEARCH_COLUMN_DOCUMENT_METADATA = "documentMetadata";
-    private static final String SEARCH_COLUMN_FOLDER_NAME = "folderName";
-    private static final String SEARCH_COLUMN_FOLDER_METADATA = "folderMetadata";
+    private static final String SEARCH_COLUMN_DOCUMENT_METADATA = "documentmetadata";
+    private static final String SEARCH_COLUMN_FOLDER_NAME = "foldername";
+    private static final String SEARCH_COLUMN_FOLDER_METADATA = "foldermetadata";
     private static final String SEARCH_COLUMN_DOC_META_PREFIX = "docmeta:";
     private static final String SEARCH_COLUMN_FOLDER_META_PREFIX = "foldermeta:";
     private static final Set<String> DEFAULT_SEARCH_COLUMNS = Set.of(SEARCH_COLUMN_TITLE, SEARCH_COLUMN_DESCRIPTION);
@@ -231,9 +231,11 @@ public class DocumentService {
 
         List<String> fields = filter.conditionFields() != null ? filter.conditionFields() : List.of();
         List<String> values = filter.conditionValues();
+        List<String> operators = filter.conditionOperators() != null ? filter.conditionOperators() : List.of();
+        List<Integer> groups = filter.conditionGroups() != null ? filter.conditionGroups() : List.of();
         List<String> joins = filter.conditionJoins() != null ? filter.conditionJoins() : List.of();
-        List<Boolean> rowMatches = new ArrayList<>();
-        List<String> rowJoinToNext = new ArrayList<>();
+        Map<Integer, List<Boolean>> groupRowMatches = new LinkedHashMap<>();
+        Map<Integer, List<String>> groupRowJoins = new LinkedHashMap<>();
 
         for (int i = 0; i < values.size(); i++) {
             String value = values.get(i);
@@ -241,25 +243,193 @@ public class DocumentService {
                 continue;
             }
             String field = i < fields.size() ? fields.get(i) : SEARCH_COLUMN_TITLE;
-            rowMatches.add(matchesQueryColumn(document, folder, value, normalizeSearchColumn(field)));
-            rowJoinToNext.add(i < joins.size() ? joins.get(i) : null);
+            String operator = i < operators.size() ? operators.get(i) : "contains";
+            Integer groupIndex = i < groups.size() && groups.get(i) != null ? groups.get(i) : 0;
+
+            groupRowMatches.computeIfAbsent(groupIndex, ignored -> new ArrayList<>())
+                .add(matchesConditionWithOperator(document, folder, value, normalizeSearchColumn(field), operator));
+            groupRowJoins.computeIfAbsent(groupIndex, ignored -> new ArrayList<>())
+                .add(i < joins.size() ? joins.get(i) : null);
         }
 
-        if (rowMatches.isEmpty()) {
+        if (groupRowMatches.isEmpty()) {
             return true;
         }
 
-        boolean result = rowMatches.get(0);
         String fallbackJoin = "OR".equalsIgnoreCase(filter.conditionOperator()) ? "OR" : "AND";
-        for (int i = 1; i < rowMatches.size(); i++) {
-            String join = normalizeJoinOperator(rowJoinToNext.get(i - 1), fallbackJoin);
-            if ("AND".equals(join)) {
-                result = result && rowMatches.get(i);
+        List<Integer> orderedGroups = groupRowMatches.keySet().stream().sorted().toList();
+        Map<Integer, String> connectorToNextByGroup = new HashMap<>();
+        for (Integer groupIndex : orderedGroups) {
+            List<String> rowJoins = groupRowJoins.getOrDefault(groupIndex, List.of());
+            String connector = rowJoins.isEmpty()
+                ? fallbackJoin
+                : normalizeJoinOperator(rowJoins.get(rowJoins.size() - 1), fallbackJoin);
+            connectorToNextByGroup.put(groupIndex, connector);
+        }
+
+        boolean overall = false;
+        boolean overallInitialized = false;
+        for (int groupPos = 0; groupPos < orderedGroups.size(); groupPos++) {
+            Integer groupIndex = orderedGroups.get(groupPos);
+            List<Boolean> rowMatches = groupRowMatches.getOrDefault(groupIndex, List.of());
+            List<String> rowJoins = groupRowJoins.getOrDefault(groupIndex, List.of());
+            if (rowMatches.isEmpty()) {
+                continue;
+            }
+
+            boolean groupResult = rowMatches.get(0);
+            for (int i = 1; i < rowMatches.size(); i++) {
+                String join = normalizeJoinOperator(i - 1 < rowJoins.size() ? rowJoins.get(i - 1) : null, fallbackJoin);
+                if ("AND".equals(join)) {
+                    groupResult = groupResult && rowMatches.get(i);
+                } else {
+                    groupResult = groupResult || rowMatches.get(i);
+                }
+            }
+
+            if (!overallInitialized) {
+                overall = groupResult;
+                overallInitialized = true;
+                continue;
+            }
+
+            Integer previousGroupIndex = orderedGroups.get(groupPos - 1);
+            String connector = connectorToNextByGroup.getOrDefault(previousGroupIndex, fallbackJoin);
+            if ("OR".equals(connector)) {
+                overall = overall || groupResult;
             } else {
-                result = result || rowMatches.get(i);
+                overall = overall && groupResult;
             }
         }
-        return result;
+
+        return overallInitialized ? overall : true;
+    }
+
+    private boolean matchesConditionWithOperator(Document document, DocumentFolder folder, String query, String normalizedColumn, String operatorRaw) {
+        String operator = normalizeConditionOperator(operatorRaw);
+
+        if ("contains".equals(operator)) {
+            return matchesQueryColumn(document, folder, query, normalizedColumn);
+        }
+        if ("not_contains".equals(operator)) {
+            return !matchesQueryColumn(document, folder, query, normalizedColumn);
+        }
+
+        List<String> candidates = resolveConditionCandidates(document, folder, normalizedColumn);
+        if (candidates.isEmpty()) {
+            return "is_not".equals(operator);
+        }
+
+        if ("is_not".equals(operator)) {
+            return candidates.stream().noneMatch(candidate -> compareByOperator(candidate, query, "is"));
+        }
+
+        return candidates.stream().anyMatch(candidate -> compareByOperator(candidate, query, operator));
+    }
+
+    private String normalizeConditionOperator(String operatorRaw) {
+        if (!StringUtils.hasText(operatorRaw)) {
+            return "contains";
+        }
+        String op = operatorRaw.trim().toLowerCase(Locale.ROOT).replace(' ', '_');
+        return switch (op) {
+            case "contains", "not_contains", "is", "is_not", "starts_with", "ends_with", "before", "after" -> op;
+            default -> "contains";
+        };
+    }
+
+    private List<String> resolveConditionCandidates(Document document, DocumentFolder folder, String normalizedColumn) {
+        if (normalizedColumn != null && normalizedColumn.startsWith(SEARCH_COLUMN_DOC_META_PREFIX)) {
+            String key = normalizedColumn.substring(SEARCH_COLUMN_DOC_META_PREFIX.length());
+            String value = getMetadataValueIgnoreCase(document.getMetadataValues(), key);
+            return StringUtils.hasText(value) ? List.of(value) : List.of();
+        }
+
+        if (normalizedColumn != null && normalizedColumn.startsWith(SEARCH_COLUMN_FOLDER_META_PREFIX)) {
+            String key = normalizedColumn.substring(SEARCH_COLUMN_FOLDER_META_PREFIX.length());
+            if (!folderHasMetadataField(folder, key)) {
+                return List.of();
+            }
+            String value = getMetadataValueIgnoreCase(document.getMetadataValues(), key);
+            return StringUtils.hasText(value) ? List.of(value) : List.of();
+        }
+
+        return switch (normalizedColumn) {
+            case SEARCH_COLUMN_TITLE -> nonBlankList(document.getTitle());
+            case SEARCH_COLUMN_DESCRIPTION -> nonBlankList(document.getDescription());
+            case SEARCH_COLUMN_OWNER -> nonBlankList(document.getOwner());
+            case SEARCH_COLUMN_CATEGORY -> nonBlankList(document.getCategory());
+            case SEARCH_COLUMN_TAGS -> document.getTags() == null ? List.of() : document.getTags().stream().filter(StringUtils::hasText).toList();
+            case SEARCH_COLUMN_DOCUMENT_METADATA -> {
+                if (document.getMetadataValues() == null || document.getMetadataValues().isEmpty()) {
+                    yield List.of();
+                }
+                yield document.getMetadataValues().values().stream().filter(StringUtils::hasText).toList();
+            }
+            case SEARCH_COLUMN_FOLDER_NAME -> folder == null ? List.of() : nonBlankList(folder.getName());
+            case SEARCH_COLUMN_FOLDER_METADATA -> {
+                if (folder == null || folder.getMetadataTemplate() == null || folder.getMetadataTemplate().isEmpty()) {
+                    yield List.of();
+                }
+                List<String> keys = folder.getMetadataTemplate().stream()
+                    .map(FolderMetadataField::getKey)
+                    .filter(StringUtils::hasText)
+                    .toList();
+                List<String> values = new ArrayList<>();
+                for (String key : keys) {
+                    String value = getMetadataValueIgnoreCase(document.getMetadataValues(), key);
+                    if (StringUtils.hasText(value)) {
+                        values.add(value);
+                    }
+                }
+                yield values;
+            }
+            default -> List.of();
+        };
+    }
+
+    private List<String> nonBlankList(String value) {
+        return StringUtils.hasText(value) ? List.of(value) : List.of();
+    }
+
+    private boolean compareByOperator(String candidate, String query, String operator) {
+        if (!StringUtils.hasText(candidate) || !StringUtils.hasText(query)) {
+            return false;
+        }
+
+        String left = candidate.trim();
+        String right = query.trim();
+        String leftLower = left.toLowerCase(Locale.ROOT);
+        String rightLower = right.toLowerCase(Locale.ROOT);
+
+        return switch (operator) {
+            case "is" -> leftLower.equals(rightLower);
+            case "starts_with" -> leftLower.startsWith(rightLower);
+            case "ends_with" -> leftLower.endsWith(rightLower);
+            case "before" -> compareTemporalOrLexical(left, right) < 0;
+            case "after" -> compareTemporalOrLexical(left, right) > 0;
+            default -> leftLower.contains(rightLower);
+        };
+    }
+
+    private int compareTemporalOrLexical(String left, String right) {
+        LocalDate leftDate = parseDateValue(left);
+        LocalDate rightDate = parseDateValue(right);
+        if (leftDate != null && rightDate != null) {
+            return leftDate.compareTo(rightDate);
+        }
+        return left.compareToIgnoreCase(right);
+    }
+
+    private LocalDate parseDateValue(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(value.trim());
+        } catch (DateTimeParseException ex) {
+            return null;
+        }
     }
 
     private String normalizeJoinOperator(String join, String fallbackJoin) {

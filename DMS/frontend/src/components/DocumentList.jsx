@@ -82,6 +82,13 @@ function DocumentList({
   onHover = null,
   onCreateTopicFromDocument = null,
   onFindRelatedTopics = null,
+  cardClassName = '',
+  cardStyle,
+  onCardDragOver,
+  onCardDrop,
+  dragHandle = null,
+  resizeHandle = null,
+  workspaceSelectionInfo = null,
 }) {
   const { documentPermissions } = useContext(AuthContext)
   const handleDragStart = (event, id) => {
@@ -145,68 +152,77 @@ function DocumentList({
   })()
 
   return (
-    <div className="card list-card">
-      <div className="list-card__header">
-        <div>
-          <p className="eyebrow">Workspace</p>
+    <div
+      className={`card list-card workspace-card ${cardClassName}`.trim()}
+      style={cardStyle}
+      onDragOver={onCardDragOver}
+      onDrop={onCardDrop}
+    >
+      {dragHandle}
+      {resizeHandle}
+      <div className="workspace-card__viewport">
+        <div className="list-card__header">
+          <div>
+            <p className="eyebrow">Workspace</p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <h3 style={{ margin: 0 }}>Documents</h3>
+              {loading && (
+                <span className="document-list__loading-badge" aria-live="polite" aria-label="Loading documents">
+                  <span className="document-list__loading-spinner" aria-hidden="true" />
+                  <span>Loading…</span>
+                </span>
+              )}
+            </div>
+          </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <h3 style={{ margin: 0 }}>Documents</h3>
-            {loading && (
-              <span className="document-list__loading-badge" aria-live="polite" aria-label="Loading documents">
-                <span className="document-list__loading-spinner" aria-hidden="true" />
-                <span>Loading…</span>
-              </span>
+            <div style={{display:'flex',alignItems:'center',gap:8}}>
+              <input
+                type="search"
+                placeholder="Filter keywords"
+                value={filterQuery || ''}
+                onChange={(e) => onFilterQueryChange && onFilterQueryChange(e.target.value)}
+                style={{padding:'6px 8px', borderRadius:6, border:'1px solid rgba(15,23,42,0.06)'}}
+              />
+            </div>
+            <label style={{display:'flex',alignItems:'center',gap:6}}>
+              <small className="eyebrow" style={{margin:0,marginRight:6}}>Sort</small>
+              <select value={sort || ''} onChange={(e) => onSortChange && onSortChange(e.target.value)}>
+                <option value="createdAt,desc">Newest</option>
+                <option value="createdAt,asc">Oldest</option>
+                <option value="title,asc">Title A–Z</option>
+                <option value="title,desc">Title Z–A</option>
+                <option value="latestSizeBytes,desc">Size ↓</option>
+                <option value="latestSizeBytes,asc">Size ↑</option>
+                <option value="status,asc">Status</option>
+              </select>
+            </label>
+            {onOcrSelected && (
+              <button
+                type="button"
+                className="ghost"
+                onClick={onOcrSelected}
+                disabled={!canUpload || loading || !canRunOcrOnSelected}
+                title={!canUpload ? 'You do not have permission to run OCR' : canRunOcrOnSelected ? 'Run OCR on selected document' : 'Select a PDF document first'}
+              >
+                OCR Selected
+              </button>
+            )}
+            {onUpload && (
+              <button
+                type="button"
+                className="primary"
+                onClick={onUpload}
+                disabled={!canUpload || loading}
+                aria-label="Upload"
+                title={!canUpload ? 'You do not have permission to upload documents' : undefined}
+              >
+                Upload
+              </button>
             )}
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <div style={{display:'flex',alignItems:'center',gap:8}}>
-            <input
-              type="search"
-              placeholder="Filter keywords"
-              value={filterQuery || ''}
-              onChange={(e) => onFilterQueryChange && onFilterQueryChange(e.target.value)}
-              style={{padding:'6px 8px', borderRadius:6, border:'1px solid rgba(15,23,42,0.06)'}}
-            />
-          </div>
-          <label style={{display:'flex',alignItems:'center',gap:6}}>
-            <small className="eyebrow" style={{margin:0,marginRight:6}}>Sort</small>
-            <select value={sort || ''} onChange={(e) => onSortChange && onSortChange(e.target.value)}>
-              <option value="createdAt,desc">Newest</option>
-              <option value="createdAt,asc">Oldest</option>
-              <option value="title,asc">Title A–Z</option>
-              <option value="title,desc">Title Z–A</option>
-              <option value="latestSizeBytes,desc">Size ↓</option>
-              <option value="latestSizeBytes,asc">Size ↑</option>
-              <option value="status,asc">Status</option>
-            </select>
-          </label>
-          {onOcrSelected && (
-            <button
-              type="button"
-              className="ghost"
-              onClick={onOcrSelected}
-              disabled={!canUpload || loading || !canRunOcrOnSelected}
-              title={!canUpload ? 'You do not have permission to run OCR' : canRunOcrOnSelected ? 'Run OCR on selected document' : 'Select a PDF document first'}
-            >
-              OCR Selected
-            </button>
-          )}
-          {onUpload && (
-            <button
-              type="button"
-              className="primary"
-              onClick={onUpload}
-              disabled={!canUpload || loading}
-              aria-label="Upload"
-              title={!canUpload ? 'You do not have permission to upload documents' : undefined}
-            >
-              Upload
-            </button>
-          )}
-        </div>
-      </div>
-      <div className="document-list" onContextMenu={handleListContextMenu}>
+        {workspaceSelectionInfo && <div className="list-card__selection-info">{workspaceSelectionInfo}</div>}
+        <div className="document-list" onContextMenu={handleListContextMenu}>
         {items.map((doc) => (
           <div key={doc.id} className="document-list__item-row">
             <button
@@ -300,7 +316,7 @@ function DocumentList({
           </div>
         ))}
         {!items.length && !loading && <p className="empty-state">No documents match the filters. Try adjusting them.</p>}
-      </div>
+        </div>
       {contextMenu.open && (
         <div
           className="context-menu"
@@ -313,8 +329,8 @@ function DocumentList({
           <button type="button" disabled={!hasDocumentSelection} onClick={() => { onContextAction(contextMenu.docId, 'checkout'); closeContextMenu() }}>Check out</button>
         </div>
       )}
-      {pageMeta && (
-        <div className="pagination">
+        {pageMeta && (
+          <div className="pagination">
           <div className="pagination__left">
             <span>{totalItems} document{totalItems === 1 ? '' : 's'}</span>
             <label>
@@ -355,8 +371,9 @@ function DocumentList({
             Next
             </button>
           </div>
-        </div>
-      )}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

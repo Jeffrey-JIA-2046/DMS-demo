@@ -22,6 +22,8 @@ export const listDocuments = async ({ page = 0, size = 12, filters = {} }) => {
     filters.conditions.forEach((condition) => {
       params.append('conditionField', condition?.field || '')
       params.append('conditionValue', condition?.value || '')
+      params.append('conditionOp', condition?.operator || 'contains')
+      params.append('conditionGroup', String(Number.isFinite(Number(condition?.group)) ? Number(condition.group) : 0))
       params.append('conditionJoin', condition?.join || '')
     })
   }

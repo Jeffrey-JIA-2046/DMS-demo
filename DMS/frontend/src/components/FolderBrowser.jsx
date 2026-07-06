@@ -56,6 +56,15 @@ export default function FolderBrowser({
   canManagePermissions = false,
   onLoadPermissionTemplate,
   onLoadFolderPermissions,
+  cardClassName = '',
+  cardStyle,
+  onCardDragOver,
+  onCardDrop,
+  onCardDragStart,
+  onCardDragEnd,
+  onCardResizeStart,
+  cardDragging = false,
+  cardResizing = false,
 }) {
   const [modalMode, setModalMode] = useState(null)
   const [name, setName] = useState('')
@@ -86,7 +95,6 @@ export default function FolderBrowser({
       setName('')
       setNestUnderSelection(false)
       setInheritMetadataTemplate(false)
-      setEditingFolder(null)
       setEditParentId(null)
       setModalPermissions([])
       setPermissionsLoading(false)
@@ -246,61 +254,83 @@ export default function FolderBrowser({
   }
 
   return (
-    <div className="card folder-browser">
-      <div className="folder-browser__header">
-        <div>
-          <p className="eyebrow">Library</p>
-          <h3 onDoubleClick={() => onRefresh && onRefresh()} title="Double-click to refresh folders">Folders</h3>
-          <small className="sr-only">Double-click the title to refresh the folder list</small>
+    <div
+      className={`card folder-browser workspace-card ${cardClassName} ${cardDragging ? 'is-dragging' : ''} ${cardResizing ? 'is-resizing' : ''}`.trim()}
+      style={cardStyle}
+      onDragOver={onCardDragOver}
+      onDrop={onCardDrop}
+    >
+      <button
+        type="button"
+        className="workspace__drag-handle workspace__drag-handle--card"
+        title="Drag to reorder"
+        draggable
+        onDragStart={onCardDragStart}
+        onDragEnd={onCardDragEnd}
+      >
+        ⠿
+      </button>
+      <div
+        className="workspace__resize-handle workspace__resize-handle--card"
+        title="Resize card"
+        onMouseDown={onCardResizeStart}
+      />
+      <div className="workspace-card__viewport folder-browser__viewport">
+        <div className="folder-browser__header">
+          <div>
+            <p className="eyebrow">Library</p>
+            <h3 onDoubleClick={() => onRefresh && onRefresh()} title="Double-click to refresh folders">Folders</h3>
+            <small className="sr-only">Double-click the title to refresh the folder list</small>
+          </div>
+          <div className="folder-browser__actions">
+            <button
+              type="button"
+              className="ghost icon-btn"
+              onClick={openCreateModal}
+              disabled={busy || isModalOpen}
+              title="New folder"
+              aria-label="New folder"
+            >
+              <span aria-hidden className="icon">📁</span>
+            </button>
+            <button
+              type="button"
+              className="ghost icon-btn"
+              onClick={openEditModal}
+              disabled={busy || isModalOpen || !selectedFolder || !onUpdateFolder}
+              title="Edit folder"
+              aria-label="Edit folder"
+            >
+              <span aria-hidden className="icon">✏️</span>
+            </button>
+            <button
+              type="button"
+              className="ghost icon-btn"
+              onClick={handleDelete}
+              disabled={busy || isModalOpen || !selectedFolder || !onDeleteFolder}
+              title="Delete folder"
+              aria-label="Delete folder"
+            >
+              <span aria-hidden className="icon">🗑️</span>
+            </button>
+          </div>
         </div>
-        <div className="folder-browser__actions">
-          <button
-            type="button"
-            className="ghost icon-btn"
-            onClick={openCreateModal}
-            disabled={busy || isModalOpen}
-            title="New folder"
-            aria-label="New folder"
-          >
-            <span aria-hidden className="icon">📁</span>
-          </button>
-          <button
-            type="button"
-            className="ghost icon-btn"
-            onClick={openEditModal}
-            disabled={busy || isModalOpen || !selectedFolder || !onUpdateFolder}
-            title="Edit folder"
-            aria-label="Edit folder"
-          >
-            <span aria-hidden className="icon">✏️</span>
-          </button>
-          <button
-            type="button"
-            className="ghost icon-btn"
-            onClick={handleDelete}
-            disabled={busy || isModalOpen || !selectedFolder || !onDeleteFolder}
-            title="Delete folder"
-            aria-label="Delete folder"
-          >
-            <span aria-hidden className="icon">🗑️</span>
-          </button>
-        </div>
+        {loading ? (
+          <p className="pill pill--info">Loading folders…</p>
+        ) : nodes?.length ? (
+          <FolderTree
+            nodes={nodes}
+            selectedId={selectedId}
+            onSelect={onSelect}
+            draggingDocumentId={draggingDocumentId}
+            onDropDocument={onDocumentDrop}
+          />
+        ) : (
+          <p className="empty-state">No folders yet. Create one to get started.</p>
+        )}
+        {draggingDocumentId && <p className="pill pill--info">Drop a document on a folder name to move it.</p>}
+        {error && <p className="feedback feedback--error">{error}</p>}
       </div>
-      {loading ? (
-        <p className="pill pill--info">Loading folders…</p>
-      ) : nodes?.length ? (
-        <FolderTree
-          nodes={nodes}
-          selectedId={selectedId}
-          onSelect={onSelect}
-          draggingDocumentId={draggingDocumentId}
-          onDropDocument={onDocumentDrop}
-        />
-      ) : (
-        <p className="empty-state">No folders yet. Create one to get started.</p>
-      )}
-      {draggingDocumentId && <p className="pill pill--info">Drop a document on a folder name to move it.</p>}
-      {error && <p className="feedback feedback--error">{error}</p>}
       {isModalOpen && (
         <div className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="folder-modal-title">
           <div className="modal-layer__backdrop" onClick={closeModal} />

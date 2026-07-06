@@ -714,9 +714,9 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, onDoc
     }
   }
 
-  const handleResultFocus = (documentId) => {
+  const handleResultFocus = (documentId, result = null) => {
     setActiveDocumentId(documentId)
-    onDocumentSelect && onDocumentSelect(documentId)
+    onDocumentSelect && onDocumentSelect(documentId, { folderId: result?.folderId ?? null, folderPath: result?.folderPath ?? '' })
   }
 
   const paginationModel = useMemo(() => {
@@ -962,7 +962,7 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, onDoc
                       </p>
                       <p className="chatbot-panel__result-snippet">{result.snippet || 'No preview content'}</p>
                     </div>
-                    <button type="button" className="ghost" onClick={() => handleResultFocus(result.documentId)}>
+                    <button type="button" className="ghost" onClick={() => handleResultFocus(result.documentId, result)}>
                       Focus
                     </button>
                   </li>
