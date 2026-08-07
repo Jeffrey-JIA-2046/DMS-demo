@@ -2915,7 +2915,6 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
                 } catch (err) {
                   toast && toast(err.message || 'Context action failed', { type: 'error' })
                 }
-<<<<<<< HEAD
               }}
             />
           )
@@ -2939,7 +2938,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
               onApprove={(id, payload) => handleApprovalDecision(id, payload, 'approve')}
               onReject={(id, note) => handleApprovalDecision(id, note, 'reject')}
               onDelegate={handleDelegateApproval}
-                  onResubmitApproval={handleApprovalResubmit}
+                onResubmitApproval={handleApprovalResubmit}
               busy={busy}
               initialTab={detailsInitialTab}
               downloadUrlBuilder={buildDownloadUrl}
