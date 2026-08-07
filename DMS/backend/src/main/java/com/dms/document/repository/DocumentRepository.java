@@ -51,6 +51,7 @@ public class DocumentRepository extends BaseOpenSearchRepository<Document> {
 
     private volatile boolean statusColumnChecked;
     private volatile boolean supervisorColumnChecked;
+    private volatile boolean reviewerColumnChecked;
 
     @Autowired
     public DocumentRepository(OpenSearchClient openSearchClient, ObjectMapper objectMapper) {
@@ -109,11 +110,12 @@ public class DocumentRepository extends BaseOpenSearchRepository<Document> {
 
         try (Connection conn = dataSource.getConnection()) {
             ensureSupervisorColumn(conn);
+            ensureReviewerColumn(conn);
             List<Document> documents = new ArrayList<>();
             Map<String, Document> byId = new HashMap<>();
 
             try (PreparedStatement ps = conn.prepareStatement(
-                "SELECT id, title, description, owner, category, status, folder_id, approver_id, supervisor_id, created_at, updated_at, approval_requested_at, approval_decided_at FROM documents");
+                "SELECT id, title, description, owner, category, status, folder_id, approver_id, reviewer_id, supervisor_id, created_at, updated_at, approval_requested_at, approval_decided_at FROM documents");
                  ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     Document document = new Document();
@@ -136,6 +138,10 @@ public class DocumentRepository extends BaseOpenSearchRepository<Document> {
                     long approverId = rs.getLong("approver_id");
                     if (!rs.wasNull()) {
                         document.setApproverId(String.valueOf(approverId));
+                    }
+                    long reviewerId = rs.getLong("reviewer_id");
+                    if (!rs.wasNull()) {
+                        document.setReviewerId(String.valueOf(reviewerId));
                     }
                     long supervisorId = rs.getLong("supervisor_id");
                     if (!rs.wasNull()) {
@@ -163,6 +169,9 @@ public class DocumentRepository extends BaseOpenSearchRepository<Document> {
                 }
                 if (StringUtils.hasText(document.getApproverId())) {
                     document.setApprover(userMap.get(document.getApproverId()));
+                }
+                if (StringUtils.hasText(document.getReviewerId())) {
+                    document.setReviewer(userMap.get(document.getReviewerId()));
                 }
                 if (StringUtils.hasText(document.getSupervisorId())) {
                     document.setSupervisor(userMap.get(document.getSupervisorId()));
@@ -280,6 +289,7 @@ public class DocumentRepository extends BaseOpenSearchRepository<Document> {
         try (Connection conn = dataSource.getConnection()) {
             ensureStatusColumnSupportsRejected(conn);
             ensureSupervisorColumn(conn);
+            ensureReviewerColumn(conn);
 
             Long id = parseLong(entity.getId());
             Long folderId = parseLong(entity.getFolderId());
@@ -290,6 +300,10 @@ public class DocumentRepository extends BaseOpenSearchRepository<Document> {
             if (approverId == null && entity.getApprover() != null) {
                 approverId = parseLong(entity.getApprover().getId());
             }
+            Long reviewerId = parseLong(entity.getReviewerId());
+            if (reviewerId == null && entity.getReviewer() != null) {
+                reviewerId = parseLong(entity.getReviewer().getId());
+            }
             Long supervisorId = parseLong(entity.getSupervisorId());
             if (supervisorId == null && entity.getSupervisor() != null) {
                 supervisorId = parseLong(entity.getSupervisor().getId());
@@ -297,9 +311,9 @@ public class DocumentRepository extends BaseOpenSearchRepository<Document> {
 
             if (id == null) {
                 try (PreparedStatement ps = conn.prepareStatement(
-                    "INSERT INTO documents(category, created_at, description, owner, status, title, updated_at, folder_id, approval_decided_at, approval_requested_at, approver_id, supervisor_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO documents(category, created_at, description, owner, status, title, updated_at, folder_id, approval_decided_at, approval_requested_at, approver_id, reviewer_id, supervisor_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     Statement.RETURN_GENERATED_KEYS)) {
-                    applyDocumentColumns(ps, entity, folderId, approverId, supervisorId);
+                    applyDocumentColumns(ps, entity, folderId, approverId, reviewerId, supervisorId);
                     ps.executeUpdate();
                     try (ResultSet keys = ps.getGeneratedKeys()) {
                         if (keys.next()) {
@@ -310,9 +324,9 @@ public class DocumentRepository extends BaseOpenSearchRepository<Document> {
                 }
             } else {
                 try (PreparedStatement ps = conn.prepareStatement(
-                    "UPDATE documents SET category=?, created_at=?, description=?, owner=?, status=?, title=?, updated_at=?, folder_id=?, approval_decided_at=?, approval_requested_at=?, approver_id=?, supervisor_id=? WHERE id=?")) {
-                    applyDocumentColumns(ps, entity, folderId, approverId, supervisorId);
-                    ps.setLong(13, id);
+                    "UPDATE documents SET category=?, created_at=?, description=?, owner=?, status=?, title=?, updated_at=?, folder_id=?, approval_decided_at=?, approval_requested_at=?, approver_id=?, reviewer_id=?, supervisor_id=? WHERE id=?")) {
+                    applyDocumentColumns(ps, entity, folderId, approverId, reviewerId, supervisorId);
+                    ps.setLong(14, id);
                     ps.executeUpdate();
                 }
             }
@@ -535,7 +549,7 @@ public class DocumentRepository extends BaseOpenSearchRepository<Document> {
             .toList();
     }
 
-    private void applyDocumentColumns(PreparedStatement ps, Document entity, Long folderId, Long approverId, Long supervisorId) throws Exception {
+    private void applyDocumentColumns(PreparedStatement ps, Document entity, Long folderId, Long approverId, Long reviewerId, Long supervisorId) throws Exception {
         ps.setString(1, entity.getCategory());
         ps.setTimestamp(2, toTimestamp(entity.getCreatedAt()));
         ps.setString(3, entity.getDescription());
@@ -555,10 +569,38 @@ public class DocumentRepository extends BaseOpenSearchRepository<Document> {
         } else {
             ps.setLong(11, approverId);
         }
-        if (supervisorId == null) {
+        if (reviewerId == null) {
             ps.setNull(12, Types.BIGINT);
         } else {
-            ps.setLong(12, supervisorId);
+            ps.setLong(12, reviewerId);
+        }
+        if (supervisorId == null) {
+            ps.setNull(13, Types.BIGINT);
+        } else {
+            ps.setLong(13, supervisorId);
+        }
+    }
+
+    private void ensureReviewerColumn(Connection conn) throws Exception {
+        if (reviewerColumnChecked) {
+            return;
+        }
+
+        synchronized (this) {
+            if (reviewerColumnChecked) {
+                return;
+            }
+            try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT 1 FROM information_schema.columns "
+                    + "WHERE table_schema = DATABASE() AND table_name = 'documents' AND column_name = 'reviewer_id' LIMIT 1");
+                 ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    try (Statement statement = conn.createStatement()) {
+                        statement.execute("ALTER TABLE documents ADD COLUMN reviewer_id BIGINT NULL");
+                    }
+                }
+            }
+            reviewerColumnChecked = true;
         }
     }
 

@@ -10,6 +10,7 @@ import jakarta.validation.constraints.NotBlank;
 public record WorkflowTemplateUpsertRequest(
     @NotBlank String name,
     String description,
+    String bpmnXml,
     List<WorkflowActivity> activities,
     List<WorkflowConnection> connections
 ) {

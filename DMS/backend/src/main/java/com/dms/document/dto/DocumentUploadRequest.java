@@ -17,6 +17,7 @@ public record DocumentUploadRequest(
     @NotBlank String expiryDate,
     Set<@Size(max = 40) String> tags,
     @NotNull String folderId,
+    @NotBlank String reviewerId,
     @NotNull String approverId,
     @NotBlank String supervisorId,
     Map<String, String> metadata,

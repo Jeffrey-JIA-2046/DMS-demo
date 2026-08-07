@@ -1,4 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useContext } from 'react'
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import BpmnModeler from 'bpmn-js/lib/Modeler'
+import 'bpmn-js/dist/assets/diagram-js.css'
+import 'bpmn-js/dist/assets/bpmn-js.css'
+import 'bpmn-js/dist/assets/bpmn-font/css/bpmn.css'
 import { AuthContext, Roles } from '../contexts/AuthContext'
 import {
   branchWorkflowTemplate,
@@ -13,15 +17,14 @@ import {
   upsertWorkflowBinding,
 } from '../api/workflow'
 
-const CANVAS_WIDTH = 980
-const CANVAS_HEIGHT = 560
+const DEFAULT_NODE_POSITION = { x: 260, y: 180 }
 
-const ACTIVITY_COLORS = {
-  BEGIN: '#16a34a',
-  END: '#dc2626',
-  CONDITION: '#d97706',
-  MANUAL: '#2563eb',
-  AUTO: '#7c3aed',
+const ACTIVITY_TO_BPMN = {
+  BEGIN: 'bpmn:StartEvent',
+  END: 'bpmn:EndEvent',
+  CONDITION: 'bpmn:ExclusiveGateway',
+  MANUAL: 'bpmn:UserTask',
+  AUTO: 'bpmn:ServiceTask',
 }
 
 const CONDITION_OPERATORS = [
@@ -131,15 +134,6 @@ const createBeginActivity = () => ({
   config: {},
 })
 
-const createActivity = (type, x = 220, y = 180) => ({
-  id: createId(),
-  name: type === 'END' ? 'End' : type === 'CONDITION' ? 'Condition' : type === 'AUTO' ? 'Auto' : 'Manual',
-  type,
-  x,
-  y,
-  config: {},
-})
-
 const createEndActivity = () => ({
   id: createId(),
   name: 'End',
@@ -154,6 +148,7 @@ const createTemplateDraft = () => ({
   templateGroupId: '',
   name: 'New workflow template',
   description: '',
+  bpmnXml: '',
   published: false,
   lifecycleStatus: 'DRAFT',
   versionNumber: 0,
@@ -162,10 +157,161 @@ const createTemplateDraft = () => ({
   connections: [],
 })
 
-const nodeCenter = (activity) => ({
-  x: (activity?.x || 0) + 84,
-  y: (activity?.y || 0) + 30,
-})
+const isFlowNodeShape = (element) => element && !element.waypoints && element.type !== 'bpmn:Process' && element.parent
+
+const toActivityType = (shapeType) => {
+  switch (shapeType) {
+    case 'bpmn:StartEvent':
+      return 'BEGIN'
+    case 'bpmn:EndEvent':
+      return 'END'
+    case 'bpmn:ExclusiveGateway':
+      return 'CONDITION'
+    case 'bpmn:ServiceTask':
+      return 'AUTO'
+    case 'bpmn:UserTask':
+    case 'bpmn:Task':
+    default:
+      return 'MANUAL'
+  }
+}
+
+const toBpmnType = (activityType) => ACTIVITY_TO_BPMN[activityType] || 'bpmn:Task'
+
+const toDefaultName = (activityType) => {
+  switch (activityType) {
+    case 'BEGIN':
+      return 'Begin'
+    case 'END':
+      return 'End'
+    case 'CONDITION':
+      return 'Condition'
+    case 'AUTO':
+      return 'Auto'
+    case 'MANUAL':
+    default:
+      return 'Manual'
+  }
+}
+
+const toDiagramSnapshot = (value) => {
+  const activities = Array.isArray(value?.activities)
+    ? value.activities.map((activity) => ({
+        id: activity.id,
+        type: activity.type,
+        name: activity.name,
+        x: activity.x,
+        y: activity.y,
+      }))
+    : []
+
+  const connections = Array.isArray(value?.connections)
+    ? value.connections.map((connection) => ({
+        id: connection.id,
+        fromActivityId: connection.fromActivityId,
+        toActivityId: connection.toActivityId,
+        label: connection.label,
+      }))
+    : []
+
+  return JSON.stringify({ activities, connections })
+}
+
+const extractDraftFromModeler = (modeler, previousDraft) => {
+  const elementRegistry = modeler.get('elementRegistry')
+  const allElements = elementRegistry.getAll()
+  const previousActivities = new Map((previousDraft?.activities || []).map((activity) => [activity.id, activity]))
+  const previousConnections = new Map((previousDraft?.connections || []).map((connection) => [connection.id, connection]))
+
+  const activities = allElements
+    .filter(isFlowNodeShape)
+    .map((shape) => {
+      const fallbackName = toDefaultName(toActivityType(shape.type))
+      const previous = previousActivities.get(shape.id)
+      return {
+        id: shape.id,
+        name: shape.businessObject?.name || previous?.name || fallbackName,
+        type: toActivityType(shape.type),
+        x: Math.round(shape.x || 0),
+        y: Math.round(shape.y || 0),
+        config: previous?.config || {},
+      }
+    })
+
+  const connections = allElements
+    .filter((element) => element.waypoints && element.type === 'bpmn:SequenceFlow')
+    .map((connection) => {
+      const previous = previousConnections.get(connection.id)
+      return {
+        id: connection.id,
+        fromActivityId: connection.source?.id || '',
+        toActivityId: connection.target?.id || '',
+        conditionCase: previous?.conditionCase || '',
+        label: connection.businessObject?.name || previous?.label || '',
+      }
+    })
+
+  return {
+    ...previousDraft,
+    activities,
+    connections,
+  }
+}
+
+const createBpmnGraphFromDraft = async (modeler, draft) => {
+  await modeler.createDiagram()
+
+  const elementFactory = modeler.get('elementFactory')
+  const modeling = modeler.get('modeling')
+  const canvas = modeler.get('canvas')
+  const root = canvas.getRootElement()
+
+  const shapeById = new Map()
+
+  for (const activity of draft.activities || []) {
+    const shape = elementFactory.createShape({ type: toBpmnType(activity.type) })
+    const baseX = Number.isFinite(activity.x) ? activity.x : DEFAULT_NODE_POSITION.x
+    const baseY = Number.isFinite(activity.y) ? activity.y : DEFAULT_NODE_POSITION.y
+    const position = {
+      x: baseX + (shape.width || 100) / 2,
+      y: baseY + (shape.height || 80) / 2,
+    }
+
+    const created = modeling.createShape(shape, position, root)
+    try {
+      modeling.updateProperties(created, {
+        id: activity.id || createId(),
+        name: activity.name || toDefaultName(activity.type),
+      })
+    } catch {
+      modeling.updateProperties(created, {
+        name: activity.name || toDefaultName(activity.type),
+      })
+    }
+    shapeById.set(activity.id, created)
+  }
+
+  for (const connection of draft.connections || []) {
+    const source = shapeById.get(connection.fromActivityId)
+    const target = shapeById.get(connection.toActivityId)
+    if (!source || !target) {
+      continue
+    }
+    const createdConnection = modeling.connect(source, target, { type: 'bpmn:SequenceFlow' })
+    try {
+      modeling.updateProperties(createdConnection, {
+        id: connection.id || createId(),
+        name: connection.label || '',
+      })
+    } catch {
+      modeling.updateProperties(createdConnection, {
+        name: connection.label || '',
+      })
+    }
+  }
+
+  canvas.zoom('fit-viewport', 'auto')
+}
 
 export default function WorkflowDesigner() {
   const { role } = useContext(AuthContext)
@@ -184,13 +330,14 @@ export default function WorkflowDesigner() {
   const [selectedTemplateId, setSelectedTemplateId] = useState('')
   const [draft, setDraft] = useState(createTemplateDraft)
   const [selectedActivityId, setSelectedActivityId] = useState('')
-  const [connectMode, setConnectMode] = useState(false)
-  const [connectSourceId, setConnectSourceId] = useState('')
-  const [dragging, setDragging] = useState(null)
   const [bindingForm, setBindingForm] = useState({ category: '', templateId: '' })
   const [showConditionJsonPreview, setShowConditionJsonPreview] = useState(false)
 
-  const canvasRef = useRef(null)
+  const modelerRef = useRef(null)
+  const modelerCanvasRef = useRef(null)
+  const bpmnImportInputRef = useRef(null)
+  const importingDiagramRef = useRef(false)
+  const lastModelSnapshotRef = useRef('')
 
   const selectedActivity = useMemo(() => {
     return draft.activities.find((activity) => activity.id === selectedActivityId) || null
@@ -247,14 +394,91 @@ export default function WorkflowDesigner() {
     loadAll()
   }, [loadAll])
 
+  useEffect(() => {
+    if (!modelerCanvasRef.current) {
+      return undefined
+    }
+
+    const modeler = new BpmnModeler({
+      container: modelerCanvasRef.current,
+    })
+
+    modelerRef.current = modeler
+
+    const eventBus = modeler.get('eventBus')
+    const selection = modeler.get('selection')
+
+    eventBus.on('selection.changed', (event) => {
+      const selected = event.newSelection?.[0]
+      if (!selected || selected.waypoints) {
+        setSelectedActivityId('')
+        return
+      }
+      setSelectedActivityId(selected.id)
+    })
+
+    eventBus.on('commandStack.changed', () => {
+      if (importingDiagramRef.current) {
+        return
+      }
+      setDraft((prev) => {
+        const next = extractDraftFromModeler(modeler, prev)
+        lastModelSnapshotRef.current = toDiagramSnapshot(next)
+        return next
+      })
+    })
+
+    createBpmnGraphFromDraft(modeler, createTemplateDraft())
+      .then(() => {
+        const initialDraft = createTemplateDraft()
+        lastModelSnapshotRef.current = toDiagramSnapshot(initialDraft)
+        const firstActivity = initialDraft.activities?.[0]
+        if (firstActivity?.id) {
+          const element = modeler.get('elementRegistry').get(firstActivity.id)
+          if (element) {
+            selection.select(element)
+          }
+        }
+      })
+      .catch(() => {
+        setError('Failed to initialize BPMN workflow designer')
+      })
+
+    return () => {
+      modeler.destroy()
+      modelerRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    const modeler = modelerRef.current
+    if (!modeler) {
+      return
+    }
+    const snapshot = toDiagramSnapshot(draft)
+    if (snapshot === lastModelSnapshotRef.current) {
+      return
+    }
+
+    importingDiagramRef.current = true
+    createBpmnGraphFromDraft(modeler, draft)
+      .then(() => {
+        lastModelSnapshotRef.current = snapshot
+      })
+      .catch(() => {
+        setError('Failed to render BPMN graph from workflow draft')
+      })
+      .finally(() => {
+        importingDiagramRef.current = false
+      })
+  }, [draft])
+
   const handleSelectTemplate = (templateId) => {
     setSelectedTemplateId(templateId)
     const found = templates.find((template) => template.id === templateId)
     if (found) {
       setDraft(deepClone(found) || createTemplateDraft())
       setSelectedActivityId('')
-      setConnectSourceId('')
-      setConnectMode(false)
     }
   }
 
@@ -262,8 +486,6 @@ export default function WorkflowDesigner() {
     setSelectedTemplateId('')
     setDraft(createTemplateDraft())
     setSelectedActivityId('')
-    setConnectSourceId('')
-    setConnectMode(false)
     setInfo('Started a new workflow template draft')
   }
 
@@ -276,9 +498,21 @@ export default function WorkflowDesigner() {
     setError('')
     setInfo('')
     try {
+      let bpmnXml = typeof draft.bpmnXml === 'string' ? draft.bpmnXml : ''
+      const modeler = modelerRef.current
+      if (modeler) {
+        try {
+          const result = await modeler.saveXML({ format: true })
+          bpmnXml = result?.xml || bpmnXml
+        } catch {
+          // Keep save functional even if XML export fails unexpectedly.
+        }
+      }
+
       const payload = {
         name: draft.name.trim(),
         description: draft.description || '',
+        bpmnXml,
         activities: draft.activities,
         connections: draft.connections,
       }
@@ -339,110 +573,79 @@ export default function WorkflowDesigner() {
   }
 
   const addActivity = (type) => {
-    setDraft((prev) => ({
-      ...prev,
-      activities: [...prev.activities, createActivity(type, 180 + prev.activities.length * 20, 140 + prev.activities.length * 16)],
-    }))
+    const modeler = modelerRef.current
+    if (!modeler) {
+      return
+    }
+    const elementFactory = modeler.get('elementFactory')
+    const modeling = modeler.get('modeling')
+    const canvas = modeler.get('canvas')
+    const root = canvas.getRootElement()
+
+    const shape = elementFactory.createShape({ type: toBpmnType(type) })
+    const index = draft.activities.length
+    const position = {
+      x: DEFAULT_NODE_POSITION.x + index * 28,
+      y: DEFAULT_NODE_POSITION.y + index * 20,
+    }
+
+    const created = modeling.createShape(shape, position, root)
+    try {
+      modeling.updateProperties(created, {
+        id: createId(),
+        name: toDefaultName(type),
+      })
+    } catch {
+      modeling.updateProperties(created, {
+        name: toDefaultName(type),
+      })
+    }
+    modeler.get('selection').select(created)
   }
 
   const removeSelectedActivity = () => {
     if (!selectedActivity || selectedActivity.type === 'BEGIN' || selectedActivity.type === 'END') {
       return
     }
-    const id = selectedActivity.id
-    setDraft((prev) => ({
-      ...prev,
-      activities: prev.activities.filter((activity) => activity.id !== id),
-      connections: prev.connections.filter((connection) => connection.fromActivityId !== id && connection.toActivityId !== id),
-    }))
-    setSelectedActivityId('')
-    setConnectSourceId((prev) => (prev === id ? '' : prev))
-  }
-
-  const handleNodePointerDown = (event, activityId) => {
-    if (connectMode) {
-      if (!connectSourceId) {
-        setConnectSourceId(activityId)
-        return
-      }
-      if (connectSourceId === activityId) {
-        setConnectSourceId('')
-        return
-      }
-      setDraft((prev) => ({
-        ...prev,
-        connections: [
-          ...prev.connections,
-          {
-            id: createId(),
-            fromActivityId: connectSourceId,
-            toActivityId: activityId,
-            conditionCase: '',
-            label: '',
-          },
-        ],
-      }))
-      setConnectSourceId('')
+    const modeler = modelerRef.current
+    if (!modeler) {
       return
     }
-
-    setSelectedActivityId(activityId)
-    if (!canDrag) {
+    const elementRegistry = modeler.get('elementRegistry')
+    const modeling = modeler.get('modeling')
+    const element = elementRegistry.get(selectedActivity.id)
+    if (!element || element.waypoints) {
       return
     }
-
-    const target = draft.activities.find((activity) => activity.id === activityId)
-    const canvasRect = canvasRef.current?.getBoundingClientRect()
-    if (!target || !canvasRect) {
-      return
-    }
-
-    setDragging({
-      id: activityId,
-      offsetX: event.clientX - canvasRect.left - target.x,
-      offsetY: event.clientY - canvasRect.top - target.y,
-    })
-  }
-
-  const handleCanvasPointerMove = (event) => {
-    if (!dragging || !canDrag) return
-    const canvasRect = canvasRef.current?.getBoundingClientRect()
-    if (!canvasRect) return
-
-    const nextX = Math.max(0, Math.min(CANVAS_WIDTH - 168, event.clientX - canvasRect.left - dragging.offsetX))
-    const nextY = Math.max(0, Math.min(CANVAS_HEIGHT - 60, event.clientY - canvasRect.top - dragging.offsetY))
-
-    setDraft((prev) => ({
-      ...prev,
-      activities: prev.activities.map((activity) => {
-        if (activity.id !== dragging.id) {
-          return activity
-        }
-        return {
-          ...activity,
-          x: Math.round(nextX),
-          y: Math.round(nextY),
-        }
-      }),
-    }))
-  }
-
-  const handlePointerUp = () => {
-    setDragging(null)
+    modeling.removeElements([element])
   }
 
   const updateSelectedActivity = (patch) => {
     if (!selectedActivityId) return
-    setDraft((prev) => ({
-      ...prev,
-      activities: prev.activities.map((activity) => {
+    const modeler = modelerRef.current
+    if (Object.prototype.hasOwnProperty.call(patch, 'name') && modeler) {
+      const elementRegistry = modeler.get('elementRegistry')
+      const modeling = modeler.get('modeling')
+      const element = elementRegistry.get(selectedActivityId)
+      if (element) {
+        modeling.updateProperties(element, { name: patch.name || '' })
+        return
+      }
+    }
+
+    setDraft((prev) => {
+      const nextActivities = prev.activities.map((activity) => {
         if (activity.id !== selectedActivityId) return activity
         return {
           ...activity,
           ...patch,
         }
-      }),
-    }))
+      })
+      return {
+        ...prev,
+        activities: nextActivities,
+      }
+    })
   }
 
   const updateSelectedActivityConfig = (key, value) => {
@@ -529,6 +732,16 @@ export default function WorkflowDesigner() {
   }
 
   const updateConnection = (connectionId, patch) => {
+    const modeler = modelerRef.current
+    if (Object.prototype.hasOwnProperty.call(patch, 'label') && modeler) {
+      const elementRegistry = modeler.get('elementRegistry')
+      const modeling = modeler.get('modeling')
+      const connectionElement = elementRegistry.get(connectionId)
+      if (connectionElement) {
+        modeling.updateProperties(connectionElement, { name: patch.label || '' })
+      }
+    }
+
     setDraft((prev) => ({
       ...prev,
       connections: prev.connections.map((connection) => {
@@ -539,10 +752,119 @@ export default function WorkflowDesigner() {
   }
 
   const removeConnection = (connectionId) => {
+    const modeler = modelerRef.current
+    if (!modeler) {
+      return
+    }
+    const elementRegistry = modeler.get('elementRegistry')
+    const modeling = modeler.get('modeling')
+    const connectionElement = elementRegistry.get(connectionId)
+    if (connectionElement?.waypoints) {
+      modeling.removeConnection(connectionElement)
+      return
+    }
+
     setDraft((prev) => ({
       ...prev,
       connections: prev.connections.filter((connection) => connection.id !== connectionId),
     }))
+  }
+
+  const fitBpmnView = () => {
+    const modeler = modelerRef.current
+    if (!modeler) {
+      return
+    }
+    const canvas = modeler.get('canvas')
+    canvas.zoom('fit-viewport', 'auto')
+  }
+
+  const triggerBpmnImport = () => {
+    bpmnImportInputRef.current?.click()
+  }
+
+  const handleExportBpmnXml = async () => {
+    const modeler = modelerRef.current
+    if (!modeler) {
+      return
+    }
+
+    setError('')
+    try {
+      const result = await modeler.saveXML({ format: true })
+      const xml = result?.xml || ''
+      if (!xml.trim()) {
+        setError('Failed to export BPMN XML: empty diagram content')
+        return
+      }
+
+      const blob = new Blob([xml], { type: 'application/xml' })
+      const url = URL.createObjectURL(blob)
+      const sanitizedName = (draft.name || 'workflow-template').trim().replace(/[^a-z0-9-_]+/gi, '-').replace(/^-+|-+$/g, '')
+      const filename = `${sanitizedName || 'workflow-template'}.bpmn`
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = filename
+      document.body.appendChild(anchor)
+      anchor.click()
+      document.body.removeChild(anchor)
+      URL.revokeObjectURL(url)
+      setInfo(`Exported BPMN XML as ${filename}`)
+    } catch {
+      setError('Failed to export BPMN XML')
+    }
+  }
+
+  const handleImportBpmnXml = async (event) => {
+    const file = event.target.files?.[0]
+    const modeler = modelerRef.current
+    if (!file || !modeler) {
+      return
+    }
+
+    setError('')
+    setInfo('')
+    try {
+      const xml = await file.text()
+      if (!xml.trim()) {
+        setError('Selected BPMN XML file is empty')
+        return
+      }
+
+      importingDiagramRef.current = true
+      await modeler.importXML(xml)
+      const nextDraft = extractDraftFromModeler(modeler, draft)
+      const nextSnapshot = toDiagramSnapshot(nextDraft)
+      lastModelSnapshotRef.current = nextSnapshot
+      setDraft((prev) => ({
+        ...prev,
+        bpmnXml: xml,
+        activities: nextDraft.activities,
+        connections: nextDraft.connections,
+      }))
+
+      const selection = modeler.get('selection')
+      const firstActivityId = nextDraft.activities?.[0]?.id
+      if (firstActivityId) {
+        const element = modeler.get('elementRegistry').get(firstActivityId)
+        if (element) {
+          selection.select(element)
+          setSelectedActivityId(firstActivityId)
+        } else {
+          setSelectedActivityId('')
+        }
+      } else {
+        setSelectedActivityId('')
+      }
+
+      fitBpmnView()
+      setInfo(`Imported BPMN XML from ${file.name}`)
+    } catch {
+      setError('Failed to import BPMN XML file')
+    } finally {
+      importingDiagramRef.current = false
+      event.target.value = ''
+    }
   }
 
   const handleUpsertBinding = async (event) => {
@@ -591,11 +913,11 @@ export default function WorkflowDesigner() {
           <p className="eyebrow">System administration</p>
           <h3>Workflow Designer</h3>
           <p className="details-description">
-            Build workflow templates from activities. Workflows begin at Begin and follow arrow lines until End.
+            Build workflow templates with BPMN elements. Start from Begin and connect sequence flows until End.
           </p>
           {!canDrag && (
             <p className="details-description">
-              Drag and drop positioning is available to system administrators. You can still create and edit templates.
+              BPMN canvas interactions are available. Use the toolbar for quick system workflow nodes.
             </p>
           )}
         </div>
@@ -921,9 +1243,10 @@ export default function WorkflowDesigner() {
                       >
                         <option value="">None</option>
                         <option value="DOCUMENT_APPROVER">DOCUMENT_APPROVER</option>
-                        <option value="DOCUMENT_SUPERVISOR">DOCUMENT_SUPERVISOR</option>
+                        <option value="DOCUMENT_REVIEWER">DOCUMENT_REVIEWER</option>
                         <option value="DOCUMENT_OWNER">DOCUMENT_OWNER</option>
                       </select>
+                      <small>Use DOCUMENT_APPROVER or DOCUMENT_REVIEWER to bind this step to users selected during document upload.</small>
                     </label>
                   </>
                 )}
@@ -963,69 +1286,23 @@ export default function WorkflowDesigner() {
             <button type="button" className="ghost ghost--small" onClick={() => addActivity('MANUAL')}>+ Manual</button>
             <button type="button" className="ghost ghost--small" onClick={() => addActivity('AUTO')}>+ Auto</button>
             <button type="button" className="ghost ghost--small" onClick={() => addActivity('CONDITION')}>+ Condition</button>
-            <button
-              type="button"
-              className={`ghost ghost--small ${connectMode ? 'is-active' : ''}`}
-              onClick={() => {
-                setConnectMode((prev) => !prev)
-                setConnectSourceId('')
-              }}
-            >
-              {connectMode ? 'Exit connect mode' : 'Connect activities'}
-            </button>
-            {connectMode && (
-              <small>
-                {connectSourceId ? 'Select target activity...' : 'Select source activity...'}
-              </small>
-            )}
+            <button type="button" className="ghost ghost--small" onClick={() => addActivity('BEGIN')}>+ Begin</button>
+            <button type="button" className="ghost ghost--small" onClick={() => addActivity('END')}>+ End</button>
+            <button type="button" className="ghost ghost--small" onClick={fitBpmnView}>Fit view</button>
+            <button type="button" className="ghost ghost--small" onClick={handleExportBpmnXml}>Export BPMN XML</button>
+            <button type="button" className="ghost ghost--small" onClick={triggerBpmnImport}>Import BPMN XML</button>
+            <input
+              ref={bpmnImportInputRef}
+              type="file"
+              accept=".bpmn,.xml,text/xml,application/xml"
+              onChange={handleImportBpmnXml}
+              style={{ display: 'none' }}
+            />
+            <small>Use BPMN palette and connectors directly in the canvas.</small>
           </div>
 
-          <div
-            ref={canvasRef}
-            className="workflow-canvas"
-            style={{ width: CANVAS_WIDTH, height: CANVAS_HEIGHT }}
-            onMouseMove={handleCanvasPointerMove}
-            onMouseUp={handlePointerUp}
-            onMouseLeave={handlePointerUp}
-          >
-            <svg className="workflow-canvas__links" width={CANVAS_WIDTH} height={CANVAS_HEIGHT}>
-              <defs>
-                <marker id="workflow-arrow" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="strokeWidth">
-                  <path d="M0,0 L10,4 L0,8 z" fill="#64748b" />
-                </marker>
-              </defs>
-              {draft.connections.map((connection) => {
-                const from = draft.activities.find((activity) => activity.id === connection.fromActivityId)
-                const to = draft.activities.find((activity) => activity.id === connection.toActivityId)
-                if (!from || !to) return null
-                const start = nodeCenter(from)
-                const end = nodeCenter(to)
-                const midX = (start.x + end.x) / 2
-                const path = `M ${start.x} ${start.y} C ${midX} ${start.y}, ${midX} ${end.y}, ${end.x} ${end.y}`
-                return (
-                  <g key={connection.id}>
-                    <path d={path} stroke="#64748b" fill="none" strokeWidth="2" markerEnd="url(#workflow-arrow)" />
-                  </g>
-                )
-              })}
-            </svg>
-
-            {draft.activities.map((activity) => (
-              <button
-                key={activity.id}
-                type="button"
-                className={`workflow-node ${selectedActivityId === activity.id ? 'is-selected' : ''} ${connectSourceId === activity.id ? 'is-source' : ''}`}
-                style={{
-                  left: activity.x,
-                  top: activity.y,
-                  borderColor: ACTIVITY_COLORS[activity.type] || '#334155',
-                }}
-                onMouseDown={(event) => handleNodePointerDown(event, activity.id)}
-              >
-                <strong>{activity.name}</strong>
-                <small>{activity.type}</small>
-              </button>
-            ))}
+          <div className="workflow-bpmn-shell">
+            <div ref={modelerCanvasRef} className="workflow-bpmn-canvas" />
           </div>
 
           <div className="workflow-admin__connections">
@@ -1066,17 +1343,15 @@ export default function WorkflowDesigner() {
             <form onSubmit={handleUpsertBinding} className="workflow-admin__binding-form">
               <label>
                 <span>Category</span>
-                <input
-                  list="workflow-categories"
+                <select
                   value={bindingForm.category}
                   onChange={(event) => setBindingForm((prev) => ({ ...prev, category: event.target.value }))}
-                  placeholder="Document category"
-                />
-                <datalist id="workflow-categories">
+                >
+                  <option value="">Select category</option>
                   {categories.map((category) => (
-                    <option key={category} value={category} />
+                    <option key={category} value={category}>{category}</option>
                   ))}
-                </datalist>
+                </select>
               </label>
 
               <label>

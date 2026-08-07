@@ -7,6 +7,7 @@ import java.util.List;
 public class WorkflowInstance {
     private String id;
     private String documentId;
+    private String reviewerId;
     private String templateId;
     private String templateName;
     private WorkflowInstanceStatus status;
@@ -29,6 +30,14 @@ public class WorkflowInstance {
 
     public void setDocumentId(String documentId) {
         this.documentId = documentId;
+    }
+
+    public String getReviewerId() {
+        return reviewerId;
+    }
+
+    public void setReviewerId(String reviewerId) {
+        this.reviewerId = reviewerId;
     }
 
     public String getTemplateId() {

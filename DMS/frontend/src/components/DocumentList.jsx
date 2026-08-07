@@ -89,6 +89,8 @@ function DocumentList({
   dragHandle = null,
   resizeHandle = null,
   workspaceSelectionInfo = null,
+  isDocumentFavorite = () => false,
+  onToggleDocumentFavorite = null,
 }) {
   const { documentPermissions } = useContext(AuthContext)
   const handleDragStart = (event, id) => {
@@ -310,6 +312,17 @@ function DocumentList({
                   onClick={() => onFindRelatedTopics(doc)}
                 >
                   <span aria-hidden className="icon">🔎</span>
+                </button>
+              )}
+              {typeof onToggleDocumentFavorite === 'function' && (
+                <button
+                  type="button"
+                  className="ghost icon-btn document-list__topic-btn"
+                  aria-label={`${isDocumentFavorite(doc.id) ? 'Remove favorite' : 'Add favorite'} for ${doc.title}`}
+                  title={isDocumentFavorite(doc.id) ? 'Remove favorite' : 'Add favorite'}
+                  onClick={() => onToggleDocumentFavorite(doc.id)}
+                >
+                  <span aria-hidden className="icon">{isDocumentFavorite(doc.id) ? '★' : '☆'}</span>
                 </button>
               )}
             </div>

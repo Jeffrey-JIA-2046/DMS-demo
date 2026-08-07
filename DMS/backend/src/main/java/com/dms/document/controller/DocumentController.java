@@ -309,6 +309,17 @@ public class DocumentController {
         return resp;
     }
 
+    @PostMapping("/{id}/approval/resubmit")
+    public DocumentDetailsResponse resubmitApproval(
+        @PathVariable String id,
+        @RequestBody @Valid DocumentApprovalDecisionRequest request,
+        java.security.Principal principal
+    ) {
+        DocumentDetailsResponse resp = documentService.resubmitRejectedApproval(id, request, principal != null ? principal.getName() : null);
+        auditService.record("RESUBMIT", id, principal != null ? principal.getName() : "system", "approval resubmitted");
+        return resp;
+    }
+
     private ResponseEntity<byte[]> toFileResponse(DocumentVersion version) {
         return ResponseEntity.ok()
             .contentType(MediaType.parseMediaType(version.getContentType() == null ? MediaType.APPLICATION_OCTET_STREAM_VALUE : version.getContentType()))

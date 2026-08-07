@@ -61,7 +61,7 @@ public class WorkflowRepository {
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement("""
                    SELECT id, template_group_id, name, description, published, version_no, lifecycle_status, based_on_template_id,
-                       created_by, created_at, updated_at, published_at,
+                       created_by, created_at, updated_at, published_at, bpmn_xml,
                         activities_json, connections_json
                    FROM workflow_templates
                   ORDER BY updated_at DESC, name ASC
@@ -85,7 +85,7 @@ public class WorkflowRepository {
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement("""
                    SELECT id, template_group_id, name, description, published, version_no, lifecycle_status, based_on_template_id,
-                       created_by, created_at, updated_at, published_at,
+                       created_by, created_at, updated_at, published_at, bpmn_xml,
                         activities_json, connections_json
                    FROM workflow_templates
                   WHERE id = ?
@@ -113,8 +113,8 @@ public class WorkflowRepository {
         try (Connection conn = dataSource.getConnection()) {
             try (PreparedStatement ps = conn.prepareStatement("""
                 INSERT INTO workflow_templates(id, template_group_id, name, description, published, version_no, lifecycle_status, based_on_template_id,
-                                               created_by, created_at, updated_at, published_at, activities_json, connections_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                               created_by, created_at, updated_at, published_at, bpmn_xml, activities_json, connections_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON DUPLICATE KEY UPDATE
                     template_group_id = VALUES(template_group_id),
                     name = VALUES(name),
@@ -127,6 +127,7 @@ public class WorkflowRepository {
                     created_at = VALUES(created_at),
                     updated_at = VALUES(updated_at),
                     published_at = VALUES(published_at),
+                    bpmn_xml = VALUES(bpmn_xml),
                     activities_json = VALUES(activities_json),
                     connections_json = VALUES(connections_json)
                 """)) {
@@ -145,8 +146,9 @@ public class WorkflowRepository {
                 ps.setTimestamp(10, toTimestamp(template.getCreatedAt()));
                 ps.setTimestamp(11, toTimestamp(template.getUpdatedAt()));
                 ps.setTimestamp(12, toTimestamp(template.getPublishedAt()));
-                ps.setString(13, objectMapper.writeValueAsString(template.getActivities()));
-                ps.setString(14, objectMapper.writeValueAsString(template.getConnections()));
+                ps.setString(13, template.getBpmnXml());
+                ps.setString(14, objectMapper.writeValueAsString(template.getActivities()));
+                ps.setString(15, objectMapper.writeValueAsString(template.getConnections()));
                 ps.executeUpdate();
             }
         } catch (Exception ex) {
@@ -285,10 +287,11 @@ public class WorkflowRepository {
         ensureTables();
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement("""
-                 INSERT INTO workflow_instances(id, document_id, template_id, template_name, status, current_activity_id, started_at, ended_at, steps_json)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                      INSERT INTO workflow_instances(id, document_id, reviewer_id, template_id, template_name, status, current_activity_id, started_at, ended_at, steps_json)
+                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON DUPLICATE KEY UPDATE
                     document_id = VALUES(document_id),
+                          reviewer_id = VALUES(reviewer_id),
                     template_id = VALUES(template_id),
                     template_name = VALUES(template_name),
                     status = VALUES(status),
@@ -299,13 +302,14 @@ public class WorkflowRepository {
                  """)) {
             ps.setString(1, instance.getId());
             ps.setString(2, instance.getDocumentId());
-            ps.setString(3, instance.getTemplateId());
-            ps.setString(4, instance.getTemplateName());
-            ps.setString(5, instance.getStatus() != null ? instance.getStatus().name() : WorkflowInstanceStatus.RUNNING.name());
-            ps.setString(6, instance.getCurrentActivityId());
-            ps.setTimestamp(7, toTimestamp(instance.getStartedAt()));
-            ps.setTimestamp(8, toTimestamp(instance.getEndedAt()));
-            ps.setString(9, objectMapper.writeValueAsString(instance.getSteps()));
+            ps.setString(3, instance.getReviewerId());
+            ps.setString(4, instance.getTemplateId());
+            ps.setString(5, instance.getTemplateName());
+            ps.setString(6, instance.getStatus() != null ? instance.getStatus().name() : WorkflowInstanceStatus.RUNNING.name());
+            ps.setString(7, instance.getCurrentActivityId());
+            ps.setTimestamp(8, toTimestamp(instance.getStartedAt()));
+            ps.setTimestamp(9, toTimestamp(instance.getEndedAt()));
+            ps.setString(10, objectMapper.writeValueAsString(instance.getSteps()));
             ps.executeUpdate();
         } catch (Exception ex) {
             throw new IOException("Failed to save workflow instance", ex);
@@ -322,7 +326,7 @@ public class WorkflowRepository {
         ensureTables();
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement("""
-                 SELECT id, document_id, template_id, template_name, status, current_activity_id, started_at, ended_at, steps_json
+                                 SELECT id, document_id, reviewer_id, template_id, template_name, status, current_activity_id, started_at, ended_at, steps_json
                    FROM workflow_instances
                   WHERE id = ?
                   LIMIT 1
@@ -351,7 +355,7 @@ public class WorkflowRepository {
         List<WorkflowInstance> instances = new ArrayList<>();
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement("""
-                 SELECT id, document_id, template_id, template_name, status, current_activity_id, started_at, ended_at, steps_json
+                                 SELECT id, document_id, reviewer_id, template_id, template_name, status, current_activity_id, started_at, ended_at, steps_json
                    FROM workflow_instances
                   WHERE document_id = ?
                   ORDER BY started_at DESC, id DESC
@@ -391,6 +395,7 @@ public class WorkflowRepository {
         template.setCreatedAt(toInstant(rs.getTimestamp("created_at")));
         template.setUpdatedAt(toInstant(rs.getTimestamp("updated_at")));
         template.setPublishedAt(toInstant(rs.getTimestamp("published_at")));
+        template.setBpmnXml(rs.getString("bpmn_xml"));
 
         String activitiesJson = rs.getString("activities_json");
         if (activitiesJson != null && !activitiesJson.isBlank()) {
@@ -424,6 +429,7 @@ public class WorkflowRepository {
         WorkflowInstance instance = new WorkflowInstance();
         instance.setId(rs.getString("id"));
         instance.setDocumentId(rs.getString("document_id"));
+        instance.setReviewerId(rs.getString("reviewer_id"));
         instance.setTemplateId(rs.getString("template_id"));
         instance.setTemplateName(rs.getString("template_name"));
 
@@ -481,6 +487,7 @@ public class WorkflowRepository {
                     created_at TIMESTAMP NULL,
                     updated_at TIMESTAMP NULL,
                     published_at TIMESTAMP NULL,
+                    bpmn_xml LONGTEXT NULL,
                     activities_json LONGTEXT NOT NULL,
                     connections_json LONGTEXT NOT NULL
                 )
@@ -501,6 +508,7 @@ public class WorkflowRepository {
                 CREATE TABLE IF NOT EXISTS workflow_instances (
                     id VARCHAR(64) PRIMARY KEY,
                     document_id VARCHAR(64) NOT NULL,
+                    reviewer_id VARCHAR(64) NULL,
                     template_id VARCHAR(64) NOT NULL,
                     template_name VARCHAR(160) NULL,
                     status VARCHAR(32) NOT NULL,
@@ -520,6 +528,8 @@ public class WorkflowRepository {
             addColumnIfMissing(st, "ALTER TABLE workflow_templates ADD COLUMN version_no INT NOT NULL DEFAULT 0");
             addColumnIfMissing(st, "ALTER TABLE workflow_templates ADD COLUMN lifecycle_status VARCHAR(24) NOT NULL DEFAULT 'DRAFT'");
             addColumnIfMissing(st, "ALTER TABLE workflow_templates ADD COLUMN based_on_template_id VARCHAR(64) NULL");
+            addColumnIfMissing(st, "ALTER TABLE workflow_templates ADD COLUMN bpmn_xml LONGTEXT NULL");
+            addColumnIfMissing(st, "ALTER TABLE workflow_instances ADD COLUMN reviewer_id VARCHAR(64) NULL");
 
             try (PreparedStatement normalize = conn.prepareStatement("""
                 UPDATE workflow_templates

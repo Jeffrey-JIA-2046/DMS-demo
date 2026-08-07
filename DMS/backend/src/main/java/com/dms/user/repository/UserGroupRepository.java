@@ -75,12 +75,34 @@ public class UserGroupRepository extends BaseOpenSearchRepository<UserGroup> {
         if (name == null || name.isBlank()) {
             return Optional.empty();
         }
+        String normalized = name.trim();
         if (!openSearchEnabled && dataSource != null) {
+            return findByNameFromMysql(normalized, true);
+        }
+        if (openSearchEnabled) {
+            try {
+                Optional<UserGroup> fromOpenSearch = super.findAll().stream()
+                    .filter(group -> group.getName() != null && group.getName().equalsIgnoreCase(normalized))
+                    .findFirst();
+                if (fromOpenSearch.isPresent()) {
+                    return fromOpenSearch;
+                }
+            } catch (java.io.IOException ex) {
+                if (dataSource == null) {
+                    throw new RuntimeException("Failed to find group by name", ex);
+                }
+            }
+            if (dataSource != null) {
+                return findByNameFromMysql(normalized, true);
+            }
+            return Optional.empty();
+        }
+        if (dataSource != null) {
             return findByNameFromMysql(name, true);
         }
         try {
             Query query = new Query.Builder()
-                .match(m -> m.field("name").query(ov -> ov.stringValue(name)))
+                .match(m -> m.field("name").query(ov -> ov.stringValue(normalized)))
                 .build();
 
             List<UserGroup> results = search(
@@ -103,6 +125,26 @@ public class UserGroupRepository extends BaseOpenSearchRepository<UserGroup> {
             } catch (Exception ex) {
                 throw new RuntimeException("Failed to list groups", ex);
             }
+        }
+        if (openSearchEnabled) {
+            try {
+                List<UserGroup> fromOpenSearch = super.findAll();
+                if (fromOpenSearch != null && !fromOpenSearch.isEmpty()) {
+                    return fromOpenSearch;
+                }
+            } catch (java.io.IOException ex) {
+                if (dataSource == null) {
+                    throw new RuntimeException("Failed to list groups", ex);
+                }
+            }
+            if (dataSource != null) {
+                try {
+                    return findAllFromMysql();
+                } catch (Exception ex) {
+                    throw new RuntimeException("Failed to list groups", ex);
+                }
+            }
+            return List.of();
         }
         try {
             return super.findAll();
@@ -129,6 +171,26 @@ public class UserGroupRepository extends BaseOpenSearchRepository<UserGroup> {
             } catch (Exception ex) {
                 throw new RuntimeException("Failed to find group", ex);
             }
+        }
+        if (openSearchEnabled) {
+            try {
+                Optional<UserGroup> fromOpenSearch = super.findById(id);
+                if (fromOpenSearch.isPresent()) {
+                    return fromOpenSearch;
+                }
+            } catch (java.io.IOException ex) {
+                if (dataSource == null) {
+                    throw new RuntimeException("Failed to find group", ex);
+                }
+            }
+            if (dataSource != null) {
+                try {
+                    return findByIdFromMysql(id);
+                } catch (Exception ex) {
+                    throw new RuntimeException("Failed to find group", ex);
+                }
+            }
+            return Optional.empty();
         }
         try {
             return super.findById(id);

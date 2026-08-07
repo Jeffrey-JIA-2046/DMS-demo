@@ -5,5 +5,6 @@ import java.util.List;
 
 public record UserDashboardResponse(
     Instant generatedAt,
-    List<TaskItemResponse> tasks
+    List<TaskItemResponse> tasks,
+    List<FavoriteItemResponse> favorites
 ) {}

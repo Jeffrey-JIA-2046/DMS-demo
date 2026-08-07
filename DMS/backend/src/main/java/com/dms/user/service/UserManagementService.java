@@ -2,10 +2,15 @@ package com.dms.user.service;
 
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.StreamSupport;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,6 +31,7 @@ import com.dms.exception.ResourceNotFoundException;
 public class UserManagementService {
 
     private static final String DEFAULT_PASSWORD = "P@ssw0rd";
+    private static final Logger LOGGER = LoggerFactory.getLogger(UserManagementService.class);
 
     private final AppUserRepository appUserRepository;
     private final UserGroupRepository userGroupRepository;
@@ -144,14 +150,65 @@ public class UserManagementService {
         user.setUsername(request.username().trim());
         user.setDisplayName(request.displayName().trim());
         user.setRole(request.role());
-        Set<String> groupIds = request.groupIds() == null ? Set.of() : request.groupIds();
-        Set<UserGroup> groups = StreamSupport.stream(userGroupRepository.findAllById(groupIds).spliterator(), false)
-            .collect(java.util.stream.Collectors.toSet());
-        if (groups.size() != groupIds.size()) {
-            throw new IllegalArgumentException("One or more groups do not exist");
-        }
+        Set<String> groupIds = request.groupIds() == null ? Set.of() : request.groupIds().stream()
+            .filter(value -> value != null && !value.isBlank())
+            .map(String::trim)
+            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        Set<UserGroup> groups = resolveGroups(user, groupIds);
         user.setGroups(groups);
         user.setGroupIds(groups.stream().map(UserGroup::getId).collect(java.util.stream.Collectors.toSet()));
+    }
+
+    private Set<UserGroup> resolveGroups(AppUser existingUser, Set<String> groupIdentifiers) {
+        if (groupIdentifiers == null || groupIdentifiers.isEmpty()) {
+            return Set.of();
+        }
+
+        List<UserGroup> availableGroups = userGroupRepository.findAll();
+        Map<String, UserGroup> byId = availableGroups.stream()
+            .filter(group -> group.getId() != null)
+            .collect(java.util.stream.Collectors.toMap(UserGroup::getId, group -> group, (left, right) -> left));
+        Map<String, UserGroup> byNameLower = availableGroups.stream()
+            .filter(group -> group.getName() != null)
+            .collect(java.util.stream.Collectors.toMap(
+                group -> group.getName().toLowerCase(Locale.ROOT),
+                group -> group,
+                (left, right) -> left));
+
+        Set<UserGroup> resolved = new LinkedHashSet<>();
+        Set<String> unresolved = new LinkedHashSet<>();
+        for (String identifier : groupIdentifiers) {
+            UserGroup group = byId.get(identifier);
+            if (group == null) {
+                group = byNameLower.get(identifier.toLowerCase(Locale.ROOT));
+            }
+            if (group == null && existingUser != null && existingUser.getGroups() != null) {
+                UserGroup legacy = existingUser.getGroups().stream()
+                    .filter(current -> current != null && identifier.equals(current.getId()) && current.getName() != null)
+                    .findFirst()
+                    .orElse(null);
+                if (legacy != null) {
+                    group = byNameLower.get(legacy.getName().toLowerCase(Locale.ROOT));
+                }
+            }
+            if (group == null) {
+                group = userGroupRepository.findById(identifier).orElse(null);
+            }
+            if (group == null) {
+                group = userGroupRepository.findByNameIgnoreCase(identifier).orElse(null);
+            }
+            if (group == null) {
+                unresolved.add(identifier);
+                continue;
+            }
+            resolved.add(group);
+        }
+
+        if (!unresolved.isEmpty()) {
+            LOGGER.warn("Unresolved group identifiers while saving user: {}", unresolved);
+            throw new IllegalArgumentException("One or more groups do not exist");
+        }
+        return resolved;
     }
 
     private GroupResponse toGroupResponse(UserGroup group) {
@@ -160,9 +217,21 @@ public class UserManagementService {
     }
 
     private UserResponse toUserResponse(AppUser user) {
+        Map<String, String> canonicalIdByNameLower = userGroupRepository.findAll().stream()
+            .filter(group -> group.getName() != null && group.getId() != null)
+            .collect(java.util.stream.Collectors.toMap(
+                group -> group.getName().toLowerCase(Locale.ROOT),
+                UserGroup::getId,
+                (left, right) -> left));
         List<GroupSummary> summaries = user.getGroups().stream()
             .sorted(Comparator.comparing(UserGroup::getName, String.CASE_INSENSITIVE_ORDER))
-            .map(group -> new GroupSummary(group.getId(), group.getName()))
+            .map(group -> {
+                String summaryId = group.getId();
+                if (group.getName() != null) {
+                    summaryId = canonicalIdByNameLower.getOrDefault(group.getName().toLowerCase(Locale.ROOT), summaryId);
+                }
+                return new GroupSummary(summaryId, group.getName());
+            })
             .toList();
         return new UserResponse(user.getId(), user.getUsername(), user.getDisplayName(), user.getRole(), summaries,
             resolveManagedPassword(user));

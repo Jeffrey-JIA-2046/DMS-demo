@@ -266,6 +266,15 @@ export const delegateApproval = async (documentId, payload) => {
   return handleJsonResponse(response)
 }
 
+export const resubmitApproval = async (documentId, payload) => {
+  const response = await fetch(resolveApiUrl(`/api/documents/${documentId}/approval/resubmit`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(payload),
+  })
+  return handleJsonResponse(response)
+}
+
 export const buildDownloadUrl = (documentId, versionId) => {
   const path = versionId
     ? `/api/documents/${documentId}/versions/${versionId}/download`

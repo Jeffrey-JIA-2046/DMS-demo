@@ -9,6 +9,7 @@ public class WorkflowTemplate {
     private String templateGroupId;
     private String name;
     private String description;
+    private String bpmnXml;
     private boolean published;
     private int versionNumber;
     private WorkflowTemplateLifecycle lifecycleStatus = WorkflowTemplateLifecycle.DRAFT;
@@ -50,6 +51,14 @@ public class WorkflowTemplate {
 
     public void setDescription(String description) {
         this.description = description;
+    }
+
+    public String getBpmnXml() {
+        return bpmnXml;
+    }
+
+    public void setBpmnXml(String bpmnXml) {
+        this.bpmnXml = bpmnXml;
     }
 
     public boolean isPublished() {
