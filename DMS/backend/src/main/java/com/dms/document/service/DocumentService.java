@@ -5,6 +5,8 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
@@ -86,6 +88,8 @@ public class DocumentService {
     private static final String SEARCH_COLUMN_DOCUMENT_METADATA = "documentmetadata";
     private static final String SEARCH_COLUMN_FOLDER_NAME = "foldername";
     private static final String SEARCH_COLUMN_FOLDER_METADATA = "foldermetadata";
+    private static final String SEARCH_COLUMN_CREATED_DATE = "createddate";
+    private static final String SEARCH_COLUMN_MODIFIED_DATE = "modifieddate";
     private static final String SEARCH_COLUMN_DOC_META_PREFIX = "docmeta:";
     private static final String SEARCH_COLUMN_FOLDER_META_PREFIX = "foldermeta:";
     private static final Set<String> DEFAULT_SEARCH_COLUMNS = Set.of(SEARCH_COLUMN_TITLE, SEARCH_COLUMN_DESCRIPTION);
@@ -360,6 +364,8 @@ public class DocumentService {
             case SEARCH_COLUMN_OWNER -> nonBlankList(document.getOwner());
             case SEARCH_COLUMN_CATEGORY -> nonBlankList(document.getCategory());
             case SEARCH_COLUMN_TAGS -> document.getTags() == null ? List.of() : document.getTags().stream().filter(StringUtils::hasText).toList();
+            case SEARCH_COLUMN_CREATED_DATE -> nonBlankList(searchableInstantValue(document.getCreatedAt()));
+            case SEARCH_COLUMN_MODIFIED_DATE -> nonBlankList(searchableInstantValue(document.getUpdatedAt()));
             case SEARCH_COLUMN_DOCUMENT_METADATA -> {
                 if (document.getMetadataValues() == null || document.getMetadataValues().isEmpty()) {
                     yield List.of();
@@ -401,9 +407,11 @@ public class DocumentService {
         String right = query.trim();
         String leftLower = left.toLowerCase(Locale.ROOT);
         String rightLower = right.toLowerCase(Locale.ROOT);
+        LocalDate leftDate = parseDateValue(left);
+        LocalDate rightDate = parseDateValue(right);
 
         return switch (operator) {
-            case "is" -> leftLower.equals(rightLower);
+            case "is" -> leftDate != null && rightDate != null ? leftDate.isEqual(rightDate) : leftLower.equals(rightLower);
             case "starts_with" -> leftLower.startsWith(rightLower);
             case "ends_with" -> leftLower.endsWith(rightLower);
             case "before" -> compareTemporalOrLexical(left, right) < 0;
@@ -425,11 +433,49 @@ public class DocumentService {
         if (!StringUtils.hasText(value)) {
             return null;
         }
+        String trimmed = value.trim();
         try {
-            return LocalDate.parse(value.trim());
-        } catch (DateTimeParseException ex) {
+            return LocalDate.parse(trimmed);
+        } catch (DateTimeParseException ignored) {
+            // Try other timestamp/date formats.
+        }
+        try {
+            return Instant.parse(trimmed).atZone(ZoneOffset.UTC).toLocalDate();
+        } catch (DateTimeParseException ignored) {
+            // Try other timestamp/date formats.
+        }
+        try {
+            return OffsetDateTime.parse(trimmed).toLocalDate();
+        } catch (DateTimeParseException ignored) {
+            // Try other timestamp/date formats.
+        }
+        try {
+            return LocalDateTime.parse(trimmed).toLocalDate();
+        } catch (DateTimeParseException ignored) {
+            // Try loose US date parsing below.
+        }
+
+        String datePart = trimmed.split("[ T]", 2)[0].trim();
+        String[] slashParts = datePart.split("/");
+        if (slashParts.length == 3) {
+            try {
+                int month = Integer.parseInt(slashParts[0]);
+                int day = Integer.parseInt(slashParts[1]);
+                int year = Integer.parseInt(slashParts[2]);
+                return LocalDate.of(year, month, day);
+            } catch (RuntimeException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private String searchableInstantValue(Instant instant) {
+        if (instant == null) {
             return null;
         }
+        LocalDate date = instant.atZone(ZoneOffset.UTC).toLocalDate();
+        return instant + " " + date;
     }
 
     private String normalizeJoinOperator(String join, String fallbackJoin) {
@@ -457,6 +503,8 @@ public class DocumentService {
                 SEARCH_COLUMN_OWNER,
                 SEARCH_COLUMN_CATEGORY,
                 SEARCH_COLUMN_TAGS,
+                SEARCH_COLUMN_CREATED_DATE,
+                SEARCH_COLUMN_MODIFIED_DATE,
                 SEARCH_COLUMN_DOCUMENT_METADATA,
                 SEARCH_COLUMN_FOLDER_NAME,
                 SEARCH_COLUMN_FOLDER_METADATA
@@ -487,6 +535,8 @@ public class DocumentService {
             case SEARCH_COLUMN_OWNER -> containsIgnoreCase(document.getOwner(), query);
             case SEARCH_COLUMN_CATEGORY -> containsIgnoreCase(document.getCategory(), query);
             case SEARCH_COLUMN_TAGS -> document.getTags() != null && document.getTags().stream().anyMatch(tag -> containsIgnoreCase(tag, query));
+            case SEARCH_COLUMN_CREATED_DATE -> containsIgnoreCase(searchableInstantValue(document.getCreatedAt()), query);
+            case SEARCH_COLUMN_MODIFIED_DATE -> containsIgnoreCase(searchableInstantValue(document.getUpdatedAt()), query);
             case SEARCH_COLUMN_DOCUMENT_METADATA -> document.getMetadataValues() != null && document.getMetadataValues().entrySet().stream()
                 .anyMatch(entry -> containsIgnoreCase(entry.getKey(), query) || containsIgnoreCase(entry.getValue(), query));
             case SEARCH_COLUMN_FOLDER_NAME -> folder != null && containsIgnoreCase(folder.getName(), query);
@@ -1650,6 +1700,7 @@ public class DocumentService {
 
         int latestVersion = latest != null ? latest.getVersionNumber() : 0;
         long size = latest != null ? latest.getSizeBytes() : 0L;
+        String latestFileName = latest != null ? latest.getFileName() : null;
 
         return new DocumentSummaryResponse(
             document.getId(),
@@ -1665,6 +1716,7 @@ public class DocumentService {
             toFolderInfo(document.getFolder()),
             latestVersion,
             size,
+            latestFileName,
             document.getUpdatedAt(),
             Boolean.TRUE.equals(document.getIsOcr()),
             document.getOcrStatus(),

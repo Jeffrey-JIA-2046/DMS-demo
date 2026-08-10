@@ -1,8 +1,10 @@
 package com.dms.user.service;
 
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.StreamSupport;
 
@@ -40,9 +42,29 @@ public class UserManagementService {
 
     @Transactional(readOnly = true)
     public List<GroupResponse> listGroups() {
-        return StreamSupport.stream(userGroupRepository.findAll().spliterator(), false)
+        List<UserGroup> groups = StreamSupport.stream(userGroupRepository.findAll().spliterator(), false)
             .sorted(Comparator.comparing(UserGroup::getName, String.CASE_INSENSITIVE_ORDER))
-            .map(this::toGroupResponse)
+            .toList();
+
+        Map<String, Integer> memberCountByGroupId = new HashMap<>();
+        try {
+            for (AppUser user : appUserRepository.findAll()) {
+                if (user == null || user.getGroupIds() == null || user.getGroupIds().isEmpty()) {
+                    continue;
+                }
+                for (String groupId : user.getGroupIds()) {
+                    if (groupId == null || groupId.isBlank()) {
+                        continue;
+                    }
+                    memberCountByGroupId.merge(groupId, 1, Integer::sum);
+                }
+            }
+        } catch (java.io.IOException ex) {
+            throw new RuntimeException("Failed to resolve group members", ex);
+        }
+
+        return groups.stream()
+            .map(group -> toGroupResponse(group, memberCountByGroupId.getOrDefault(group.getId(), 0)))
             .toList();
     }
 
@@ -156,6 +178,10 @@ public class UserManagementService {
 
     private GroupResponse toGroupResponse(UserGroup group) {
         int memberCount = group.getMemberIds() == null ? 0 : group.getMemberIds().size();
+        return new GroupResponse(group.getId(), group.getName(), group.getDescription(), memberCount);
+    }
+
+    private GroupResponse toGroupResponse(UserGroup group, int memberCount) {
         return new GroupResponse(group.getId(), group.getName(), group.getDescription(), memberCount);
     }
 

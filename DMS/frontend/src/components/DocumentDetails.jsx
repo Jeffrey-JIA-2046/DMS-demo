@@ -59,16 +59,27 @@ const isTextLikeContent = (type = '') => {
 
 const isPdfContent = (type = '') => type.toLowerCase().includes('pdf')
 
+const isImageContent = (type = '') => type.toLowerCase().startsWith('image/')
+
+const isImageFileName = (fileName = '') => /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(fileName)
+
 const isPdfVersion = (version) => {
   const contentType = version?.contentType ?? ''
   const fileName = version?.fileName ?? ''
   return isPdfContent(contentType) || fileName.toLowerCase().endsWith('.pdf')
 }
 
+const isImageVersion = (version) => {
+  const contentType = version?.contentType ?? ''
+  const fileName = version?.fileName ?? ''
+  return isImageContent(contentType) || isImageFileName(fileName)
+}
+
 const createPreviewState = () => ({
   status: 'idle',
   mode: 'text',
   text: '',
+  imageUrl: null,
   pdfData: null,
   error: '',
   contentType: '',
@@ -122,6 +133,7 @@ export default function DocumentDetails({
   const [requestedPdfPage, setRequestedPdfPage] = useState(1)
   const [pdfPageInput, setPdfPageInput] = useState('1')
   const lastRequestedVersionRef = useRef(null)
+  const imagePreviewUrlRef = useRef(null)
   const [downloadingMap, setDownloadingMap] = useState({})
   const [printing, setPrinting] = useState(false)
   const [metadataErrors, setMetadataErrors] = useState({})
@@ -136,6 +148,19 @@ export default function DocumentDetails({
   const { documentPermissions, currentUser } = useContext(AuthContext)
   const { announce, toast, confirm } = useContext(AnnounceContext)
   const resolvedInitialTab = normalizeInitialTab(initialTab)
+
+  const revokeImagePreviewUrl = () => {
+    if (imagePreviewUrlRef.current) {
+      URL.revokeObjectURL(imagePreviewUrlRef.current)
+      imagePreviewUrlRef.current = null
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      revokeImagePreviewUrl()
+    }
+  }, [])
 
   const handleChange = (field, value) => {
     setForm((prev) => ({ ...prev, [field]: value }))
@@ -344,6 +369,7 @@ export default function DocumentDetails({
         status: 'loading',
         mode: 'text',
         text: '',
+        imageUrl: null,
         pdfData: null,
         error: '',
         contentType: '',
@@ -353,6 +379,7 @@ export default function DocumentDetails({
       })
       try {
         if (isPdfVersion(latestVersion)) {
+          revokeImagePreviewUrl()
           const response = await fetch(downloadUrlBuilder(document.id, latestVersion.id), { signal: controller.signal, headers: { ...authHeaders() } })
           if (!response.ok) {
             throw new Error('Failed to load document content')
@@ -374,12 +401,39 @@ export default function DocumentDetails({
           return
         }
 
+        if (isImageVersion(latestVersion)) {
+          const response = await fetch(downloadUrlBuilder(document.id, latestVersion.id), { signal: controller.signal, headers: { ...authHeaders() } })
+          if (!response.ok) {
+            throw new Error('Failed to load image preview')
+          }
+          const contentType = response.headers.get('Content-Type') || latestVersion?.contentType || ''
+          const imageBlob = await response.blob()
+          revokeImagePreviewUrl()
+          const imageUrl = URL.createObjectURL(imageBlob)
+          imagePreviewUrlRef.current = imageUrl
+          setPreviewState({
+            status: 'ready',
+            mode: 'image',
+            text: '',
+            imageUrl,
+            pdfData: null,
+            error: '',
+            contentType,
+            versionId: latestVersion.id,
+            supported: true,
+            truncated: false,
+          })
+          return
+        }
+
         const preview = await fetchDocumentPreview(document.id, latestVersion.id)
         if (preview?.status !== 'ready' || preview?.supported === false) {
+          revokeImagePreviewUrl()
           setPreviewState({
             status: 'unsupported',
             mode: 'text',
             text: '',
+            imageUrl: null,
             pdfData: null,
             error: '',
             contentType: preview?.contentType || latestVersion?.contentType || '',
@@ -389,12 +443,14 @@ export default function DocumentDetails({
           })
           return
         }
+        revokeImagePreviewUrl()
         setPreviewState({
           status: 'ready',
           mode: 'text',
           text: preview?.truncated
             ? `${preview?.text || ''}\n\n--- Preview truncated after ${MAX_PREVIEW_CHARS.toLocaleString()} characters ---`
             : (preview?.text || ''),
+          imageUrl: null,
           pdfData: null,
           error: '',
           contentType: preview?.contentType || latestVersion?.contentType || '',
@@ -406,6 +462,7 @@ export default function DocumentDetails({
         if (controller.signal.aborted) {
           return
         }
+        revokeImagePreviewUrl()
         setPreviewState((prev) => ({
           ...prev,
           status: 'error',
@@ -1102,6 +1159,11 @@ export default function DocumentDetails({
                       <small className="content-panel__hint">Preview truncated for performance. Download the file to view the full contents.</small>
                     )}
                   </>
+                )}
+                {previewState.status === 'ready' && previewState.mode === 'image' && previewState.imageUrl && (
+                  <div className="content-panel__image-wrap">
+                    <img src={previewState.imageUrl} alt={latestVersion?.fileName || 'Document image preview'} className="content-panel__image" />
+                  </div>
                 )}
                 {previewState.status === 'ready' && previewState.mode === 'pdf' && previewState.pdfData && (
                   <PdfPreview

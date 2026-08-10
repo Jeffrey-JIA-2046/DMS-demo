@@ -56,6 +56,28 @@ const getIconForFileName = (fileName = '') => {
   return map[ext] || '📄'
 }
 
+const getFileExtensionLabel = (fileName = '') => {
+  if (!fileName || typeof fileName !== 'string') return 'N/A'
+  const name = fileName.split(/[?#]/)[0]
+  const parts = name.split('.')
+  if (parts.length <= 1) return 'N/A'
+  const ext = String(parts.pop() || '').trim().toUpperCase()
+  return ext || 'N/A'
+}
+
+const getDocumentFileName = (doc = {}) => {
+  if (doc?.latestFileName && typeof doc.latestFileName === 'string') {
+    return doc.latestFileName
+  }
+  if (doc?.latestVersion && typeof doc.latestVersion === 'object' && doc.latestVersion.fileName) {
+    return doc.latestVersion.fileName
+  }
+  if (doc?.fileName && typeof doc.fileName === 'string') {
+    return doc.fileName
+  }
+  return doc?.title || ''
+}
+
 function DocumentList({
   items,
   selectedId,
@@ -105,6 +127,7 @@ function DocumentList({
 
   // Context menu state
   const [contextMenu, setContextMenu] = React.useState({ open: false, x: 0, y: 0, docId: null })
+  const contextMenuRef = React.useRef(null)
 
   const closeContextMenu = () => setContextMenu({ open: false, x: 0, y: 0, docId: null })
 
@@ -124,9 +147,48 @@ function DocumentList({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  React.useEffect(() => {
+    if (!contextMenu.open) return undefined
+
+    const handlePointerDown = (event) => {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(event.target)) {
+        closeContextMenu()
+      }
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        closeContextMenu()
+      }
+    }
+
+    const handleWindowResize = () => {
+      closeContextMenu()
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('resize', handleWindowResize)
+    window.addEventListener('scroll', handleWindowResize, true)
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('resize', handleWindowResize)
+      window.removeEventListener('scroll', handleWindowResize, true)
+    }
+  }, [contextMenu.open])
+
   const handleContextMenu = (event, id) => {
     event.preventDefault()
-    setContextMenu({ open: true, x: event.clientX, y: event.clientY, docId: id })
+    const menuWidth = 268
+    const menuHeight = 220
+    const edgeGap = 12
+    const maxLeft = Math.max(edgeGap, window.innerWidth - menuWidth - edgeGap)
+    const maxTop = Math.max(edgeGap, window.innerHeight - menuHeight - edgeGap)
+    const left = Math.min(Math.max(event.clientX, edgeGap), maxLeft)
+    const top = Math.min(Math.max(event.clientY, edgeGap), maxTop)
+    setContextMenu({ open: true, x: left, y: top, docId: id })
   }
 
   const handleListContextMenu = (event) => {
@@ -261,10 +323,7 @@ function DocumentList({
                     aria-hidden
                   >
                     {getIconForFileName(
-                      // Prefer the explicit file name if available, fall back to title
-                      doc.latestVersion && typeof doc.latestVersion === 'object' && doc.latestVersion.fileName
-                        ? doc.latestVersion.fileName
-                        : doc.fileName ?? doc.title
+                      getDocumentFileName(doc)
                     )}
                   </span>
                   <span className="document-list__name">{doc.title}</span>
@@ -283,7 +342,7 @@ function DocumentList({
                       <small className="document-list__time">
                         {formatDocumentTime(doc.createdAt ?? doc.created_at) ? `Created ${formatDocumentTime(doc.createdAt ?? doc.created_at)}` : `Updated ${formatDocumentTime(doc.updatedAt ?? doc.updated_at) || '—'}`}
                       </small>
-                      <small>Confidence {Number.isFinite(doc.confidenceScore) ? doc.confidenceScore : 0}%</small>
+                      <small>{getFileExtensionLabel(getDocumentFileName(doc))}</small>
                       {!(documentPermissions?.write ?? false) && <small className="action-lock"> 🔒</small>}
                     </>
                 )}
@@ -319,14 +378,69 @@ function DocumentList({
         </div>
       {contextMenu.open && (
         <div
-          className="context-menu"
+          ref={contextMenuRef}
+          className="document-context-dropdown"
           style={{ top: contextMenu.y, left: contextMenu.x, position: 'fixed', zIndex: 1200 }}
-          onMouseLeave={closeContextMenu}
+          role="menu"
+          aria-label="Document actions"
         >
-          <button type="button" disabled={!hasDocumentSelection} onClick={() => { onContextAction(contextMenu.docId, 'copy'); closeContextMenu() }}>Copy</button>
-          <button type="button" onClick={() => { onContextAction(contextMenu.docId, 'paste'); closeContextMenu() }}>Paste to selected folder</button>
-          <button type="button" disabled={!hasDocumentSelection} onClick={() => { onContextAction(contextMenu.docId, 'generateLink'); closeContextMenu() }}>Generate link</button>
-          <button type="button" disabled={!hasDocumentSelection} onClick={() => { onContextAction(contextMenu.docId, 'checkout'); closeContextMenu() }}>Check out</button>
+          <div className="document-context-dropdown__header">
+            <span className="document-context-dropdown__eyebrow">
+              {hasDocumentSelection ? 'Document menu' : 'Workspace menu'}
+            </span>
+            <strong className="document-context-dropdown__title">Quick actions</strong>
+          </div>
+          <button
+            type="button"
+            className="document-context-dropdown__item"
+            role="menuitem"
+            disabled={!hasDocumentSelection}
+            onClick={() => {
+              onContextAction(contextMenu.docId, 'copy')
+              closeContextMenu()
+            }}
+          >
+            <span className="document-context-dropdown__label">Copy</span>
+            <small className="document-context-dropdown__hint">Copy selected document</small>
+          </button>
+          <button
+            type="button"
+            className="document-context-dropdown__item"
+            role="menuitem"
+            onClick={() => {
+              onContextAction(contextMenu.docId, 'paste')
+              closeContextMenu()
+            }}
+          >
+            <span className="document-context-dropdown__label">Paste to selected folder</span>
+            <small className="document-context-dropdown__hint">Move copied document here</small>
+          </button>
+          <button
+            type="button"
+            className="document-context-dropdown__item"
+            role="menuitem"
+            disabled={!hasDocumentSelection}
+            onClick={() => {
+              onContextAction(contextMenu.docId, 'generateLink')
+              closeContextMenu()
+            }}
+          >
+            <span className="document-context-dropdown__label">Generate link</span>
+            <small className="document-context-dropdown__hint">Create a shareable link</small>
+          </button>
+          <button
+            type="button"
+            className="document-context-dropdown__item"
+            role="menuitem"
+            disabled={!hasDocumentSelection}
+            onClick={() => {
+              onContextAction(contextMenu.docId, 'checkout')
+              closeContextMenu()
+            }}
+          >
+            <span className="document-context-dropdown__label">Check out</span>
+            <small className="document-context-dropdown__hint">Lock for editing</small>
+          </button>
         </div>
       )}
         {pageMeta && (

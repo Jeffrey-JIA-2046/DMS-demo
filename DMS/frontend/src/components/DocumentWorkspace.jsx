@@ -283,6 +283,22 @@ const safeFileStem = (input) => {
   return value.replace(/[^a-z0-9\-_]+/gi, '_').replace(/^_+|_+$/g, '') || 'document'
 }
 
+const extractFileNameFromContentDisposition = (value) => {
+  if (!value || typeof value !== 'string') {
+    return ''
+  }
+  const utf8Match = /filename\*=UTF-8''([^;]+)/i.exec(value)
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]).trim()
+    } catch {
+      return utf8Match[1].trim()
+    }
+  }
+  const basicMatch = /filename="?([^";]+)"?/i.exec(value)
+  return basicMatch?.[1]?.trim() || ''
+}
+
 const getLatestVersion = (versions) => {
   if (!Array.isArray(versions) || !versions.length) {
     return null
@@ -2735,11 +2751,17 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
                     }
                     const sourceBlob = await downloadResponse.blob()
 
-                    const defaultFileName = detail?.latestVersion?.fileName
+                    const headerFileName = extractFileNameFromContentDisposition(
+                      downloadResponse.headers.get('Content-Disposition') || downloadResponse.headers.get('content-disposition') || ''
+                    )
+                    const latestDetailVersion = getLatestVersion(detail?.versions || [])
+
+                    const defaultFileName = headerFileName
+                      || latestDetailVersion?.fileName
                       || detail?.fileName
                       || `${safeFileStem(detail?.title || copied.title || 'document')}.bin`
                     const sourceFile = new File([sourceBlob], defaultFileName, {
-                      type: sourceBlob.type || 'application/octet-stream',
+                      type: sourceBlob.type || latestDetailVersion?.contentType || 'application/octet-stream',
                     })
 
                     const today = new Date()

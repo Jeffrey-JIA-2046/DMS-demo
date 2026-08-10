@@ -68,6 +68,7 @@ function collectFolderPathOptions(nodes = [], trail = []) {
 
 function createMessage(role, content = '', loading = false, extra = {}) {
   return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
     role,
     content,
     loading,
@@ -187,6 +188,8 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, onDoc
   const [searchLoading, setSearchLoading] = useState(false)
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [qaLoading, setQaLoading] = useState(false)
+  const [includeNeighborPages, setIncludeNeighborPages] = useState(false)
+  const [statisticsGeneration, setStatisticsGeneration] = useState(false)
   const [chatId, setChatId] = useState(null)
   const [lastIntent, setLastIntent] = useState(null)
   const [activeDocumentId, setActiveDocumentId] = useState(null)
@@ -319,6 +322,18 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, onDoc
 
   const appendMessage = (role, content = '', loading = false, extra = {}) => {
     setMessages((prev) => [...prev, createMessage(role, content, loading, extra)])
+  }
+
+  const toggleSourcesCollapsed = (messageId) => {
+    setMessages((prev) => prev.map((message) => {
+      if (message.id !== messageId || message.kind !== 'sources') {
+        return message
+      }
+      return {
+        ...message,
+        sourcesCollapsed: !(message.sourcesCollapsed ?? false),
+      }
+    }))
   }
 
   const updateLastAiMessage = (updater) => {
@@ -675,6 +690,8 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, onDoc
         : {
             question: trimmed,
             chatId,
+            includeNeighborPages,
+            statisticsGeneration,
           }
 
       const data = await askFn(requestPayload, (chunk) => {
@@ -1039,7 +1056,7 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, onDoc
           <div className="chatbot-panel__chat-window">
             {messages.map((message, index) => (
               <div
-                key={`${message.role}-${index}`}
+                key={message.id || `${message.role}-${index}`}
                 className={`chatbot-panel__message chatbot-panel__message--${message.role}${message.kind ? ` chatbot-panel__message--${message.kind}` : ''}`}
               >
                 <div className="chatbot-panel__message-content">
@@ -1057,40 +1074,53 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, onDoc
                       : message.kind === 'sources'
                         ? (
                           <div className="chatbot-panel__sources-list">
-                            <p className="chatbot-panel__sources-heading">Retrieved documents</p>
-                            {buildSourcePageGroups(message.sources || []).map((group, groupIndex) => (
-                              <div key={group.key} className="chatbot-panel__source-group">
-                                <span className="chatbot-panel__source-group-title">doc{groupIndex + 1}: {group.title}</span>
-                                <div className="chatbot-panel__source-page-actions">
-                                  {group.pages.length
-                                  ? group.pages.map((page) => (
-                                    <button
-                                      key={`${group.key}-page-${page}`}
-                                      type="button"
-                                      className="chatbot-panel__source-item chatbot-panel__source-item--page"
-                                      onClick={() => {
-                                        onDocumentMaximize && onDocumentMaximize(group.id, page)
-                                      }}
-                                      disabled={!group.id}
-                                    >
-                                      page{page}
-                                    </button>
-                                  ))
-                                  : (
-                                    <button
-                                      type="button"
-                                      className="chatbot-panel__source-item chatbot-panel__source-item--page"
-                                      onClick={() => {
-                                        onDocumentMaximize && onDocumentMaximize(group.id, null)
-                                      }}
-                                      disabled={!group.id}
-                                    >
-                                      open
-                                    </button>
-                                  )}
+                            <div className="chatbot-panel__sources-header">
+                              <p className="chatbot-panel__sources-heading">Retrieved documents</p>
+                              <button
+                                type="button"
+                                className="chatbot-panel__sources-toggle"
+                                onClick={() => toggleSourcesCollapsed(message.id)}
+                                aria-expanded={!(message.sourcesCollapsed ?? false)}
+                              >
+                                <span className={`chatbot-panel__sources-toggle-icon${message.sourcesCollapsed ? ' is-collapsed' : ''}`} aria-hidden="true">▾</span>
+                                {message.sourcesCollapsed ? 'Show' : 'Hide'}
+                              </button>
+                            </div>
+                            <div className={`chatbot-panel__sources-body${message.sourcesCollapsed ? ' is-collapsed' : ''}`}>
+                              {buildSourcePageGroups(message.sources || []).map((group, groupIndex) => (
+                                <div key={group.key} className="chatbot-panel__source-group">
+                                  <span className="chatbot-panel__source-group-title">doc{groupIndex + 1}: {group.title}</span>
+                                  <div className="chatbot-panel__source-page-actions">
+                                    {group.pages.length
+                                    ? group.pages.map((page) => (
+                                      <button
+                                        key={`${group.key}-page-${page}`}
+                                        type="button"
+                                        className="chatbot-panel__source-item chatbot-panel__source-item--page"
+                                        onClick={() => {
+                                          onDocumentMaximize && onDocumentMaximize(group.id, page)
+                                        }}
+                                        disabled={!group.id}
+                                      >
+                                        page{page}
+                                      </button>
+                                    ))
+                                    : (
+                                      <button
+                                        type="button"
+                                        className="chatbot-panel__source-item chatbot-panel__source-item--page"
+                                        onClick={() => {
+                                          onDocumentMaximize && onDocumentMaximize(group.id, null)
+                                        }}
+                                        disabled={!group.id}
+                                      >
+                                        open
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
-                              </div>
-                            ))}
+                              ))}
+                            </div>
                           </div>
                         )
                         : <span dangerouslySetInnerHTML={{ __html: formatMessage(message.content) }} />
@@ -1116,6 +1146,26 @@ export default function ChatbotPanel({ selectedDocument, onDocumentSelect, onDoc
               {qaLoading ? 'Sending...' : 'Send'}
             </button>
           </form>
+
+          <label className="chatbot-template__chat-option">
+            <input
+              type="checkbox"
+              checked={includeNeighborPages}
+              onChange={(event) => setIncludeNeighborPages(event.target.checked)}
+              disabled={qaLoading}
+            />
+            Also include adjacent pages (p-1 and p+1) in retrieved sources
+          </label>
+
+          <label className="chatbot-template__chat-option">
+            <input
+              type="checkbox"
+              checked={statisticsGeneration}
+              onChange={(event) => setStatisticsGeneration(event.target.checked)}
+              disabled={qaLoading || selectedPressReleases.length > 0}
+            />
+            Statistics generation mode (metadata keyword counting)
+          </label>
 
           <div className="chatbot-template__chat-actions">
             {activeDocument?.title && <span className="chatbot-template__active-doc">Focused: {activeDocument.title}</span>}

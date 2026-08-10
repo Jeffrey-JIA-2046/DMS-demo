@@ -175,8 +175,14 @@ export default function UserDashboard() {
   }, [tasks])
 
   const reminderTodos = useMemo(() => {
+    const todayStartMs = startOfTodayMs()
+    const upcomingBoundary = endOfDayMs(todayStartMs, 7)
     return tasks
-      .filter((task) => task.taskType === REMINDER_TYPE && TODO_STATUSES.has(task.status))
+      .filter((task) => {
+        if (task.taskType !== REMINDER_TYPE || !TODO_STATUSES.has(task.status) || !task.dueDate) return false
+        const dueMs = Date.parse(`${task.dueDate}T00:00:00`)
+        return !Number.isNaN(dueMs) && dueMs >= todayStartMs && dueMs <= upcomingBoundary
+      })
       .sort((a, b) => {
         if (a.dueDate && b.dueDate) {
           return new Date(`${a.dueDate}T00:00:00`) - new Date(`${b.dueDate}T00:00:00`)
@@ -196,7 +202,7 @@ export default function UserDashboard() {
     const upcomingBoundary = endOfDayMs(todayStartMs, 7)
 
     const activeTasks = tasks.filter((task) => TODO_STATUSES.has(task.status))
-    const pendingTasks = activeTasks.length
+    const pendingTasks = workflowTodos.length
     const newTasks = tasks.filter((task) => {
       const created = taskCreatedMs(task)
       return created != null && created >= sinceBoundary && TODO_STATUSES.has(task.status)
@@ -211,11 +217,7 @@ export default function UserDashboard() {
         })
         .map((task) => task.documentId)
     ).size
-    const upcomingReminders = activeTasks.filter((task) => {
-      if (task.taskType !== REMINDER_TYPE || !TODO_STATUSES.has(task.status) || !task.dueDate) return false
-      const dueMs = Date.parse(`${task.dueDate}T00:00:00`)
-      return !Number.isNaN(dueMs) && dueMs >= todayStartMs && dueMs <= upcomingBoundary
-    }).length
+    const upcomingReminders = reminderTodos.length
 
     const items = [
       { key: 'newTasks', label: 'New Tasks since last logout', value: newTasks, tone: 'sky' },
@@ -235,7 +237,7 @@ export default function UserDashboard() {
       })),
       sinceText: lastLogoutMs != null ? `Since ${formatTimestamp(new Date(lastLogoutMs).toISOString())}` : 'Since your last day',
     }
-  }, [tasks])
+  }, [tasks, reminderTodos, workflowTodos])
 
   const handleMonthChange = (offset) => {
     setActiveMonth((prev) => {

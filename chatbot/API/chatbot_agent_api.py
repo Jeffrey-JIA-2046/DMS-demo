@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import calendar
 from datetime import datetime
 from typing import Any, Optional
 from uuid import uuid4
@@ -21,7 +22,7 @@ from copy import deepcopy
 
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from opensearchpy import OpenSearch, NotFoundError
@@ -76,7 +77,13 @@ CHUNK_CONTENT_VECTOR_FIELD = os.getenv("SEARCH_CHUNK_CONTENT_VECTOR_FIELD", "cha
 
 LLM_API = os.getenv("LLM_API", "http://localhost:11434/api/chat")
 LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-r1:32b")
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "auto").strip().lower()
+LLM_API_KEY = os.getenv("LLM_API_KEY", "").strip()
+LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.2"))
+LLM_TOP_P = float(os.getenv("LLM_TOP_P", "0.7"))
+LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "2048"))
 CLASSIFIER_TIMEOUT_SECONDS = int(os.getenv("CHATBOT_CLASSIFIER_TIMEOUT_SECONDS", "30"))
+STATS_CLASSIFIER_TIMEOUT_SECONDS = int(os.getenv("CHATBOT_STATS_CLASSIFIER_TIMEOUT_SECONDS", "90"))
 
 # DMS Java backend base URL used for housekeeping and other backend calls.
 DMS_BASE_URL = os.getenv("DMS_BASE_URL", "http://localhost:8080")
@@ -140,6 +147,9 @@ def _summarize_llm_payload_for_log(payload: dict[str, Any]) -> dict[str, Any]:
         "model": payload.get("model"),
         "stream": payload.get("stream"),
         "think": payload.get("think"),
+        "temperature": payload.get("temperature"),
+        "top_p": payload.get("top_p"),
+        "max_tokens": payload.get("max_tokens"),
         "parameters": payload.get("parameters", {}),
         "message_count": len(messages),
         "messages": _summarize_messages_for_log(messages),
@@ -187,15 +197,114 @@ def _summarize_search_body_for_log(body: dict[str, Any]) -> dict[str, Any]:
 
 
 def _summarize_provider_response_for_log(payload: dict[str, Any]) -> dict[str, Any]:
+    usage = payload.get("usage", {}) if isinstance(payload.get("usage"), dict) else {}
     return {
         "model": payload.get("model"),
         "done": payload.get("done"),
         "done_reason": payload.get("done_reason"),
-        "content_preview": _preview_text((payload.get("message", {}) or {}).get("content", "")),
+        "content_preview": _preview_text(_extract_assistant_content(payload)),
         "prompt_eval_count": payload.get("prompt_eval_count"),
         "eval_count": payload.get("eval_count"),
+        "prompt_tokens": usage.get("prompt_tokens"),
+        "completion_tokens": usage.get("completion_tokens"),
+        "total_tokens": usage.get("total_tokens"),
         "total_duration": payload.get("total_duration"),
     }
+
+
+def _resolved_llm_provider() -> str:
+    if LLM_PROVIDER in {"ollama", "vllm", "openai"}:
+        return LLM_PROVIDER
+    if "/v1/chat/completions" in (LLM_API or ""):
+        return "vllm"
+    return "ollama"
+
+
+def _build_llm_headers() -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    if LLM_API_KEY:
+        headers["Authorization"] = f"Bearer {LLM_API_KEY}"
+    return headers
+
+
+def _extract_assistant_content(payload: dict[str, Any]) -> str:
+    if not isinstance(payload, dict):
+        return ""
+
+    message = payload.get("message")
+    if isinstance(message, dict):
+        return str(message.get("content") or "")
+
+    choices = payload.get("choices")
+    if isinstance(choices, list) and choices:
+        first = choices[0] if isinstance(choices[0], dict) else {}
+        message_obj = first.get("message") if isinstance(first.get("message"), dict) else {}
+        content = message_obj.get("content")
+        if isinstance(content, list):
+            parts: list[str] = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    parts.append(str(block.get("text") or ""))
+            return "".join(parts)
+        return str(content or "")
+
+    return ""
+
+
+def _extract_stream_chunk_and_done(data: dict[str, Any], provider: str) -> tuple[str, bool]:
+    if provider in {"vllm", "openai"}:
+        choices = data.get("choices") if isinstance(data.get("choices"), list) else []
+        if not choices:
+            return "", False
+        choice0 = choices[0] if isinstance(choices[0], dict) else {}
+        delta = choice0.get("delta") if isinstance(choice0.get("delta"), dict) else {}
+        chunk = str(delta.get("content") or "")
+        done = bool(choice0.get("finish_reason") is not None)
+        return chunk, done
+
+    chunk = str(((data.get("message") or {}) if isinstance(data.get("message"), dict) else {}).get("content") or "")
+    done = bool(data.get("done") is True)
+    return chunk, done
+
+
+def _build_classifier_payload(prompt: str) -> dict[str, Any]:
+    provider = _resolved_llm_provider()
+    if provider in {"vllm", "openai"}:
+        return {
+            "model": LLM_MODEL,
+            "messages": [
+                {"role": "system", "content": CLASSIFIER_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            "stream": False,
+            "temperature": 0,
+            "top_p": 1,
+            "max_tokens": 2048,
+        }
+
+    return {
+        "model": LLM_MODEL,
+        "stream": False,
+        "think": False,
+        "messages": [
+            {"role": "system", "content": CLASSIFIER_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        "parameters": {"temperature": 0},
+    }
+
+
+def _build_reduced_payload_for_retry(payload: dict[str, Any], provider: str) -> dict[str, Any]:
+    retry_payload = deepcopy(payload)
+    if provider in {"vllm", "openai"}:
+        retry_payload.pop("max_tokens", None)
+        retry_payload.pop("top_p", None)
+    else:
+        parameters = retry_payload.get("parameters")
+        if isinstance(parameters, dict):
+            parameters.pop("max_tokens", None)
+            parameters.pop("top_p", None)
+    return retry_payload
 
 
 def _log_verbose(message: str, payload: Any | None = None) -> None:
@@ -296,6 +405,8 @@ class ChatRequest(BaseModel):
     chat_id: Optional[str] = None
     press_releases: list[PressRelease] = Field(default_factory=list)
     stream: bool = False
+    include_neighbor_pages: bool = False
+    statistics_generation: bool = False
 
 class SummarizeRequest(BaseModel):
     chat_id: Optional[str] = None
@@ -797,6 +908,7 @@ class RagAnswerAgent:
         search_strategy: SearchStrategy = SearchStrategy.HYBRID_SEARCH,
         search_result: dict[str, Any] | None = None,
         top_k: int = RAG_LLM_TOP_K,
+        include_neighbor_pages: bool = False,
     ) -> dict:
         # Step 4: retrieve top chunks, then map to unique pages/documents for grounded answering.
         params = parameters or {}
@@ -819,6 +931,7 @@ class RagAnswerAgent:
             chunk_hits,
             max_total_pages=RAG_MAX_SELECTED_PAGES,
             max_pages_per_document=RAG_MAX_PAGES_PER_DOCUMENT,
+            include_neighbor_pages=include_neighbor_pages,
         )
         chunk_index_map = _collect_chunk_indices_by_document(chunk_hits)
         logger.info(
@@ -953,7 +1066,12 @@ def _wrap_stream_with_metadata(generator, intent: IntentType, extra_meta: Option
 '''
 
 
-async def _build_agent_stream(question: str, chat_id: Optional[str], intent_result: IntentResult):
+async def _build_agent_stream(
+    question: str,
+    chat_id: Optional[str],
+    intent_result: IntentResult,
+    include_neighbor_pages: bool = False,
+):
     intent = intent_result.intent
     search_strategy = intent_result.search_strategy
     params = intent_result.parameters
@@ -1012,6 +1130,7 @@ async def _build_agent_stream(question: str, chat_id: Optional[str], intent_resu
             chunk_hits,
             max_total_pages=RAG_MAX_SELECTED_PAGES,
             max_pages_per_document=RAG_MAX_PAGES_PER_DOCUMENT,
+            include_neighbor_pages=include_neighbor_pages,
         )
         chunk_index_map = _collect_chunk_indices_by_document(chunk_hits)
         logger.info(
@@ -1042,15 +1161,23 @@ async def _build_agent_stream(question: str, chat_id: Optional[str], intent_resu
             2. From relevant documents, extract the specific facts, numbers, or details that answer the question.
             3. State your answer directly, including all specific details (numbers, dates, amounts) from the documents.
             4. Cite which document and page the information came from.
+            5. **Select the most similar case**: If multiple cases are provided, compare them and identify which one is most factually and legally similar to the user's question. Justify your selection by explaining the similarities.
+            6. **Focus on the selected case**: After identifying the most similar case, center your answer on it. Other cases may be mentioned briefly for comparison only, but the primary answer must be based on the selected case.
+            7. **Quote the exact wording**: When you find a sentence or phrase that directly answers the user's question, quote it verbatim using quotation marks. 
+            8. **Before citing a page number, you MUST look for the nearest "------[Page X:]" marker that appears BEFORE the quoted text in the provided context. Use that number.**
+            9. **Do not mention unrelated documents or explain why they are not relevant, as this distracts from the answer.**
 
 
             Important:
             - Only use information from the provided documents
             - Have tables, you need to read the tables
+            - **Double check you cite the correct page number** 
             - Include specific numbers and details in your answer — do not just say "refer to the document"
             - If the full answer is not available in the documents, state exactly what is missing
             - If information conflicts between documents, note the conflict
             **Prioritize Best-Effort Answering**: You MUST try your best to answer the user's question using the provided documents. Do not refuse to answer simply because an exact keyword match is missing.
+            - - **If you find a relevant case that answers the user's query, focus your answer solely on that case. Do not mention unrelated documents or explain why they are not relevant, as this distracts from the answer.**
+            
 
             Retrieved most relevant documents context:\n
             f"{context}\n\n"
@@ -1124,7 +1251,11 @@ async def _build_agent_stream(question: str, chat_id: Optional[str], intent_resu
         generator = _generate_completion_stream(resolved_chat_id, summary_prompt)
         return _wrap_stream_with_metadata(generator, intent, {"sources": [_summarize_result_for_log(item) for item in results], **classification_meta})
 
-    result = await orchestrate_agent_chat(question, resolved_chat_id)
+    result = await orchestrate_agent_chat(
+        question,
+        resolved_chat_id,
+        include_neighbor_pages=include_neighbor_pages,
+    )
     return _stream_text_response(result["answer"], result["chat_id"], intent, classification_meta)
 
 
@@ -1238,6 +1369,753 @@ def _sync_parameter_filters(parameters: dict[str, Any]) -> dict[str, Any]:
     return parameters
 
 
+def _cleanup_statistics_query_text(value: str) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip(" .,:;\n\t")
+    if not text:
+        return ""
+
+    # Remove dangling trailing prepositions that degrade strict multi_match recall.
+    text = re.sub(r"(?i)\b(in|for|of|on|at|to|from|with|by)\b(?=\s*$)", "", text)
+    text = re.sub(r"\s+", " ", text).strip(" .,:;\n\t")
+    return text
+
+
+def _extract_statistics_query_and_date(question: str) -> tuple[str, str, str]:
+    text = (question or "").strip()
+    if not text:
+        return "", "", ""
+
+    working = text
+    month_start_date = ""
+    month_end_date = ""
+    mentions_created_date = bool(re.search(r"(?i)\b(create|created|creation|created_at|create date)\b", text))
+    mentions_modified_date = bool(re.search(r"(?i)\b(modify|modified|update|updated|updated_at|modify date|update date)\b", text))
+
+    for month_name, month_number in MONTH_NAME_TO_NUMBER.items():
+        month_pattern = rf"\b{month_name}\s+(\d{{4}})\b"
+        match = re.search(month_pattern, working, flags=re.IGNORECASE)
+        if not match:
+            continue
+
+        year_value = _safe_int(match.group(1))
+        if year_value is None or year_value < 1900 or year_value > 2100:
+            continue
+
+        last_day = calendar.monthrange(year_value, month_number)[1]
+        month_start_date = f"{year_value:04d}-{month_number:02d}-01"
+        month_end_date = f"{year_value:04d}-{month_number:02d}-{last_day:02d}"
+        working = re.sub(month_pattern, " ", working, flags=re.IGNORECASE)
+        break
+
+    relating_match = re.search(r"(?i)\b(relating to|about|regarding|on)\b\s*(.+)", working)
+    if relating_match:
+        working = relating_match.group(2)
+
+    working = re.sub(r"(?i)\b(please|count|number of|documents?|how many|total|show me|tell me|give me)\b", " ", working)
+    working = re.sub(r"(?i)\b(in|for|of)\s*$", " ", working)
+    working = re.sub(r"\s+", " ", working).strip(" .,:;\n\t")
+
+    query = _cleanup_statistics_query_text(working) or _cleanup_statistics_query_text(text)
+    if mentions_created_date or mentions_modified_date:
+        return query, month_start_date, month_end_date
+    return query, "", ""
+
+
+def _build_statistics_mode_prompt(question: str) -> str:
+    return f"""Return JSON only.
+
+You are extracting a statistics search plan for OpenSearch.
+
+User question:
+{question}
+
+Rules:
+- Return a search schema that follows Search documents condition style.
+- You must fill conditions dynamically from the user question using semantic understanding.
+- Do not copy hardcoded sample values into conditions.
+- Conditions are required when the user provides any topic/entity/filter words; do not return an empty conditions array in that case.
+- If the user asks for folder-like constraints, produce folderName or folderPath conditions.
+- If the user asks for title/description/category/owner/tags/metadata constraints, produce matching field conditions.
+- If multiple constraints are present, include multiple condition rows with proper AND/OR joins.
+- Extract year_month_token as YYYY.MM when present or inferable from month+year text.
+- If month/year is present (for example May 2025), include a condition row using value "YYYY.MM" with join "AND" to the topic condition.
+- date_filter_field must be one of: created_at, updated_at, none.
+- Use date_filter_field=created_at ONLY when user explicitly asks by created/create date semantics.
+- Use date_filter_field=updated_at ONLY when user explicitly asks by modified/updated date semantics.
+- If user does not mention created/updated semantics, set date_filter_field=none and leave start_date/end_date empty.
+- start_date/end_date must be YYYY-MM-DD when date_filter_field is created_at/updated_at.
+
+Example mapping:
+- "Please count the number of documents relating to Bills Committee Meeting in May 2025"
+    -> query="Bills Committee Meeting"
+    -> year_month_token="2025.05"
+    -> conditions includes at least:
+         1) {{"field":"folderName","operator":"contains","value":"Bills Committee Meeting","group":0,"join":"AND"}}
+         2) {{"field":"folderName","operator":"contains","value":"2025.05","group":0,"join":""}}
+
+Condition rules:
+- field supports: title, description, owner, category, tags, documentMetadata, folderName, folderPath, folderMetadata.
+- operator supports: contains, not_contains, is, is_not, starts_with, ends_with.
+- join supports: AND or OR.
+- group is integer, default 0.
+- If conditions are present, backend will convert them into OpenSearch bool clauses.
+
+Response schema:
+{{
+  "query": "string",
+    "conditions": [
+        {{"field": "<field>", "operator": "<operator>", "value": "<value>", "group": 0, "join": "AND|OR|"}}
+    ],
+  "year_month_token": "YYYY.MM|",
+  "date_filter_field": "created_at|updated_at|none",
+  "start_date": "YYYY-MM-DD|",
+  "end_date": "YYYY-MM-DD|",
+  "confidence": 0.0
+}}"""
+
+
+def _normalize_statistics_conditions(values: Any) -> list[dict[str, Any]]:
+    if not isinstance(values, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        field = str(item.get("field") or "").strip()
+        operator = str(item.get("operator") or "contains").strip().lower()
+        value = str(item.get("value") or "").strip()
+        if not field or not value:
+            continue
+        if field not in {
+            "title",
+            "description",
+            "owner",
+            "category",
+            "tags",
+            "documentMetadata",
+            "folderName",
+            "folderPath",
+            "folderMetadata",
+        }:
+            continue
+        if operator not in {"contains", "not_contains", "is", "is_not", "starts_with", "ends_with"}:
+            operator = "contains"
+        join = str(item.get("join") or "").strip().upper()
+        if join not in {"AND", "OR"}:
+            join = ""
+        group = _safe_int(item.get("group"))
+        normalized.append(
+            {
+                "field": field,
+                "operator": operator,
+                "value": value,
+                "group": group if group is not None and group >= 0 else 0,
+                "join": join,
+            }
+        )
+    return normalized
+
+
+def _enrich_statistics_conditions(
+    conditions: list[dict[str, Any]],
+    query: str,
+    year_month_token: str,
+) -> list[dict[str, Any]]:
+    if conditions:
+        return conditions
+
+    enriched: list[dict[str, Any]] = []
+    query_text = _cleanup_statistics_query_text(query)
+    if query_text:
+        enriched.append(
+            {
+                "field": "folderName",
+                "operator": "contains",
+                "value": query_text,
+                "group": 0,
+                "join": "AND" if year_month_token else "",
+            }
+        )
+    if year_month_token:
+        enriched.append(
+            {
+                "field": "folderPath",
+                "operator": "contains",
+                "value": year_month_token,
+                "group": 0,
+                "join": "",
+            }
+        )
+    return enriched
+
+
+def _build_statistics_condition_clause(condition: dict[str, Any]) -> dict[str, Any]:
+    field = condition.get("field")
+    operator = condition.get("operator")
+    value = condition.get("value")
+    if field == "folderPath":
+        fields = ["folder_path", "folder_path.keyword"]
+    elif field == "folderName":
+        fields = ["folder.parent.name", "folder.parent.name.keyword", "folder_name", "folder_name.keyword"]
+    elif field == "title":
+        fields = ["title", "title.keyword"]
+    elif field == "description":
+        fields = ["description"]
+    elif field == "owner":
+        fields = ["owner", "owner.keyword"]
+    elif field == "category":
+        fields = ["category", "category.keyword"]
+    elif field == "tags":
+        fields = ["tags", "tags.keyword"]
+    elif field == "documentMetadata":
+        fields = ["metadata_text"]
+    elif field == "folderMetadata":
+        fields = ["metadata_text"]
+    else:
+        fields = ["folder.parent.name", "folder.parent.name.keyword", "folder_name", "folder_path"]
+
+    effective_operator = "contains" if operator in {"not_contains", "is_not"} else operator
+
+    if field == "folderName" and effective_operator == "contains":
+        return {
+            "bool": {
+                "should": [
+                    {"wildcard": {"folder_name.keyword": {"value": f"*{value}*"}}},
+                    {"wildcard": {"folder_name": {"value": f"*{value}*"}}},
+                ],
+                "minimum_should_match": 1,
+            }
+        }
+
+    if field == "folderPath" and effective_operator == "contains":
+        return {
+            "bool": {
+                "should": [
+                    {"wildcard": {"folder_path.keyword": {"value": f"*{value}*"}}},
+                    {"wildcard": {"folder_path": {"value": f"*{value}*"}}},
+                ],
+                "minimum_should_match": 1,
+            }
+        }
+
+    if effective_operator == "is":
+        return {
+            "multi_match": {
+                "query": value,
+                "fields": fields,
+                "type": "phrase",
+                "lenient": True,
+            }
+        }
+    if effective_operator == "starts_with":
+        return {
+            "query_string": {
+                "query": f"{value}*",
+                "fields": fields,
+                "default_operator": "AND",
+            }
+        }
+    if effective_operator == "ends_with":
+        return {
+            "query_string": {
+                "query": f"*{value}",
+                "fields": fields,
+                "default_operator": "AND",
+            }
+        }
+    return {
+        "multi_match": {
+            "query": value,
+            "fields": fields,
+            "operator": "and",
+            "lenient": True,
+        }
+    }
+
+
+def _build_statistics_condition_bool(conditions: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not conditions:
+        return None
+
+    positive_clauses: list[dict[str, Any]] = []
+    negative_clauses: list[dict[str, Any]] = []
+    for item in conditions:
+        clause = _build_statistics_condition_clause(item)
+        if item.get("operator") in {"not_contains", "is_not"}:
+            negative_clauses.append(clause)
+        else:
+            positive_clauses.append(clause)
+
+    if not positive_clauses and not negative_clauses:
+        return None
+
+    joins = [item.get("join") for item in conditions]
+    has_or = any(join == "OR" for join in joins[:-1])
+    bool_query: dict[str, Any] = {}
+    if has_or:
+        if positive_clauses:
+            bool_query["should"] = positive_clauses
+            bool_query["minimum_should_match"] = 1
+    else:
+        if positive_clauses:
+            bool_query["must"] = positive_clauses
+    if negative_clauses:
+        bool_query["must_not"] = negative_clauses
+    return bool_query if bool_query else None
+
+
+def _extract_statistics_plan_with_llm(question: str) -> dict[str, Any] | None:
+    prompt = _build_statistics_mode_prompt(question)
+    payload = _call_classifier_llm(
+        prompt,
+        stage="StatisticsMode",
+        timeout_seconds=STATS_CLASSIFIER_TIMEOUT_SECONDS,
+    )
+    if not isinstance(payload, dict):
+        # Retry once before failing statistics mode.
+        payload = _call_classifier_llm(
+            prompt,
+            stage="StatisticsMode-Retry",
+            timeout_seconds=STATS_CLASSIFIER_TIMEOUT_SECONDS,
+        )
+    if not isinstance(payload, dict):
+        return None
+
+    query = _cleanup_statistics_query_text(str(payload.get("query") or ""))
+    year_month_token = str(payload.get("year_month_token") or "").strip()
+    if not re.match(r"^\d{4}\.\d{2}$", year_month_token):
+        year_month_token = ""
+
+    date_filter_field_raw = str(payload.get("date_filter_field") or "none").strip().lower()
+    date_filter_field = date_filter_field_raw if date_filter_field_raw in {"created_at", "updated_at", "none"} else "none"
+
+    start_date = str(payload.get("start_date") or "").strip()
+    end_date = str(payload.get("end_date") or "").strip()
+    if date_filter_field == "none":
+        start_date = ""
+        end_date = ""
+
+    valid_date_pattern = r"^\d{4}-\d{2}-\d{2}$"
+    if start_date and not re.match(valid_date_pattern, start_date):
+        start_date = ""
+    if end_date and not re.match(valid_date_pattern, end_date):
+        end_date = ""
+
+    normalized_conditions = _normalize_statistics_conditions(payload.get("conditions"))
+    normalized_conditions = _enrich_statistics_conditions(normalized_conditions, query, year_month_token)
+
+    return {
+        "query": query,
+        "conditions": normalized_conditions,
+        "year_month_token": year_month_token,
+        "date_filter_field": date_filter_field,
+        "start_date": start_date,
+        "end_date": end_date,
+        "confidence": payload.get("confidence"),
+    }
+
+
+def _extract_statistics_year_month_token(question: str, start_date: str) -> str:
+    text = str(question or "")
+    explicit_patterns = [
+        r"\b(\d{4})[.\-/](\d{1,2})\b",
+        r"\b(\d{4})\s*年\s*(\d{1,2})\s*月\b",
+    ]
+    for pattern in explicit_patterns:
+        explicit = re.search(pattern, text)
+        if not explicit:
+            continue
+        year_value = _safe_int(explicit.group(1))
+        month_value = _safe_int(explicit.group(2))
+        if (
+            year_value is not None
+            and 1900 <= year_value <= 2100
+            and month_value is not None
+            and 1 <= month_value <= 12
+        ):
+            return f"{year_value:04d}.{month_value:02d}"
+
+    # Month name + year fallback (e.g. "May 2025").
+    for month_name, month_number in MONTH_NAME_TO_NUMBER.items():
+        month_match = re.search(rf"\b{month_name}\s+(\d{{4}})\b", text, flags=re.IGNORECASE)
+        if not month_match:
+            continue
+        year_value = _safe_int(month_match.group(1))
+        if year_value is not None and 1900 <= year_value <= 2100:
+            return f"{year_value:04d}.{month_number:02d}"
+
+    parsed_start = convert_to_es_date(start_date) if start_date else None
+    if parsed_start and len(parsed_start) >= 7:
+        return parsed_start[:7].replace("-", ".")
+    return ""
+
+
+def _map_statistics_field_to_dms_condition_field(field: str) -> str:
+    normalized = str(field or "").strip()
+    field_map = {
+        "title": "title",
+        "description": "description",
+        "owner": "owner",
+        "category": "category",
+        "tags": "tags",
+        "documentMetadata": "documentMetadata",
+        "folderName": "folderName",
+        "folderMetadata": "folderMetadata",
+        # DMS Search panel does not expose folderPath as a condition field.
+        # Use folderName as the closest behavior for matching folder-like text.
+        "folderPath": "folderName",
+    }
+    return field_map.get(normalized, "title")
+
+
+def _build_dms_documents_query_params(
+    query: str,
+    schema_conditions: list[dict[str, Any]],
+    date_filter_field: str,
+    start_date: str,
+    end_date: str,
+    page: int,
+    size: int,
+) -> list[tuple[str, str]]:
+    params: list[tuple[str, str]] = [("page", str(max(0, int(page)))), ("size", str(max(1, int(size))))]
+
+    cleaned_query = str(query or "").strip()
+    # Match Search Documents panel behavior: when condition rows are present,
+    # rely on conditions instead of sending an extra q term filter.
+    if cleaned_query and not schema_conditions:
+        params.append(("q", cleaned_query))
+
+    if schema_conditions:
+        params.append(("conditionOperator", "AND"))
+        normalized_conditions = [
+            condition
+            for condition in schema_conditions
+            if str(condition.get("value") or "").strip()
+        ]
+
+        for index, condition in enumerate(normalized_conditions):
+            field = _map_statistics_field_to_dms_condition_field(str(condition.get("field") or ""))
+            operator = str(condition.get("operator") or "contains").strip().lower()
+            value = str(condition.get("value") or "").strip()
+
+            if operator not in {"contains", "not_contains", "is", "is_not", "starts_with", "ends_with", "before", "after"}:
+                operator = "contains"
+
+            group_value = _safe_int(condition.get("group"))
+            group = str(group_value if group_value is not None and group_value >= 0 else 0)
+            join = str(condition.get("join") or "").strip().upper()
+            if join not in {"AND", "OR"}:
+                join = ""
+            # Last condition must not carry a trailing join.
+            if index == len(normalized_conditions) - 1:
+                join = ""
+
+            params.append(("conditionField", field))
+            params.append(("conditionValue", value))
+            params.append(("conditionOp", operator))
+            params.append(("conditionGroup", group))
+            params.append(("conditionJoin", join))
+
+    date_field = "createdDate" if date_filter_field == "created_at" else ("modifiedDate" if date_filter_field == "updated_at" else "")
+    if date_field and start_date and end_date and start_date == end_date:
+        params.append(("conditionField", date_field))
+        params.append(("conditionValue", start_date))
+        params.append(("conditionOp", "is"))
+        params.append(("conditionGroup", "0"))
+        params.append(("conditionJoin", ""))
+    elif date_field:
+        if start_date:
+            params.append(("conditionField", date_field))
+            params.append(("conditionValue", start_date))
+            params.append(("conditionOp", "after"))
+            params.append(("conditionGroup", "0"))
+            params.append(("conditionJoin", "AND" if end_date else ""))
+        if end_date:
+            params.append(("conditionField", date_field))
+            params.append(("conditionValue", end_date))
+            params.append(("conditionOp", "before"))
+            params.append(("conditionGroup", "0"))
+            params.append(("conditionJoin", ""))
+
+    return params
+
+
+def _extract_folder_path_from_dms_document(item: dict[str, Any]) -> str:
+    folder = item.get("folder") if isinstance(item, dict) else {}
+    if not isinstance(folder, dict):
+        return ""
+    breadcrumbs = folder.get("breadcrumbs") if isinstance(folder.get("breadcrumbs"), list) else []
+    breadcrumb_parts = [str(part).strip() for part in breadcrumbs if str(part).strip()]
+    folder_name = str(folder.get("name") or "").strip()
+    if folder_name and (not breadcrumb_parts or breadcrumb_parts[-1] != folder_name):
+        breadcrumb_parts.append(folder_name)
+    if breadcrumb_parts:
+        return " / ".join(breadcrumb_parts)
+    return folder_name
+
+
+def _dms_statistics_headers() -> dict[str, str]:
+    headers: dict[str, str] = {}
+    auth_header_name = str(os.getenv("DMS_API_AUTH_HEADER", "")).strip()
+    auth_header_value = str(os.getenv("DMS_API_AUTH_VALUE", "")).strip()
+    if auth_header_name and auth_header_value:
+        headers[auth_header_name] = auth_header_value
+    return headers
+
+
+def _merge_dms_forward_headers(forwarded_headers: Optional[dict[str, str]]) -> dict[str, str]:
+    headers = _dms_statistics_headers()
+    if not isinstance(forwarded_headers, dict):
+        return headers
+    for header_name in ("Authorization", "Cookie", "X-Auth-Token", "X-CSRF-Token"):
+        value = str(forwarded_headers.get(header_name) or "").strip()
+        if value:
+            headers[header_name] = value
+    return headers
+
+
+def _execute_statistics_metadata_search(question: str, forwarded_headers: Optional[dict[str, str]] = None) -> dict[str, Any]:
+    llm_plan = _extract_statistics_plan_with_llm(question)
+    if not isinstance(llm_plan, dict):
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                "Statistics generation mode requires LLM planning, but the LLM request timed out or failed. "
+                "Please retry or increase CHATBOT_STATS_CLASSIFIER_TIMEOUT_SECONDS."
+            ),
+        )
+    fallback_query, fallback_start_date, fallback_end_date = _extract_statistics_query_and_date(question)
+
+    query = _cleanup_statistics_query_text(str((llm_plan or {}).get("query") or fallback_query or ""))
+    date_filter_field = str((llm_plan or {}).get("date_filter_field") or "none").strip().lower()
+    if date_filter_field not in {"created_at", "updated_at", "none"}:
+        date_filter_field = "none"
+
+    start_date = str((llm_plan or {}).get("start_date") or "").strip()
+    end_date = str((llm_plan or {}).get("end_date") or "").strip()
+    if date_filter_field == "none":
+        start_date = ""
+        end_date = ""
+    elif not start_date and not end_date:
+        start_date = fallback_start_date
+        end_date = fallback_end_date
+
+    year_month_token = str((llm_plan or {}).get("year_month_token") or "").strip()
+    if not year_month_token:
+        year_month_token = _extract_statistics_year_month_token(question, start_date)
+    if not year_month_token:
+        year_month_token = _extract_statistics_year_month_token(query, start_date)
+    schema_conditions = _normalize_statistics_conditions((llm_plan or {}).get("conditions"))
+    schema_conditions = _enrich_statistics_conditions(schema_conditions, query, year_month_token)
+
+    base_params = _build_dms_documents_query_params(
+        query=query,
+        schema_conditions=schema_conditions,
+        date_filter_field=date_filter_field,
+        start_date=start_date,
+        end_date=end_date,
+        page=0,
+        size=200,
+    )
+    dms_request_debug = {
+        "url": f"{DMS_BASE_URL}/api/documents",
+        "params": base_params,
+        "headers": sorted(_merge_dms_forward_headers(forwarded_headers).keys()),
+    }
+
+    logger.info(
+        "Step 3: Statistics DMS request params (full)\n%s",
+        json.dumps(dms_request_debug, ensure_ascii=False, indent=2),
+    )
+
+    _log_workflow_step(
+        3,
+        "Statistics DMS request",
+        {
+            "url": f"{DMS_BASE_URL}/api/documents",
+            "query_text": query,
+            "llm_plan": llm_plan,
+            "schema_conditions": schema_conditions,
+            "date_filter_field": date_filter_field,
+            "year_month_token": year_month_token,
+            "start_date": start_date,
+            "end_date": end_date,
+            "params": base_params,
+        },
+    )
+
+    url = f"{DMS_BASE_URL}/api/documents"
+    headers = _merge_dms_forward_headers(forwarded_headers)
+    try:
+        first_response = requests.get(url, params=base_params, headers=headers, timeout=60)
+    except requests.RequestException as exc:
+        logger.exception("Statistics DMS request failed")
+        raise HTTPException(status_code=502, detail=f"Statistics DMS request failed: {exc}") from exc
+
+    if not first_response.ok:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Statistics DMS request failed with HTTP {first_response.status_code}: {first_response.text[:300]}",
+        )
+
+    page_payload = first_response.json() if first_response.text else {}
+    total_docs = int(page_payload.get("totalElements") or 0)
+    total_pages = int(page_payload.get("totalPages") or 0)
+    all_documents: list[dict[str, Any]] = list(page_payload.get("content") or [])
+
+    for page_index in range(1, max(0, total_pages)):
+        page_params = _build_dms_documents_query_params(
+            query=query,
+            schema_conditions=schema_conditions,
+            date_filter_field=date_filter_field,
+            start_date=start_date,
+            end_date=end_date,
+            page=page_index,
+            size=200,
+        )
+        try:
+            page_resp = requests.get(url, params=page_params, headers=headers, timeout=60)
+        except requests.RequestException as exc:
+            logger.warning("Statistics DMS pagination request failed on page %s: %s", page_index, exc)
+            continue
+        if not page_resp.ok:
+            logger.warning(
+                "Statistics DMS pagination request returned HTTP %s on page %s",
+                page_resp.status_code,
+                page_index,
+            )
+            continue
+        page_json = page_resp.json() if page_resp.text else {}
+        all_documents.extend(list(page_json.get("content") or []))
+
+    folder_paths: list[str] = []
+    for item in all_documents:
+        folder_path = _extract_folder_path_from_dms_document(item)
+        if folder_path:
+            folder_paths.append(folder_path)
+
+    unique_paths = {path for path in folder_paths if path}
+    subfolder_count = len(unique_paths)
+    top_folder_path = ""
+    folder_document_counts: list[dict[str, Any]] = []
+    if folder_paths:
+        counts: dict[str, int] = {}
+        for path in folder_paths:
+            counts[path] = counts.get(path, 0) + 1
+        sorted_counts = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        top_folder_path = sorted_counts[0][0]
+        folder_document_counts = [
+            {"folder_path": path, "document_count": count}
+            for path, count in sorted_counts
+        ]
+
+    if total_docs <= 0:
+        answer = "No matching documents were found for statistics generation."
+    elif folder_document_counts:
+        folder_lines = "\n".join(
+            [
+                f"- {item.get('folder_path', '')} ({item.get('document_count', 0)} documents)"
+                for item in folder_document_counts
+            ]
+        )
+        answer = (
+            f"A total of {total_docs} documents are contained in {subfolder_count} sub-folders.\n"
+            f"Folders:\n{folder_lines}"
+        )
+    else:
+        answer = f"A total of {total_docs} documents are contained in {subfolder_count} sub-folders."
+
+    _log_workflow_step(
+        4,
+        "Statistics DMS response",
+        {
+            "total_documents": total_docs,
+            "subfolder_count": subfolder_count,
+            "top_folder_path": top_folder_path,
+            "response_schema": {
+                "answer": "string",
+                "total_documents": "int",
+                "subfolder_count": "int",
+                "top_folder_path": "string",
+                "folder_document_counts": "list[{folder_path, document_count}]",
+                "query": "string",
+                "date_filter_field": "created_at|updated_at|none",
+                "year_month_token": "string",
+                "start_date": "string",
+                "end_date": "string",
+            },
+        },
+    )
+
+    return {
+        "answer": answer,
+        "total_documents": total_docs,
+        "subfolder_count": subfolder_count,
+        "top_folder_path": top_folder_path,
+        "folder_document_counts": folder_document_counts,
+        "query": query,
+        "conditions": schema_conditions,
+        "date_filter_field": date_filter_field,
+        "year_month_token": year_month_token,
+        "start_date": start_date,
+        "end_date": end_date,
+        "dms_request": dms_request_debug,
+    }
+
+
+def _run_statistics_generation(
+    question: str,
+    chat_id: Optional[str],
+    forwarded_headers: Optional[dict[str, str]] = None,
+) -> dict[str, Any]:
+    resolved_chat_id = chat_id or str(uuid4())
+    stats = _execute_statistics_metadata_search(question, forwarded_headers=forwarded_headers)
+    answer = stats.get("answer", "No statistics were generated.")
+    classification = {
+        "question": question,
+        "intent": IntentType.STATS_COUNT.value,
+        "search_strategy": SearchStrategy.KEYWORD_SEARCH.value,
+        "task_type": TaskType.ANSWER_QUESTION.value,
+        "confidence": 1.0,
+        "classification_source": "statistics_generation_mode",
+        "search_template": {
+            "query": stats.get("query", ""),
+            "start_date": stats.get("start_date", ""),
+            "end_date": stats.get("end_date", ""),
+        },
+    }
+    payload = {
+        "messages": [{"role": "user", "content": question}],
+        # Avoid indexing empty date strings into date-mapped fields in chat_logs_dms.
+        "statistics": {
+            key: value
+            for key, value in stats.items()
+            if not (key in {"start_date", "end_date"} and isinstance(value, str) and not value.strip())
+        },
+        "mode": "statistics_generation",
+    }
+    token_usage = _build_token_usage(payload["messages"], answer, None)
+    _save_chat_log(resolved_chat_id, payload, answer, token_usage)
+    result = {
+        "chat_id": resolved_chat_id,
+        "answer": answer,
+        "intent": IntentType.STATS_COUNT.value,
+        "classification": classification,
+        "debug_info": {"statistics": stats},
+    }
+    _log_workflow_step(
+        6,
+        "Statistics generation response schema",
+        {
+            "keys": sorted(list(result.keys())),
+            "classification_keys": sorted(list((result.get("classification") or {}).keys())),
+            "debug_info_keys": sorted(list((result.get("debug_info") or {}).keys())),
+        },
+    )
+    return result
+
+
 def _merge_classifier_parameters(base_parameters: dict[str, Any], classifier_payload: dict[str, Any]) -> dict[str, Any]:
     merged = deepcopy(base_parameters)
     payload_filters = classifier_payload.get("filters") if isinstance(classifier_payload.get("filters"), dict) else {}
@@ -1304,18 +2182,12 @@ def _merge_classifier_parameters(base_parameters: dict[str, Any], classifier_pay
 
 
 def _normalize_search_strategy(strategy_value: Any, intent_value: Any, parameters: dict[str, Any]) -> SearchStrategy:
-    has_keyword_plan = bool(
-        parameters.get("match_mode") in KEYWORD_MATCH_MODES
-        or parameters.get("exact_phrase")
-        or parameters.get("must_terms")
-        or parameters.get("should_terms")
-    )
-    if has_keyword_plan:
-        return SearchStrategy.KEYWORD_SEARCH
-
     normalized_value = str(strategy_value or "").strip()
     if normalized_value in {member.value for member in SearchStrategy}:
-        return SearchStrategy(normalized_value)
+        strategy = SearchStrategy(normalized_value)
+        if strategy == SearchStrategy.NO_SEARCH:
+            return SearchStrategy.NO_SEARCH
+        return SearchStrategy.HYBRID_SEARCH
 
     legacy_intent = str(intent_value or "").strip()
     if legacy_intent == IntentType.KEYWORD_SEARCH.value:
@@ -1383,30 +2255,38 @@ async def _execute_search_strategy(
     return await SemanticSearchAgent.execute(question, parameters=params)
 
 
-def _call_classifier_llm(prompt: str, stage: str = "classifier") -> dict[str, Any] | None:
+def _call_classifier_llm(
+    prompt: str,
+    stage: str = "classifier",
+    timeout_seconds: int | None = None,
+) -> dict[str, Any] | None:
     logger.info("Step 2: %s prompt sent to LLM\n%s", stage, prompt)
-    response = requests.post(
-        LLM_API,
-        json={
-            "model": LLM_MODEL,
-            "stream": False,
-            "think": False,
-            "messages": [
-                {"role": "system", "content": CLASSIFIER_SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            "parameters": {"temperature": 0},
-        },
-        timeout=CLASSIFIER_TIMEOUT_SECONDS,
-    )
+    resolved_timeout = timeout_seconds if isinstance(timeout_seconds, int) and timeout_seconds > 0 else CLASSIFIER_TIMEOUT_SECONDS
+    payload = _build_classifier_payload(prompt)
+    try:
+        response = requests.post(
+            LLM_API,
+            json=payload,
+            headers=_build_llm_headers(),
+            timeout=resolved_timeout,
+        )
+    except requests.exceptions.Timeout:
+        logger.warning("Step 2: %s classifier timed out after %ss", stage, resolved_timeout)
+        return None
+    except requests.exceptions.RequestException as exc:
+        logger.warning("Step 2: %s classifier request failed: %s", stage, exc)
+        return None
+
     if not response.ok:
         logger.warning("Intent classifier LLM returned HTTP %s", response.status_code)
         return None
 
     data = response.json()
-    raw_content = data.get("message", {}).get("content", "")
+    raw_content = _extract_assistant_content(data)
     if stage == "Agent2":
         logger.info("Step 2: Agent2 raw response from LLM\n%s", raw_content)
+    if stage.startswith("StatisticsMode"):
+        logger.info("Step 2: %s raw response from LLM\n%s", stage, raw_content)
 
     content = re.sub(r'```json\s*|\s*```', '', str(raw_content).strip())
     try:
@@ -1417,6 +2297,8 @@ def _call_classifier_llm(prompt: str, stage: str = "classifier") -> dict[str, An
 
     if stage == "Agent2":
         logger.info("Step 2: Agent2 parsed response | %s", _truncate_for_log(parsed))
+    if stage.startswith("StatisticsMode"):
+        logger.info("Step 2: %s parsed response | %s", stage, _truncate_for_log(parsed))
 
     return parsed
 
@@ -1437,10 +2319,9 @@ Initial search template:
 Current year: {current_year}
 
 Rules:
-- Choose exactly one search_strategy: hybrid_search(most likely!!), keyword_search,  or no_search.
-- Can use the hybrid search then use the hybrid search. Hybrid search is the first choice.(important)
+- Choose exactly one search_strategy: hybrid_search(most likely!!),  or no_search.
+- **Can use the hybrid search then use the hybrid search. Hybrid search is the first choice.(important)**
 - hybrid_search means normal document retrieval using the same search template fields as chatbot-template__filters-section and chatbot_api.py.
-- keyword_search ONLY for literal keyword filtering with the template fields and optional exact_phrase, must_terms, and should_terms.
 - no_search means the question is a free open question and does not need document retrieval.
 - Do not decide the final task type here.
 - Do not extract with hardcoded patterns; use the user meaning.
@@ -1454,18 +2335,14 @@ Rules:
     * Minutes of Meeting -> MM
     * Reply letter -> RE_LETTER
 - Do not return raw category labels in "category"; return only mapped codes.
-- If you fill phrase, must_terms, should_terms, or match_mode, search_strategy must be keyword_search.
-- If the user wants documents containing term A and term B, use match_mode="all_terms" and return must_terms.
-- If the user wants documents containing term A or term B, use match_mode="any_terms" and return should_terms.
-- Only use match_mode="exact_phrase" and phrase when the user clearly asks for an exact phrase or literal adjacency match.
+- If the user gives a literal phrase, keep search_strategy as hybrid_search and put the phrase in "phrase" for downstream query rewriting.
+- Use match_mode only when absolutely necessary; otherwise leave it null.
 - If the only filter is a date, owner, category, folder, or tag (no keyword terms), use hybrid_search, not keyword_search.
 
 
 Examples:
 - Query: find similar cases; cases related to ; relevant ones
   Return: search_strategy="hybrid_search"
-- Query: documents containing phrase "XXX" and "XXX"
-  Return: search_strategy="keyword_search", match_mode="all_terms", must_terms=["XXX", "XXX"]
 - Query: find the docs updated 18/4/2026
   Return: search_strategy="hybrid_search", start_date="2026-04-18", end_date="2026-04-18"
 - Query: show documents created in March 2026
@@ -1476,7 +2353,7 @@ Examples:
 
 Response schema:
 {{
-  "search_strategy": "hybrid_search|keyword_search|no_search",
+    "search_strategy": "hybrid_search|no_search",
   "confidence": 0.0,
   "search_mode": "text|hybrid",
   "match_mode": "exact_phrase|all_terms|any_terms|null",
@@ -1583,11 +2460,10 @@ Chosen search_strategy:
 Filled search template:
 {json.dumps(parameters, ensure_ascii=False)}
 
-Search results preview:
-{json.dumps(search_preview, ensure_ascii=False)}
 
 Rules:
 - Choose exactly one task_type: list_documents, answer_question.
+- answer_question is the default choice.
 
 - list_documents: Use ONLY when the user explicitly wants to SEE/BROWSE document titles/IDs/metadata without any content analysis, synthesis, or summarization. 
   * Keywords: "list", "show me", "display", "find documents" (without content requirements)
@@ -1634,6 +2510,12 @@ async def _classify_intent_with_llm(question: str, base_parameters: dict[str, An
 
     merged_parameters = _merge_classifier_parameters(base_parameters, search_strategy_payload)
     search_strategy = _normalize_search_strategy(search_strategy_payload.get("search_strategy"), "", merged_parameters)
+    if search_strategy != SearchStrategy.KEYWORD_SEARCH:
+        merged_parameters["match_mode"] = None
+        merged_parameters["exact_phrase"] = None
+        merged_parameters["must_terms"] = []
+        merged_parameters["should_terms"] = []
+        merged_parameters["requires_exact_match"] = False
     search_confidence = float(search_strategy_payload.get("confidence", 0.8))
 
     search_result: dict[str, Any] | None = None
@@ -1768,6 +2650,7 @@ def _collect_chunk_pages_by_document(
     chunk_results: list[dict[str, Any]],
     max_total_pages: int | None = None,
     max_pages_per_document: int | None = None,
+    include_neighbor_pages: bool = False,
 ) -> dict[str, set[int]]:
     pages_by_document: dict[str, set[int]] = {}
     page_budget = max_total_pages if isinstance(max_total_pages, int) and max_total_pages > 0 else None
@@ -1795,7 +2678,19 @@ def _collect_chunk_pages_by_document(
         if not page_values:
             continue
 
+        candidate_pages: list[int] = []
         for page_value in page_values:
+            if page_value > 0 and page_value not in candidate_pages:
+                candidate_pages.append(page_value)
+            if include_neighbor_pages:
+                previous_page = page_value - 1
+                next_page = page_value + 1
+                if previous_page > 0 and previous_page not in candidate_pages:
+                    candidate_pages.append(previous_page)
+                if next_page > 0 and next_page not in candidate_pages:
+                    candidate_pages.append(next_page)
+
+        for page_value in candidate_pages:
             doc_page_key = (document_id, page_value)
             if doc_page_key in selected_doc_pages:
                 continue
@@ -2020,7 +2915,6 @@ def _build_page_aware_rag_context(
     results: list[dict[str, Any]],
     chunk_pages_by_document: dict[str, set[int]],
     chunk_indices_by_document: dict[str, set[int]],
-    max_chars_per_page: int = 1200,
     max_chars_fallback: int = 1200,
 ) -> str:
     sections: list[str] = []
@@ -2057,8 +2951,10 @@ def _build_page_aware_rag_context(
         if selected_pages_for_content:
             page_blocks: list[str] = []
             for page_no in selected_pages_for_content:
-                page_text = page_map.get(page_no, "")[:max_chars_per_page]
-                page_blocks.append(f"Page {page_no}: {page_text}")
+                page_text = page_map.get(page_no, "")
+                page_blocks.append(
+                    f"------[Page {page_no}]\n{page_text}\n------[END Page {page_no}]"
+                )
             content = "\n\n".join(page_blocks)
         else:
             if selected_pages:
@@ -2503,7 +3399,11 @@ def _execute_chunk_search(
 # Orchestrator
 # ---------------------------------------------------------------------------
 
-async def orchestrate_agent_chat(question: str, chat_id: Optional[str] = None) -> dict:
+async def orchestrate_agent_chat(
+    question: str,
+    chat_id: Optional[str] = None,
+    include_neighbor_pages: bool = False,
+) -> dict:
     # Step 1: accept the request and determine which backend task should handle it.
     intent_result = await IntentClassifier.classify(question)
     intent = intent_result.intent
@@ -2579,6 +3479,7 @@ async def orchestrate_agent_chat(question: str, chat_id: Optional[str] = None) -
                 params,
                 search_strategy=search_strategy,
                 search_result=prefetched_search_result,
+                include_neighbor_pages=include_neighbor_pages,
             )
             answer = agent_result["answer"]
             response_payload = {
@@ -2749,11 +3650,14 @@ def _get_chatlog_messages(chat_id: str) -> list[dict[str, str]]:
 
 def _extract_provider_usage(provider_payload: Optional[dict[str, Any]]) -> dict[str, Any]:
     payload = provider_payload or {}
-    prompt_tokens = payload.get("prompt_eval_count")
-    completion_tokens = payload.get("eval_count")
+    usage_obj = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    prompt_tokens = usage_obj.get("prompt_tokens", payload.get("prompt_eval_count"))
+    completion_tokens = usage_obj.get("completion_tokens", payload.get("eval_count"))
     total_tokens = None
     if isinstance(prompt_tokens, int) and isinstance(completion_tokens, int):
         total_tokens = prompt_tokens + completion_tokens
+    if isinstance(usage_obj.get("total_tokens"), int):
+        total_tokens = usage_obj.get("total_tokens")
     usage: dict[str, Any] = {
         "provider_prompt_tokens": prompt_tokens,
         "provider_completion_tokens": completion_tokens,
@@ -2813,14 +3717,27 @@ def _build_messages(chat_id: Optional[str], user_prompt: str, system_prompt: Opt
     return resolved_chat_id, messages
 
 def _build_llm_payload(messages: list[dict[str, str]], stream: bool) -> dict[str, Any]:
+    provider = _resolved_llm_provider()
+    if provider in {"vllm", "openai"}:
+        payload = {
+            "model": LLM_MODEL,
+            "messages": messages,
+            "stream": stream,
+            "temperature": LLM_TEMPERATURE,
+            "top_p": LLM_TOP_P,
+            "max_tokens": LLM_MAX_TOKENS,
+        }
+        _log_verbose("Built LLM payload", _summarize_llm_payload_for_log(payload))
+        return payload
+
     payload = {
         "model": LLM_MODEL,
         "stream": stream,
         "think": False,
         "parameters": {
-            "temperature": 0.2,
-            "top_p": 0.7,
-            "max_tokens": 10000,
+            "temperature": LLM_TEMPERATURE,
+            "top_p": LLM_TOP_P,
+            "max_tokens": LLM_MAX_TOKENS,
         },
         "messages": messages,
     }
@@ -2867,9 +3784,28 @@ def _generate_completion(chat_id: Optional[str], user_prompt: str, system_prompt
         {"chat_id": resolved_chat_id, "llm_api": LLM_API, "payload": _summarize_llm_payload_for_log(payload)},
         verbose_only=True,
     )
-    response = requests.post(LLM_API, json=payload, headers={"Content-Type": "application/json"}, timeout=90)
+    response = requests.post(LLM_API, json=payload, headers=_build_llm_headers(), timeout=90)
     if not response.ok:
-        raise HTTPException(status_code=502, detail=f"LLM API error: {response.status_code}")
+        provider = _resolved_llm_provider()
+        error_preview = _preview_text(response.text, 500)
+        if response.status_code == 400 and provider in {"vllm", "openai"}:
+            retry_payload = _build_reduced_payload_for_retry(payload, provider)
+            logger.warning(
+                "Step 5: Non-stream LLM returned 400, retrying with reduced payload | chat_id=%s error=%s",
+                resolved_chat_id,
+                error_preview,
+            )
+            retry_response = requests.post(LLM_API, json=retry_payload, headers=_build_llm_headers(), timeout=90)
+            if retry_response.ok:
+                response = retry_response
+            else:
+                retry_error_preview = _preview_text(retry_response.text, 500)
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"LLM API error: {retry_response.status_code} | {retry_error_preview}",
+                )
+        else:
+            raise HTTPException(status_code=502, detail=f"LLM API error: {response.status_code} | {error_preview}")
     body = response.json()
     _log_workflow_step(
         5,
@@ -2877,7 +3813,7 @@ def _generate_completion(chat_id: Optional[str], user_prompt: str, system_prompt
         {"chat_id": resolved_chat_id, "response": _summarize_provider_response_for_log(body)},
         verbose_only=True,
     )
-    assistant_response = remove_deepthink(body.get("message", {}).get("content", ""))
+    assistant_response = remove_deepthink(_extract_assistant_content(body))
     _log_agent3_response(assistant_response, stream=False)
     payload["messages"].append({"role": "assistant", "content": assistant_response})
     token_usage = _build_token_usage(messages, assistant_response, body)
@@ -2904,6 +3840,7 @@ def _generate_completion_stream(chat_id: Optional[str], user_prompt: str, system
             yield f"data: {json.dumps(error_obj)}\n\n"
         return _error_stream()
     payload = _build_llm_payload(messages, stream=True)
+    provider = _resolved_llm_provider()
     _log_agent3_prompt(messages, stream=True)
     def _event_generator():
         assistant_response = ""
@@ -2917,18 +3854,46 @@ def _generate_completion_stream(chat_id: Optional[str], user_prompt: str, system
                 {"chat_id": resolved_chat_id, "llm_api": LLM_API, "payload": _summarize_llm_payload_for_log(payload)},
                 verbose_only=True,
             )
-            response = requests.post(LLM_API, json=payload, headers={"Content-Type": "application/json"}, stream=True, timeout=90)
+            response = requests.post(LLM_API, json=payload, headers=_build_llm_headers(), stream=True, timeout=90)
             if response.status_code != 200:
-                yield f"data: {json.dumps({'error': f'LLM API error: {response.status_code}', 'complete': True})}\n\n"
-                return
+                error_preview = _preview_text(response.text, 500)
+                if response.status_code == 400 and provider in {"vllm", "openai"}:
+                    retry_payload = _build_reduced_payload_for_retry(payload, provider)
+                    logger.warning(
+                        "Step 5: Stream LLM returned 400, retrying with reduced payload | chat_id=%s error=%s",
+                        resolved_chat_id,
+                        error_preview,
+                    )
+                    response = requests.post(LLM_API, json=retry_payload, headers=_build_llm_headers(), stream=True, timeout=90)
+                    if response.status_code != 200:
+                        retry_error_preview = _preview_text(response.text, 500)
+                        yield f"data: {json.dumps({'error': f'LLM API error: {response.status_code} | {retry_error_preview}', 'complete': True})}\n\n"
+                        return
+                else:
+                    yield f"data: {json.dumps({'error': f'LLM API error: {response.status_code} | {error_preview}', 'complete': True})}\n\n"
+                    return
             for line in response.iter_lines():
                 if not line:
                     continue
-                try:
-                    data = json.loads(line.decode("utf-8"))
-                except json.JSONDecodeError:
-                    continue
-                if data.get("done") is True:
+                decoded = line.decode("utf-8")
+                if provider in {"vllm", "openai"}:
+                    if not decoded.startswith("data: "):
+                        continue
+                    data_str = decoded[6:]
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        data = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+                else:
+                    try:
+                        data = json.loads(decoded)
+                    except json.JSONDecodeError:
+                        continue
+
+                chunk, done = _extract_stream_chunk_and_done(data, provider)
+                if done:
                     final_event = data
                     _log_workflow_step(
                         5,
@@ -2936,7 +3901,6 @@ def _generate_completion_stream(chat_id: Optional[str], user_prompt: str, system
                         {"chat_id": resolved_chat_id, "event": _summarize_provider_response_for_log(final_event)},
                         verbose_only=True,
                     )
-                chunk = data.get("message", {}).get("content")
                 if not chunk:
                     continue
                 chunk_count += 1
@@ -2958,12 +3922,12 @@ def _generate_completion_stream(chat_id: Optional[str], user_prompt: str, system
                 fallback_response = requests.post(
                     LLM_API,
                     json=fallback_payload,
-                    headers={"Content-Type": "application/json"},
+                    headers=_build_llm_headers(),
                     timeout=90,
                 )
                 if fallback_response.ok:
                     fallback_body = fallback_response.json()
-                    fallback_text = remove_deepthink((fallback_body.get("message", {}) or {}).get("content", "")).strip()
+                    fallback_text = remove_deepthink(_extract_assistant_content(fallback_body)).strip()
                     if fallback_text:
                         cleaned = fallback_text
                         final_event = fallback_body
@@ -3246,7 +4210,7 @@ def chat(req: ChatRequest):
     return _generate_completion(req.chat_id, user_prompt)
 
 @app.post("/api/chatbot/agent-chat")
-async def agent_chat(req: ChatRequest):
+async def agent_chat(req: ChatRequest, request: Request):
     """
     Multi‑agent endpoint: classifies intent and routes to specialist agents.
     """
@@ -3255,18 +4219,56 @@ async def agent_chat(req: ChatRequest):
     _log_workflow_step(
         1,
         "Receive /api/chatbot/agent-chat request",
-        {"chat_id": req.chat_id, "stream": req.stream, "question": req.question, "press_releases_count": len(req.press_releases)},
+        {
+            "chat_id": req.chat_id,
+            "stream": req.stream,
+            "question": req.question,
+            "press_releases_count": len(req.press_releases),
+            "include_neighbor_pages": req.include_neighbor_pages,
+            "statistics_generation": req.statistics_generation,
+        },
     )
     # If press releases are provided, fallback to original chat
     if req.press_releases:
         return chat(req)
 
+    if req.statistics_generation:
+        incoming_headers = {
+            "Authorization": request.headers.get("authorization", ""),
+            "Cookie": request.headers.get("cookie", ""),
+            "X-Auth-Token": request.headers.get("x-auth-token", ""),
+            "X-CSRF-Token": request.headers.get("x-csrf-token", ""),
+        }
+        statistics_result = _run_statistics_generation(
+            req.question,
+            req.chat_id,
+            forwarded_headers=incoming_headers,
+        )
+        if req.stream:
+            generator = _stream_text_response(
+                statistics_result["answer"],
+                statistics_result["chat_id"],
+                IntentType.STATS_COUNT,
+                {"classification": statistics_result.get("classification", {})},
+            )
+            return StreamingResponse(generator, media_type="text/event-stream")
+        return statistics_result
+
     if req.stream:
         intent_result = await IntentClassifier.classify(req.question)
-        generator = await _build_agent_stream(req.question, req.chat_id, intent_result)
+        generator = await _build_agent_stream(
+            req.question,
+            req.chat_id,
+            intent_result,
+            include_neighbor_pages=req.include_neighbor_pages,
+        )
         return StreamingResponse(generator, media_type="text/event-stream")
 
-    result = await orchestrate_agent_chat(req.question, req.chat_id)
+    result = await orchestrate_agent_chat(
+        req.question,
+        req.chat_id,
+        include_neighbor_pages=req.include_neighbor_pages,
+    )
     _log_verbose("/api/chatbot/agent-chat response", result)
     return result
 

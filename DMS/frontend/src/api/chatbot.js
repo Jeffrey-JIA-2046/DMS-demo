@@ -214,13 +214,15 @@ export const askDocumentQuestion = async ({ question, chatId, pressReleases }, o
   return { answer: text, chat_id: meta?.chat_id ?? chatId ?? null, token_usage: meta?.token_usage ?? null }
 }
 
-export const askAgentQuestion = async ({ question, chatId }, onChunk) => {
+export const askAgentQuestion = async ({ question, chatId, includeNeighborPages = false, statisticsGeneration = false }, onChunk) => {
   const { text, meta } = await streamSseTextResponse({
     path: '/api/chatbot/agent-chat',
     body: {
       question,
       chat_id: chatId,
       stream: true,
+      include_neighbor_pages: Boolean(includeNeighborPages),
+      statistics_generation: Boolean(statisticsGeneration),
     },
     onChunk,
   })
