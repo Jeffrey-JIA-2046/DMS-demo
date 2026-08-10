@@ -16,6 +16,7 @@ import {
   listFolderTree,
   listSupervisorOptions,
   delegateApproval,
+  resubmitApproval,
   rejectDocument,
   updateFolder,
   updateDocument,
@@ -41,6 +42,7 @@ import { AnnounceContext } from '../contexts/AnnounceContext'
 import { findFolderBreadcrumbs, findFolderNode } from '../utils/folders'
 import { validateMetadataValues } from '../utils/metadataTemplate'
 import { createKnowledgeTopic, linkKnowledgeDocument } from '../api/knowledge'
+import { addFavorite, fetchMyDashboardTasks, removeFavorite } from '../api/dashboard'
 
 const buildDefaultFilters = () => ({
   query: '',
@@ -520,8 +522,8 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   const [expandedLoading, setExpandedLoading] = useState(false)
   const [expandedError, setExpandedError] = useState('')
   const [chatbotOpen, setChatbotOpen] = useState(false)
-  // Ensure details view opens on the content tab when a document is selected
-  const [detailsInitialTab, setDetailsInitialTab] = useState('content')
+  // Keep review/navigation focused on metadata and approval first.
+  const [detailsInitialTab, setDetailsInitialTab] = useState('details')
   const [ocrPrompt, setOcrPrompt] = useState('prompt_ocr')
   const [ocrBusy, setOcrBusy] = useState(false)
   const [ocrLoadingCached, setOcrLoadingCached] = useState(false)
@@ -547,6 +549,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   const [embeddingMessage, setEmbeddingMessage] = useState('')
   const [embeddingError, setEmbeddingError] = useState('')
   const [embeddingResult, setEmbeddingResult] = useState(null)
+  const [favoriteKeys, setFavoriteKeys] = useState(() => new Set())
   const paginationRestoreDoneRef = useRef(false)
 
   const normalizedFilters = useMemo(() => ({
@@ -917,11 +920,18 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
       return
     }
     const targetId = (navigationContext.documentId ?? '').toString().trim()
-    if (!targetId) {
+    const targetFolderId = (navigationContext.folderId ?? '').toString().trim()
+    if (!targetId && !targetFolderId) {
       return
     }
     let cancelled = false
     const openLinkedDocument = async () => {
+      if (!targetId && targetFolderId) {
+        setFilterQueryLocal('')
+        setFilters((prev) => ({ ...buildDefaultFilters(), folderId: targetFolderId || prev.folderId }))
+        setPageState((prev) => ({ ...prev, page: 0 }))
+        return
+      }
       try {
         const detail = await fetchDocument(targetId)
         if (cancelled) {
@@ -929,6 +939,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
         }
         const resolvedId = detail?.id != null ? String(detail.id) : targetId
         setSelectedId(resolvedId)
+        setDetailsInitialTab('details')
         setSelectedDocument(detail)
         setFilterQueryLocal('')
         setFilters((prev) => ({ ...buildDefaultFilters(), folderId: prev.folderId }))
@@ -945,6 +956,36 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
       cancelled = true
     }
   }, [navigationContext?.stamp, isAuthenticated])
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setFavoriteKeys(new Set())
+      return
+    }
+    let cancelled = false
+    const loadFavorites = async () => {
+      try {
+        const dashboard = await fetchMyDashboardTasks()
+        if (cancelled) {
+          return
+        }
+        const keys = new Set(
+          (Array.isArray(dashboard?.favorites) ? dashboard.favorites : [])
+            .filter((item) => item?.targetType && item?.targetId)
+            .map((item) => `${String(item.targetType).toUpperCase()}:${String(item.targetId)}`)
+        )
+        setFavoriteKeys(keys)
+      } catch {
+        if (!cancelled) {
+          setFavoriteKeys(new Set())
+        }
+      }
+    }
+    loadFavorites()
+    return () => {
+      cancelled = true
+    }
+  }, [isAuthenticated])
 
   const loadFolderTree = useCallback(async () => {
     setFolderLoading(true)
@@ -1266,6 +1307,44 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     } finally {
       setDraggedDocumentId(null)
       setMovingDocumentId(null)
+    }
+  }
+
+  const isFavorite = (targetType, targetId) => {
+    if (!targetType || !targetId) {
+      return false
+    }
+    return favoriteKeys.has(`${String(targetType).toUpperCase()}:${String(targetId)}`)
+  }
+
+  const handleFavoriteToggle = async (targetType, targetId) => {
+    if (!targetType || !targetId || !isAuthenticated) {
+      return
+    }
+    const normalizedType = String(targetType).toUpperCase()
+    const normalizedId = String(targetId)
+    const key = `${normalizedType}:${normalizedId}`
+    const currentlyFavorite = favoriteKeys.has(key)
+
+    try {
+      if (currentlyFavorite) {
+        await removeFavorite({ targetType: normalizedType, targetId: normalizedId })
+      } else {
+        await addFavorite({ targetType: normalizedType, targetId: normalizedId })
+      }
+
+      setFavoriteKeys((prev) => {
+        const next = new Set(prev)
+        if (currentlyFavorite) {
+          next.delete(key)
+        } else {
+          next.add(key)
+        }
+        return next
+      })
+      toast && toast(currentlyFavorite ? 'Removed from favorites' : 'Added to favorites', { type: 'success' })
+    } catch (err) {
+      toast && toast(err.message || 'Failed to update favorite', { type: 'error' })
     }
   }
 
@@ -2288,6 +2367,28 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     }
   }
 
+  const handleApprovalResubmit = async (documentId, payload) => {
+    if (!documentId) return
+    setBusy(true)
+    setError('')
+    try {
+      const updated = await resubmitApproval(documentId, payload || {})
+      if (selectedDocument?.id === documentId) {
+        setSelectedDocument(updated)
+      }
+      if (expandedDocument?.id === documentId) {
+        setExpandedDocument(updated)
+      }
+      await loadDocuments()
+      toast && toast('Approval workflow resubmitted', { type: 'success' })
+    } catch (err) {
+      setError(err.message)
+      toast && toast(err.message || 'Failed to resubmit approval workflow', { type: 'error' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const handleCreateTopicFromDocument = (doc) => {
     if (!doc?.id) return
     if (!isAuthenticated) {
@@ -2650,30 +2751,42 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
 
         if (blockId === 'workspace') {
           const workspaceSelectionInfo = (
-            <p className="folder-selection">
-              {filters.folderId && workspaceSelectionPath?.length ? (
-                <>
-                  Selected:{' '}
-                  {workspaceSelectionPath.map((part, i) => (
-                    <span key={i} className="folder-selection__part">
-                      <span className="folder-selection__icon" aria-hidden>
-                        📁
+            <>
+              <p className="folder-selection">
+                {filters.folderId && workspaceSelectionPath?.length ? (
+                  <>
+                    Selected:{' '}
+                    {workspaceSelectionPath.map((part, i) => (
+                      <span key={i} className="folder-selection__part">
+                        <span className="folder-selection__icon" aria-hidden>
+                          📁
+                        </span>
+                        <button
+                          type="button"
+                          className={`folder-selection__link ${part.id === filters.folderId ? 'is-current' : ''}`}
+                          onClick={() => handleFolderSelect(part.id)}
+                        >
+                          {part.name}
+                        </button>
+                        {i < workspaceSelectionPath.length - 1 && <span className="folder-selection__sep"> / </span>}
                       </span>
-                      <button
-                        type="button"
-                        className={`folder-selection__link ${part.id === filters.folderId ? 'is-current' : ''}`}
-                        onClick={() => handleFolderSelect(part.id)}
-                      >
-                        {part.name}
-                      </button>
-                      {i < workspaceSelectionPath.length - 1 && <span className="folder-selection__sep"> / </span>}
-                    </span>
-                  ))}
-                </>
-              ) : (
-                'Showing all documents'
+                    ))}
+                  </>
+                ) : (
+                  'Showing all documents'
+                )}
+              </p>
+              {filters.folderId && (
+                <button
+                  type="button"
+                  className="ghost ghost--small"
+                  onClick={() => handleFavoriteToggle('FOLDER', filters.folderId)}
+                  title={isFavorite('FOLDER', filters.folderId) ? 'Remove folder bookmark' : 'Bookmark this folder'}
+                >
+                  {isFavorite('FOLDER', filters.folderId) ? '★ Favorited Folder' : '☆ Favorite Folder'}
+                </button>
               )}
-            </p>
+            </>
           )
 
           return (
@@ -2713,6 +2826,8 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
               canUpload={documentPermissions?.write ?? false}
               onCreateTopicFromDocument={handleCreateTopicFromDocument}
               onFindRelatedTopics={handleFindRelatedTopicsFromDocument}
+              isDocumentFavorite={(documentId) => isFavorite('DOCUMENT', documentId)}
+              onToggleDocumentFavorite={(documentId) => handleFavoriteToggle('DOCUMENT', documentId)}
               onContextAction={async (documentId, action) => {
                 try {
                   if (action === 'copy') {
@@ -2845,6 +2960,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
               onApprove={(id, payload) => handleApprovalDecision(id, payload, 'approve')}
               onReject={(id, note) => handleApprovalDecision(id, note, 'reject')}
               onDelegate={handleDelegateApproval}
+                onResubmitApproval={handleApprovalResubmit}
               busy={busy}
               initialTab={detailsInitialTab}
               downloadUrlBuilder={buildDownloadUrl}
@@ -2887,7 +3003,6 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
               {error && <p className="feedback feedback--error">{error}</p>}
             </div>
           </div>
-        )
       })}
       {expandedDocumentId && (
         <div className="document-viewer-modal" role="dialog" aria-modal="true">
@@ -2915,6 +3030,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
                 onApprove={(id, payload) => handleApprovalDecision(id, payload, 'approve')}
                 onReject={(id, note) => handleApprovalDecision(id, note, 'reject')}
                 onDelegate={handleDelegateApproval}
+                onResubmitApproval={handleApprovalResubmit}
                 busy={busy}
                 downloadUrlBuilder={buildDownloadUrl}
                 initialTab="content"

@@ -4,4 +4,9 @@ chatbot/local_models/multilingual-e5-small
 chatbot/.venv
 /DMS/backend/target/classes
 /DMS/backend/target/classes
+/DMS/backend/target/
+/DMS/frontend/node_modules/
+/DMS/mobile-app/node_modules/
+/DMS/tools/node-scanner-bridge/daemon/
+/.codeartsdoer/
 *.class

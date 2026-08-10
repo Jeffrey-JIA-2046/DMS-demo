@@ -46,6 +46,7 @@ const SYSTEM_METADATA_KEYS = ['documentDate', 'approvalDate', 'expiryDate', 'arc
 
 const STATUS_TONE = {
   DRAFT: 'warning',
+  REVIEWED: 'info',
   ACTIVE: 'success',
   REJECTED: 'danger',
   ARCHIVED: 'neutral',
@@ -110,6 +111,7 @@ export default function DocumentDetails({
   onApprove,
   onReject,
   onDelegate,
+  onResubmitApproval,
   busy,
   downloadUrlBuilder,
   initialTab = 'content',
@@ -142,6 +144,8 @@ export default function DocumentDetails({
   const [approvalNote, setApprovalNote] = useState('')
   const [approvalDates, setApprovalDates] = useState({ documentDate: '', expiryDate: '' })
   const [delegateApproverId, setDelegateApproverId] = useState('')
+  const [resubmitReviewerId, setResubmitReviewerId] = useState('')
+  const [resubmitApproverId, setResubmitApproverId] = useState('')
   const [delegateOptions, setDelegateOptions] = useState([])
   const [delegateLoading, setDelegateLoading] = useState(false)
   const [delegateError, setDelegateError] = useState('')
@@ -192,6 +196,8 @@ export default function DocumentDetails({
       expiryDate: document.metadata?.expiryDate ?? '',
     })
     setDelegateApproverId('')
+    setResubmitReviewerId('')
+    setResubmitApproverId('')
     setDelegateError('')
     setApprovalModal(mode)
   }
@@ -201,6 +207,8 @@ export default function DocumentDetails({
     setApprovalNote('')
     setApprovalDates({ documentDate: '', expiryDate: '' })
     setDelegateApproverId('')
+    setResubmitReviewerId('')
+    setResubmitApproverId('')
     setDelegateError('')
   }
 
@@ -214,6 +222,14 @@ export default function DocumentDetails({
     }
     if (approvalModal === 'delegate' && !delegateApproverId) {
       toast && toast('Select a user to delegate to', { type: 'error' })
+      return
+    }
+    if (approvalModal === 'resubmit' && (!resubmitReviewerId || !resubmitApproverId)) {
+      toast && toast('Select reviewer and approver to resubmit', { type: 'error' })
+      return
+    }
+    if (approvalModal === 'resubmit' && resubmitReviewerId === resubmitApproverId) {
+      toast && toast('Reviewer and approver cannot be the same user', { type: 'error' })
       return
     }
     if (approvalModal === 'approve') {
@@ -236,6 +252,13 @@ export default function DocumentDetails({
         await onReject(document.id, trimmed)
       } else if (approvalModal === 'delegate' && typeof onDelegate === 'function') {
         await onDelegate(document.id, delegateApproverId, trimmed)
+      } else if (approvalModal === 'resubmit' && typeof onResubmitApproval === 'function') {
+        const payload = {
+          reviewerId: resubmitReviewerId,
+          approverId: resubmitApproverId,
+          ...(trimmed ? { note: trimmed } : {}),
+        }
+        await onResubmitApproval(document.id, payload)
       }
       closeApprovalModal()
     } catch (err) {
@@ -244,7 +267,7 @@ export default function DocumentDetails({
   }
 
   useEffect(() => {
-    if (approvalModal !== 'delegate') {
+    if (approvalModal !== 'delegate' && approvalModal !== 'resubmit') {
       return
     }
     let cancelled = false
@@ -565,23 +588,45 @@ export default function DocumentDetails({
   const statusTone = STATUS_TONE[document?.status] || 'neutral'
   const approvalInfo = document?.approval ?? null
   const approvalNotes = Array.isArray(document?.approvalNotes) ? document.approvalNotes : []
+  const approvalUploader = approvalInfo?.uploaderDisplayName || approvalInfo?.uploaderUsername || document?.owner || '—'
+  const approvalReviewer = approvalInfo?.reviewerDisplayName || approvalInfo?.reviewerUsername || approvalInfo?.reviewerId || 'Not assigned'
+  const approvalApprover = approvalInfo?.approverDisplayName || approvalInfo?.approverUsername || 'Not assigned'
+  const awaitingApproval = !approvalInfo?.decidedAt && (document?.status === 'DRAFT' || document?.status === 'REVIEWED')
   const approvalNeedsDates = approvalModal === 'approve'
     && (!String(document?.metadata?.documentDate ?? '').trim() || !String(document?.metadata?.expiryDate ?? '').trim())
-  const isApprover = approvalInfo?.approverUsername && currentUser?.username
-    ? approvalInfo.approverUsername.toLowerCase() === currentUser.username.toLowerCase()
+  const currentUsername = currentUser?.username ? String(currentUser.username).toLowerCase() : null
+  const currentUserId = currentUser?.id ? String(currentUser.id) : null
+  const isApprover = approvalInfo?.approverUsername && currentUsername
+    ? approvalInfo.approverUsername.toLowerCase() === currentUsername
     : false
+  const isReviewerByUsername = approvalInfo?.reviewerUsername && currentUsername
+    ? approvalInfo.reviewerUsername.toLowerCase() === currentUsername
+    : false
+  const isReviewerById = approvalInfo?.reviewerId && currentUserId
+    ? String(approvalInfo.reviewerId) === currentUserId
+    : false
+  const isReviewer = isReviewerByUsername || isReviewerById
   const isRetentionTask = taskContext?.taskType === 'RETENTION'
     && ['PENDING', 'IN_PROGRESS', 'BLOCKED'].includes(taskContext?.status)
-  const awaitingApproval = document?.status === 'DRAFT'
-  const canEditMetadata = (documentPermissions?.write ?? false) || (isApprover && awaitingApproval)
-  const canAddApprovalNote = isApprover && awaitingApproval && typeof onAddApprovalNote === 'function'
+  const isReviewerStageApproval = document?.status === 'DRAFT'
+  const isApproverStageApproval = document?.status === 'REVIEWED'
+  const canManageDraftApproval = (isReviewer && isReviewerStageApproval)
+    || (isApprover && (isReviewerStageApproval || isApproverStageApproval))
+  const canEditMetadata = (documentPermissions?.write ?? false) || canManageDraftApproval
+  const canAddApprovalNote = canManageDraftApproval && typeof onAddApprovalNote === 'function'
   const canDecideApproval =
-    ((isApprover && awaitingApproval) || isRetentionTask)
+    (canManageDraftApproval || isRetentionTask)
     && typeof onApprove === 'function'
     && typeof onReject === 'function'
   const canDelegateApproval =
-    ((isApprover && awaitingApproval) || isRetentionTask)
+    (canManageDraftApproval || isRetentionTask)
     && typeof onDelegate === 'function'
+  const uploaderUsername = (approvalInfo?.uploaderUsername || document?.owner || '').toLowerCase()
+  const canResubmitRejectedApproval =
+    document?.status === 'REJECTED'
+    && !!currentUsername
+    && uploaderUsername === currentUsername
+    && typeof onResubmitApproval === 'function'
   const canPdfNavigate = previewState.status === 'ready' && previewState.mode === 'pdf' && pdfPager.status === 'ready' && !pdfPager.nativeViewer && pdfPager.pageCount > 1
   const documentDateValue = form.metadata?.documentDate ?? ''
   const expiryDateValue = form.metadata?.expiryDate ?? ''
@@ -917,11 +962,26 @@ export default function DocumentDetails({
                       )}
                     </div>
                   )}
+                  {canResubmitRejectedApproval && (
+                    <div className="approval-card__actions">
+                      <button type="button" className="primary" onClick={() => openApprovalModal('resubmit')} disabled={busy}>
+                        Resubmit workflow
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <dl className="metadata metadata--compact">
                   <div>
+                    <dt>Uploader</dt>
+                    <dd>{approvalUploader}</dd>
+                  </div>
+                  <div>
+                    <dt>Reviewer</dt>
+                    <dd>{approvalReviewer}</dd>
+                  </div>
+                  <div>
                     <dt>Approver</dt>
-                    <dd>{approvalInfo ? `${approvalInfo.approverDisplayName || approvalInfo.approverUsername}` : 'Not assigned'}</dd>
+                    <dd>{approvalApprover}</dd>
                   </div>
                   <div>
                     <dt>Requested</dt>
@@ -947,6 +1007,7 @@ export default function DocumentDetails({
                     <p className="empty-state">No notes yet.</p>
                   )}
                 </div>
+                <DocumentWorkflowPanel documentId={document.id} toast={toast} />
               </div>
             )}
             {activeDetailsSection === 'metadata' && (
@@ -1307,6 +1368,7 @@ export default function DocumentDetails({
                   {approvalModal === 'approve' && 'Approve document'}
                   {approvalModal === 'reject' && 'Reject document'}
                   {approvalModal === 'delegate' && 'Delegate approval'}
+                  {approvalModal === 'resubmit' && 'Resubmit approval workflow'}
                 </h3>
               </div>
               <button type="button" className="ghost" onClick={closeApprovalModal}>
@@ -1330,7 +1392,41 @@ export default function DocumentDetails({
                 </select>
               </label>
             )}
-            {approvalModal === 'delegate' && delegateError && <small className="feedback feedback--error">{delegateError}</small>}
+            {approvalModal === 'resubmit' && (
+              <>
+                <label>
+                  <span>Reviewer</span>
+                  <select
+                    value={resubmitReviewerId}
+                    onChange={(e) => setResubmitReviewerId(e.target.value)}
+                    disabled={delegateLoading || busy}
+                  >
+                    <option value="">Select reviewer</option>
+                    {delegateOptions.map((option) => (
+                      <option key={`reviewer-${option.id}`} value={option.id}>
+                        {option.displayName || option.username}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Approver</span>
+                  <select
+                    value={resubmitApproverId}
+                    onChange={(e) => setResubmitApproverId(e.target.value)}
+                    disabled={delegateLoading || busy}
+                  >
+                    <option value="">Select approver</option>
+                    {delegateOptions.map((option) => (
+                      <option key={`approver-${option.id}`} value={option.id}>
+                        {option.displayName || option.username}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </>
+            )}
+            {(approvalModal === 'delegate' || approvalModal === 'resubmit') && delegateError && <small className="feedback feedback--error">{delegateError}</small>}
             {approvalNeedsDates && (
               <>
                 <label>
@@ -1359,7 +1455,7 @@ export default function DocumentDetails({
               <textarea
                 value={approvalNote}
                 onChange={(e) => setApprovalNote(e.target.value)}
-                placeholder={approvalModal === 'note' ? 'Share guidance with the document owner' : approvalModal === 'delegate' ? 'Optionally explain why this is being delegated' : 'Share context for your decision'}
+                placeholder={approvalModal === 'note' ? 'Share guidance with the document owner' : approvalModal === 'delegate' ? 'Optionally explain why this is being delegated' : approvalModal === 'resubmit' ? 'Optionally explain why this workflow is resubmitted' : 'Share context for your decision'}
               />
             </label>
             {approvalModal === 'note' && <small>Notes remain visible in the approval history.</small>}
@@ -1370,12 +1466,13 @@ export default function DocumentDetails({
               <button
                 type="submit"
                 className={approvalModal === 'reject' ? 'ghost ghost--danger' : 'primary'}
-                disabled={busy || (approvalModal === 'note' && !approvalNote.trim()) || (approvalModal === 'delegate' && (!delegateApproverId || delegateLoading))}
+                disabled={busy || (approvalModal === 'note' && !approvalNote.trim()) || (approvalModal === 'delegate' && (!delegateApproverId || delegateLoading)) || (approvalModal === 'resubmit' && (!resubmitReviewerId || !resubmitApproverId || delegateLoading || resubmitReviewerId === resubmitApproverId))}
               >
                 {approvalModal === 'note' && 'Save note'}
                 {approvalModal === 'approve' && 'Approve document'}
                 {approvalModal === 'reject' && 'Reject document'}
                 {approvalModal === 'delegate' && 'Delegate approval'}
+                {approvalModal === 'resubmit' && 'Resubmit workflow'}
               </button>
             </div>
           </form>

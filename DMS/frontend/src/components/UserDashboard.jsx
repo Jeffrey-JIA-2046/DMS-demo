@@ -103,12 +103,13 @@ const endOfDayMs = (baseMs, daysAhead = 0) => {
 
 const taskCreatedMs = (task) => parseIso(task?.createdAt) ?? parseIso(task?.updatedAt)
 
-export default function UserDashboard() {
+export default function UserDashboard({ onOpenFavorite = null }) {
   // Fast-refresh probe: add a lightweight debug log to detect HMR without full reload
   console.debug('UserDashboard render — fast-refresh probe', new Date().toISOString())
   const { isAuthenticated, currentUser } = useContext(AuthContext)
   const [tasks, setTasks] = useState([])
   const [generatedAt, setGeneratedAt] = useState(null)
+  const [favorites, setFavorites] = useState([])
   const [activeMonth, setActiveMonth] = useState(() => monthAnchor(new Date()))
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -130,6 +131,7 @@ export default function UserDashboard() {
     try {
       const response = await fetchMyDashboardTasks()
       setTasks(Array.isArray(response?.tasks) ? response.tasks : [])
+      setFavorites(Array.isArray(response?.favorites) ? response.favorites : [])
       setGeneratedAt(response?.generatedAt ?? null)
     } catch (err) {
       setError(err.message || 'Unable to load dashboard tasks')
@@ -393,7 +395,7 @@ export default function UserDashboard() {
       </section>
 
       <div className="dashboard__grid">
-        <section className="dashboard-panel">
+        <section className="dashboard-panel dashboard-panel--calendar">
           <div className="dashboard-panel__header">
             <div>
               <p className="eyebrow">Calendar</p>
@@ -454,7 +456,7 @@ export default function UserDashboard() {
           </div>
         </section>
 
-        <section className="dashboard-panel">
+        <section className="dashboard-panel dashboard-panel--workflow">
           <div className="dashboard-panel__header">
             <div>
               <p className="eyebrow">Workflow queue</p>
@@ -470,7 +472,7 @@ export default function UserDashboard() {
               <p>No pending workflow tasks at the moment.</p>
             </div>
           ) : (
-            <ul className="dashboard__todo-list">
+            <ul className="dashboard__todo-list dashboard__todo-list--workflow">
               {workflowTodos.map((task) => (
                 <li key={task.id} className="dashboard__todo-item">
                   <div>
@@ -533,6 +535,56 @@ export default function UserDashboard() {
                         onClick={() => openReview(task)}
                       >
                         View
+                      </button>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <section className="dashboard-panel">
+          <div className="dashboard-panel__header">
+            <div>
+              <p className="eyebrow">Favorites</p>
+              <h3>Bookmarked folders and documents</h3>
+            </div>
+            <span className="dashboard__todo-count">{favorites.length}</span>
+          </div>
+          {loading && favorites.length === 0 ? (
+            <p className="dashboard__empty">Loading favorites…</p>
+          ) : favorites.length === 0 ? (
+            <div className="dashboard__empty">
+              <h4>No favorites yet</h4>
+              <p>Bookmark folders or documents from Document Management to see them here.</p>
+            </div>
+          ) : (
+            <ul className="dashboard__todo-list">
+              {favorites.map((favorite) => (
+                <li key={`${favorite.targetType}:${favorite.targetId}`} className="dashboard__todo-item">
+                  <div>
+                    <p className="dashboard__todo-title">
+                      {favorite.targetType === 'FOLDER' ? '📁 ' : '📄 '}
+                      {favorite.title}
+                    </p>
+                    <small className="dashboard__todo-step">{favorite.subtitle || (favorite.targetType === 'FOLDER' ? 'Folder' : 'Document')}</small>
+                  </div>
+                  <div className="dashboard__todo-meta">
+                    <span className={`dashboard__status-dot status-${favorite.targetType === 'FOLDER' ? 'in_progress' : 'pending'}`}>
+                      {favorite.targetType?.toLowerCase()}
+                    </span>
+                    {typeof onOpenFavorite === 'function' && (
+                      <button
+                        type="button"
+                        className="ghost ghost--small"
+                        onClick={() => onOpenFavorite(
+                          favorite.targetType === 'FOLDER'
+                            ? { folderId: String(favorite.targetId) }
+                            : { documentId: String(favorite.targetId) }
+                        )}
+                      >
+                        Open
                       </button>
                     )}
                   </div>

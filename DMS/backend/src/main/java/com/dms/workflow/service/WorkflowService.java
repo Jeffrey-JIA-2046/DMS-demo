@@ -26,10 +26,16 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import com.dms.audit.service.AuditService;
+import com.dms.codetable.repository.CodeTableRepository;
 import com.dms.document.model.Document;
 import com.dms.document.repository.DocumentRepository;
 import com.dms.exception.ResourceNotFoundException;
 import com.dms.security.Role;
+import com.dms.task.model.TaskPriority;
+import com.dms.task.model.TaskStatus;
+import com.dms.task.model.TaskType;
+import com.dms.task.model.UserTask;
+import com.dms.task.repository.UserTaskRepository;
 import com.dms.user.model.AppUser;
 import com.dms.user.repository.AppUserRepository;
 import com.dms.workflow.dto.AutoActivityInfoResponse;
@@ -60,6 +66,8 @@ public class WorkflowService {
     private final AuditService auditService;
     private final Clock clock;
     private final ObjectMapper objectMapper;
+    private final CodeTableRepository codeTableRepository;
+    private final UserTaskRepository userTaskRepository;
 
     public WorkflowService(
         WorkflowRepository workflowRepository,
@@ -68,7 +76,9 @@ public class WorkflowService {
         List<AutoActivity> autoActivities,
         AuditService auditService,
         Clock clock,
-        ObjectMapper objectMapper
+        ObjectMapper objectMapper,
+        CodeTableRepository codeTableRepository,
+        UserTaskRepository userTaskRepository
     ) {
         this.workflowRepository = workflowRepository;
         this.documentRepository = documentRepository;
@@ -77,6 +87,8 @@ public class WorkflowService {
         this.auditService = auditService;
         this.clock = clock;
         this.objectMapper = objectMapper;
+        this.codeTableRepository = codeTableRepository;
+        this.userTaskRepository = userTaskRepository;
     }
 
     @Transactional(readOnly = true)
@@ -109,6 +121,7 @@ public class WorkflowService {
         template.setTemplateGroupId(template.getId());
         template.setName(request.name().trim());
         template.setDescription(trimOrNull(request.description()));
+        template.setBpmnXml(trimOrNull(request.bpmnXml()));
         template.setPublished(false);
         template.setLifecycleStatus(WorkflowTemplateLifecycle.DRAFT);
         template.setVersionNumber(0);
@@ -132,6 +145,7 @@ public class WorkflowService {
         }
         current.setName(request.name().trim());
         current.setDescription(trimOrNull(request.description()));
+        current.setBpmnXml(trimOrNull(request.bpmnXml()));
         current.setActivities(normalizeActivities(request.activities()));
         current.setConnections(normalizeConnections(request.connections()));
         current.setLifecycleStatus(WorkflowTemplateLifecycle.DRAFT);
@@ -217,19 +231,10 @@ public class WorkflowService {
     @Transactional(readOnly = true)
     public List<String> listDocumentCategories() {
         try {
-            List<String> fromDocs = documentRepository.findAll().stream()
-                .map(Document::getCategory)
+            return codeTableRepository.findActiveByTableCode("DOCUMENT_CATEGORY").stream()
+                .map(item -> item.getItemCode())
                 .filter(StringUtils::hasText)
                 .map(String::trim)
-                .distinct()
-                .toList();
-            List<String> fromBindings = workflowRepository.findAllBindings().stream()
-                .map(WorkflowCategoryBinding::getCategory)
-                .filter(StringUtils::hasText)
-                .map(String::trim)
-                .distinct()
-                .toList();
-            return java.util.stream.Stream.concat(fromDocs.stream(), fromBindings.stream())
                 .distinct()
                 .sorted(String.CASE_INSENSITIVE_ORDER)
                 .toList();
@@ -295,26 +300,27 @@ public class WorkflowService {
     }
 
     @Transactional
-    public void startWorkflowForDocument(Document document, String actor) {
+    public boolean startWorkflowForDocument(Document document, String actor, String reviewerId) {
         if (document == null || !StringUtils.hasText(document.getId()) || !StringUtils.hasText(document.getCategory())) {
-            return;
+            return false;
         }
 
         try {
             Optional<WorkflowCategoryBinding> bindingOpt = workflowRepository.findActiveBindingByCategory(document.getCategory());
             if (bindingOpt.isEmpty()) {
-                return;
+                return false;
             }
             WorkflowCategoryBinding binding = bindingOpt.get();
             WorkflowTemplate template = workflowRepository.findTemplateById(binding.getTemplateId())
                 .orElse(null);
             if (template == null || !template.isPublished()) {
-                return;
+                return false;
             }
 
             WorkflowInstance instance = new WorkflowInstance();
             instance.setId(UUID.randomUUID().toString());
             instance.setDocumentId(document.getId());
+            instance.setReviewerId(trimOrNull(reviewerId));
             instance.setTemplateId(template.getId());
             instance.setTemplateName(template.getName());
             instance.setStatus(WorkflowInstanceStatus.RUNNING);
@@ -326,6 +332,7 @@ public class WorkflowService {
 
             auditService.record("WORKFLOW_INSTANCE_CREATED", document.getId(), actorOrSystem(actor),
                 "started workflow instance " + instance.getId() + " using template " + template.getName());
+            return true;
         } catch (IOException ex) {
             throw new RuntimeException("Failed to start workflow instance", ex);
         }
@@ -369,7 +376,7 @@ public class WorkflowService {
             }
 
             AppUser actorUser = requireUser(actor);
-            enforceManualAssignee(current, document, actorUser);
+            enforceManualAssignee(current, document, instance, actorUser);
 
             WorkflowStepLog waitingStep = findLastStep(instance, step -> Objects.equals(step.getActivityId(), current.getId())
                 && step.getStatus() == WorkflowStepStatus.WAITING_MANUAL)
@@ -472,6 +479,7 @@ public class WorkflowService {
                     instance.setStatus(WorkflowInstanceStatus.COMPLETED);
                     instance.setCurrentActivityId(null);
                     instance.setEndedAt(Instant.now(clock));
+                    completeWorkflowTask(document, TaskStatus.COMPLETED, "Workflow completed", actor);
                     auditStep(document, step, actor);
                     return;
                 }
@@ -495,6 +503,7 @@ public class WorkflowService {
                         step.setFinishedAt(Instant.now(clock));
                         instance.setStatus(WorkflowInstanceStatus.FAILED);
                         instance.setEndedAt(Instant.now(clock));
+                        completeWorkflowTask(document, TaskStatus.CANCELLED, "Workflow failed", actor);
                         auditStep(document, step, actor);
                         return;
                     }
@@ -504,6 +513,7 @@ public class WorkflowService {
                     step.setFinishedAt(null);
                     step.setNote("Waiting for manual decision" + manualAssigneeDescription(current, document));
                     instance.setStatus(WorkflowInstanceStatus.RUNNING);
+                    upsertWorkflowTask(document, instance, current, actor);
                     auditStep(document, step, actor);
                     return;
                 }
@@ -513,6 +523,7 @@ public class WorkflowService {
                     step.setNote("Unsupported activity type");
                     instance.setStatus(WorkflowInstanceStatus.FAILED);
                     instance.setEndedAt(Instant.now(clock));
+                    completeWorkflowTask(document, TaskStatus.CANCELLED, "Workflow failed", actor);
                     auditStep(document, step, actor);
                     return;
                 }
@@ -523,14 +534,94 @@ public class WorkflowService {
                 instance.setStatus(WorkflowInstanceStatus.COMPLETED);
                 instance.setCurrentActivityId(null);
                 instance.setEndedAt(Instant.now(clock));
+                completeWorkflowTask(document, TaskStatus.COMPLETED, "Workflow completed", actor);
                 return;
             }
             current = activityById.get(nextId);
             if (current == null) {
                 instance.setStatus(WorkflowInstanceStatus.FAILED);
                 instance.setEndedAt(Instant.now(clock));
+                completeWorkflowTask(document, TaskStatus.CANCELLED, "Workflow failed", actor);
                 return;
             }
+        }
+    }
+
+    private void upsertWorkflowTask(Document document, WorkflowInstance instance, WorkflowActivity activity, String actor) {
+        if (document == null || !StringUtils.hasText(document.getId()) || activity == null) {
+            return;
+        }
+        try {
+            Optional<UserTask> existing = userTaskRepository.findByDocumentIdAndTaskType(document.getId(), TaskType.WORKFLOW);
+            UserTask task = existing.orElseGet(UserTask::new);
+            AppUser assignee = resolveManualAssignee(activity, document, instance);
+            task.setTitle("Workflow action required: \"" + document.getTitle() + "\"");
+            task.setDescription("Complete workflow step: " + nullSafeActivityName(activity));
+            task.setTaskType(TaskType.WORKFLOW);
+            task.setPriority(TaskPriority.NORMAL);
+            task.setStatus(TaskStatus.PENDING);
+            task.setWorkflowStep("Awaiting " + nullSafeActivityName(activity));
+            task.setDocumentId(document.getId());
+            task.setDocumentTitle(document.getTitle());
+            task.setDueDate(LocalDate.now(clock).plusDays(2));
+            task.setAssignee(assignee);
+            Instant now = Instant.now(clock);
+            if (task.getCreatedAt() == null) {
+                task.setCreatedAt(now);
+            }
+            task.setUpdatedAt(now);
+            userTaskRepository.save(task);
+        } catch (IOException ex) {
+            auditService.record("WORKFLOW_TASK_SYNC_FAILED", document.getId(), actorOrSystem(actor), ex.getMessage());
+        }
+    }
+
+    private void completeWorkflowTask(Document document, TaskStatus status, String workflowStep, String actor) {
+        if (document == null || !StringUtils.hasText(document.getId())) {
+            return;
+        }
+        try {
+            Optional<UserTask> existing = userTaskRepository.findByDocumentIdAndTaskType(document.getId(), TaskType.WORKFLOW);
+            if (existing.isEmpty()) {
+                return;
+            }
+            UserTask task = existing.get();
+            task.setStatus(status);
+            task.setWorkflowStep(workflowStep);
+            task.setUpdatedAt(Instant.now(clock));
+            userTaskRepository.save(task);
+        } catch (IOException ex) {
+            auditService.record("WORKFLOW_TASK_CLOSE_FAILED", document.getId(), actorOrSystem(actor), ex.getMessage());
+        }
+    }
+
+    private String nullSafeActivityName(WorkflowActivity activity) {
+        return StringUtils.hasText(activity.getName()) ? activity.getName() : "manual step";
+    }
+
+    private AppUser resolveManualAssignee(WorkflowActivity activity, Document document, WorkflowInstance instance) {
+        Map<String, String> config = activity.getConfig() != null ? activity.getConfig() : Map.of();
+        try {
+            String username = trimOrNull(config.get("assigneeUsername"));
+            if (StringUtils.hasText(username)) {
+                return appUserRepository.findByUsername(username).orElse(null);
+            }
+            String assigneeType = resolveEffectiveAssigneeType(activity, instance);
+            if (!StringUtils.hasText(assigneeType)) {
+                return null;
+            }
+            String userId = switch (assigneeType) {
+                case "DOCUMENT_APPROVER" -> trimOrNull(document.getApproverId());
+                case "DOCUMENT_SUPERVISOR" -> trimOrNull(document.getSupervisorId());
+                case "DOCUMENT_REVIEWER" -> instance != null ? trimOrNull(instance.getReviewerId()) : null;
+                default -> null;
+            };
+            if (!StringUtils.hasText(userId)) {
+                return null;
+            }
+            return appUserRepository.findById(userId).orElse(null);
+        } catch (IOException ex) {
+            return null;
         }
     }
 
@@ -867,7 +958,7 @@ public class WorkflowService {
         String assigneeType = trimOrNull(config.get("assigneeType"));
         if (StringUtils.hasText(assigneeType)) {
             switch (assigneeType.toUpperCase(Locale.ROOT)) {
-                case "DOCUMENT_APPROVER", "DOCUMENT_SUPERVISOR", "DOCUMENT_OWNER" -> {
+                case "DOCUMENT_APPROVER", "DOCUMENT_SUPERVISOR", "DOCUMENT_REVIEWER", "DOCUMENT_OWNER" -> {
                 }
                 default -> throw new IllegalArgumentException("Unsupported manual assignee type: " + assigneeType);
             }
@@ -968,6 +1059,7 @@ public class WorkflowService {
         copy.setTemplateGroupId(source.getTemplateGroupId());
         copy.setName(source.getName());
         copy.setDescription(source.getDescription());
+        copy.setBpmnXml(source.getBpmnXml());
         copy.setPublished(source.isPublished());
         copy.setVersionNumber(source.getVersionNumber());
         copy.setLifecycleStatus(source.getLifecycleStatus());
@@ -981,7 +1073,7 @@ public class WorkflowService {
         return copy;
     }
 
-    private void enforceManualAssignee(WorkflowActivity activity, Document document, AppUser actorUser) {
+    private void enforceManualAssignee(WorkflowActivity activity, Document document, WorkflowInstance instance, AppUser actorUser) {
         Map<String, String> config = activity.getConfig() != null ? activity.getConfig() : Map.of();
 
         String username = trimOrNull(config.get("assigneeUsername"));
@@ -997,11 +1089,11 @@ public class WorkflowService {
             }
         }
 
-        String assigneeType = trimOrNull(config.get("assigneeType"));
+        String assigneeType = resolveEffectiveAssigneeType(activity, instance);
         if (!StringUtils.hasText(assigneeType)) {
             return;
         }
-        switch (assigneeType.toUpperCase(Locale.ROOT)) {
+        switch (assigneeType) {
             case "DOCUMENT_APPROVER" -> {
                 if (!StringUtils.hasText(document.getApproverId()) || !document.getApproverId().equals(actorUser.getId())) {
                     throw new AccessDeniedException("Only the document approver can decide this step");
@@ -1012,6 +1104,12 @@ public class WorkflowService {
                     throw new AccessDeniedException("Only the document supervisor can decide this step");
                 }
             }
+            case "DOCUMENT_REVIEWER" -> {
+                String reviewerId = instance != null ? trimOrNull(instance.getReviewerId()) : null;
+                if (!StringUtils.hasText(reviewerId) || !reviewerId.equals(actorUser.getId())) {
+                    throw new AccessDeniedException("Only the document reviewer can decide this step");
+                }
+            }
             case "DOCUMENT_OWNER" -> {
                 if (!StringUtils.hasText(document.getOwner()) || !document.getOwner().equalsIgnoreCase(actorUser.getUsername())) {
                     throw new AccessDeniedException("Only the document owner can decide this step");
@@ -1019,6 +1117,37 @@ public class WorkflowService {
             }
             default -> throw new AccessDeniedException("Unsupported manual assignee type");
         }
+    }
+
+    private String resolveEffectiveAssigneeType(WorkflowActivity activity, WorkflowInstance instance) {
+        Map<String, String> config = activity != null && activity.getConfig() != null ? activity.getConfig() : Map.of();
+        String assigneeType = trimOrNull(config.get("assigneeType"));
+        if (!StringUtils.hasText(assigneeType)) {
+            return null;
+        }
+        String normalized = assigneeType.toUpperCase(Locale.ROOT);
+
+        // Backward-compatible guard: reviewer steps in older templates were sometimes saved
+        // with supervisor assignee type. Prefer the explicit reviewer when available.
+        if ("DOCUMENT_SUPERVISOR".equals(normalized)
+            && instance != null
+            && StringUtils.hasText(instance.getReviewerId())
+            && isReviewerActivity(activity)) {
+            return "DOCUMENT_REVIEWER";
+        }
+        return normalized;
+    }
+
+    private boolean isReviewerActivity(WorkflowActivity activity) {
+        if (activity == null) {
+            return false;
+        }
+        String activityId = activity.getId();
+        if (StringUtils.hasText(activityId) && activityId.toLowerCase(Locale.ROOT).contains("reviewer")) {
+            return true;
+        }
+        String activityName = activity.getName();
+        return StringUtils.hasText(activityName) && activityName.toLowerCase(Locale.ROOT).contains("reviewer");
     }
 
     private EnumSet<Role> parseRoleSet(String value) {

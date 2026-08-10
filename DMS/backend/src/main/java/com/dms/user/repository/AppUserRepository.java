@@ -23,7 +23,9 @@ import java.sql.ResultSet;
 import java.sql.Statement;
 import org.opensearch.client.opensearch.OpenSearchClient;
 import org.opensearch.client.opensearch.core.SearchRequest;
+import org.opensearch.client.opensearch.core.SearchResponse;
 import org.opensearch.client.opensearch._types.query_dsl.Query;
+import org.opensearch.client.opensearch.core.search.Hit;
 import org.springframework.util.StringUtils;
 
 @Repository
@@ -55,6 +57,27 @@ public class AppUserRepository extends BaseOpenSearchRepository<AppUser> {
         if (!openSearchEnabled && dataSource != null) {
             return findByUsernameFromMysql(username, false);
         }
+        if (openSearchEnabled && dataSource != null) {
+            try {
+                Query query = new Query.Builder()
+                    .term(t -> t.field("username.keyword").value(ov -> ov.stringValue(username)))
+                    .build();
+
+                List<AppUser> results = search(
+                    new SearchRequest.Builder()
+                        .index(getIndexName())
+                        .query(query)
+                        .size(1)
+                        .build()
+                );
+                if (!results.isEmpty()) {
+                    return Optional.of(results.get(0));
+                }
+            } catch (Exception ex) {
+                // Ignore and fall back to MySQL.
+            }
+            return findByUsernameFromMysql(username, false);
+        }
         Query query = new Query.Builder()
             .term(t -> t.field("username.keyword").value(ov -> ov.stringValue(username)))
             .build();
@@ -75,6 +98,27 @@ public class AppUserRepository extends BaseOpenSearchRepository<AppUser> {
      */
     public Optional<AppUser> findByUsernameIgnoreCase(String username) throws IOException {
         if (!openSearchEnabled && dataSource != null) {
+            return findByUsernameFromMysql(username, true);
+        }
+        if (openSearchEnabled && dataSource != null) {
+            try {
+                Query query = new Query.Builder()
+                    .match(m -> m.field("username").query(ov -> ov.stringValue(username)))
+                    .build();
+
+                List<AppUser> results = search(
+                    new SearchRequest.Builder()
+                        .index(getIndexName())
+                        .query(query)
+                        .size(1)
+                        .build()
+                );
+                if (!results.isEmpty()) {
+                    return Optional.of(results.get(0));
+                }
+            } catch (Exception ex) {
+                // Ignore and fall back to MySQL.
+            }
             return findByUsernameFromMysql(username, true);
         }
         Query query = new Query.Builder()
@@ -103,7 +147,7 @@ public class AppUserRepository extends BaseOpenSearchRepository<AppUser> {
             if (fromOs.isPresent()) {
                 return fromOs;
             }
-        } catch (IOException ex) {
+        } catch (Exception ex) {
             // ignore and try JDBC
         }
 
@@ -135,6 +179,17 @@ public class AppUserRepository extends BaseOpenSearchRepository<AppUser> {
         if (!openSearchEnabled && dataSource != null) {
             return findByGroupIdsInFromMysql(groupIds);
         }
+        if (openSearchEnabled && dataSource != null) {
+            try {
+                return findByGroupIdsInOpenSearch(groupIds);
+            } catch (Exception ex) {
+                return findByGroupIdsInFromMysql(groupIds);
+            }
+        }
+        return findByGroupIdsInOpenSearch(groupIds);
+    }
+
+    private List<AppUser> findByGroupIdsInOpenSearch(String... groupIds) throws IOException {
         List<Query> termQueries = new ArrayList<>();
         for (String groupId : groupIds) {
             termQueries.add(new Query.Builder()
@@ -162,6 +217,17 @@ public class AppUserRepository extends BaseOpenSearchRepository<AppUser> {
         if (!openSearchEnabled && dataSource != null) {
             return findByGroupIdsInFromMysql(groupIds.toArray(String[]::new));
         }
+        if (openSearchEnabled && dataSource != null) {
+            try {
+                return findDistinctByGroupIdsOpenSearch(groupIds);
+            } catch (Exception ex) {
+                return findByGroupIdsInFromMysql(groupIds.toArray(String[]::new));
+            }
+        }
+        return findDistinctByGroupIdsOpenSearch(groupIds);
+    }
+
+    private List<AppUser> findDistinctByGroupIdsOpenSearch(Set<String> groupIds) throws IOException {
         List<Query> termQueries = new ArrayList<>();
         for (String groupId : groupIds) {
             termQueries.add(new Query.Builder()
@@ -203,13 +269,16 @@ public class AppUserRepository extends BaseOpenSearchRepository<AppUser> {
     public List<AppUser> findAll() throws IOException {
         if (openSearchEnabled) {
             try {
-                List<AppUser> fromOpenSearch = super.findAll();
+                List<AppUser> fromOpenSearch = findAllFromOpenSearchLenient();
                 if (fromOpenSearch != null && !fromOpenSearch.isEmpty()) {
                     return fromOpenSearch;
                 }
-            } catch (IOException ex) {
+            } catch (Exception ex) {
                 if (dataSource == null) {
-                    throw ex;
+                    if (ex instanceof IOException ioEx) {
+                        throw ioEx;
+                    }
+                    throw new IOException("Failed to read users from OpenSearch", ex);
                 }
             }
             if (dataSource != null) {
@@ -221,6 +290,35 @@ public class AppUserRepository extends BaseOpenSearchRepository<AppUser> {
             return super.findAll();
         }
         return findAllFromMysql();
+    }
+
+    private List<AppUser> findAllFromOpenSearchLenient() throws IOException {
+        SearchRequest request = new SearchRequest.Builder()
+            .index(getIndexName())
+            .size(10000)
+            .build();
+
+        SearchResponse<Map> response = openSearchClient.search(request, Map.class);
+        List<AppUser> users = new ArrayList<>();
+        if (response.hits() == null || response.hits().hits() == null) {
+            return users;
+        }
+
+        for (Hit<Map> hit : response.hits().hits()) {
+            Map source = hit.source();
+            if (source == null) {
+                continue;
+            }
+            try {
+                if (hit.id() != null && !hit.id().isBlank() && source.get("id") == null) {
+                    source.put("id", hit.id());
+                }
+                users.add(objectMapper.convertValue(source, AppUser.class));
+            } catch (Exception ignored) {
+                // Skip malformed legacy documents instead of failing the whole list.
+            }
+        }
+        return users;
     }
 
     private List<AppUser> findAllFromMysql() throws IOException {
@@ -243,7 +341,41 @@ public class AppUserRepository extends BaseOpenSearchRepository<AppUser> {
 
     @Override
     public Optional<AppUser> findById(String id) throws IOException {
-        if (openSearchEnabled || dataSource == null) {
+        if (openSearchEnabled) {
+            try {
+                Optional<AppUser> fromOpenSearch = super.findById(id);
+                if (fromOpenSearch.isPresent() || dataSource == null) {
+                    return fromOpenSearch;
+                }
+                Long numericId = parseLong(id);
+                if (numericId == null) {
+                    return Optional.empty();
+                }
+                try (Connection conn = dataSource.getConnection();
+                     PreparedStatement ps = conn.prepareStatement("SELECT id, username, display_name, password, user_password, role FROM app_users WHERE id = ?")) {
+                    ps.setLong(1, numericId);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (!rs.next()) {
+                            return Optional.empty();
+                        }
+                        AppUser user = mapUserRow(rs);
+                        hydrateMembership(conn, List.of(user));
+                        return Optional.of(user);
+                    }
+                } catch (Exception ex) {
+                    throw new IOException("Failed to read user from MySQL", ex);
+                }
+            } catch (Exception ex) {
+                if (dataSource == null) {
+                    if (ex instanceof IOException ioEx) {
+                        throw ioEx;
+                    }
+                    throw new IOException("Failed to read user from OpenSearch", ex);
+                }
+                // Fall through to MySQL for compatibility with legacy OpenSearch docs.
+            }
+        }
+        if (dataSource == null) {
             return super.findById(id);
         }
         Long numericId = parseLong(id);
@@ -417,7 +549,9 @@ public class AppUserRepository extends BaseOpenSearchRepository<AppUser> {
                 return users;
             }
         } catch (Exception ex) {
-            throw new IOException("Failed to find users by group IDs from MySQL", ex);
+            // Legacy schemas may not contain user-group mapping tables yet.
+            // In that case, fall back to all users and leave group memberships empty.
+            return findAllFromMysql();
         }
     }
 
@@ -455,39 +589,43 @@ public class AppUserRepository extends BaseOpenSearchRepository<AppUser> {
             return;
         }
 
-        Map<String, com.dms.user.model.UserGroup> groups = new HashMap<>();
-        try (PreparedStatement ps = conn.prepareStatement("SELECT id, name, description FROM user_groups");
-             ResultSet rs = ps.executeQuery()) {
-            while (rs.next()) {
-                com.dms.user.model.UserGroup group = new com.dms.user.model.UserGroup();
-                String groupId = String.valueOf(rs.getLong("id"));
-                group.setId(groupId);
-                group.setName(rs.getString("name"));
-                group.setDescription(rs.getString("description"));
-                groups.put(groupId, group);
-            }
-        }
-
-        String placeholders = String.join(",", java.util.Collections.nCopies(userById.size(), "?"));
-        String sql = "SELECT user_id, group_id FROM user_group_members WHERE user_id IN (" + placeholders + ")";
-        try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            int index = 1;
-            for (String userId : userById.keySet()) {
-                ps.setLong(index++, Long.parseLong(userId));
-            }
-            try (ResultSet rs = ps.executeQuery()) {
+        try {
+            Map<String, com.dms.user.model.UserGroup> groups = new HashMap<>();
+            try (PreparedStatement ps = conn.prepareStatement("SELECT id, name, description FROM user_groups");
+                 ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    String userId = String.valueOf(rs.getLong("user_id"));
-                    String groupId = String.valueOf(rs.getLong("group_id"));
-                    AppUser user = userById.get(userId);
-                    com.dms.user.model.UserGroup group = groups.get(groupId);
-                    if (user != null && group != null) {
-                        user.getGroupIds().add(groupId);
-                        user.getGroups().add(group);
-                        group.getMemberIds().add(userId);
+                    com.dms.user.model.UserGroup group = new com.dms.user.model.UserGroup();
+                    String groupId = String.valueOf(rs.getLong("id"));
+                    group.setId(groupId);
+                    group.setName(rs.getString("name"));
+                    group.setDescription(rs.getString("description"));
+                    groups.put(groupId, group);
+                }
+            }
+
+            String placeholders = String.join(",", java.util.Collections.nCopies(userById.size(), "?"));
+            String sql = "SELECT user_id, group_id FROM user_group_members WHERE user_id IN (" + placeholders + ")";
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                int index = 1;
+                for (String userId : userById.keySet()) {
+                    ps.setLong(index++, Long.parseLong(userId));
+                }
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        String userId = String.valueOf(rs.getLong("user_id"));
+                        String groupId = String.valueOf(rs.getLong("group_id"));
+                        AppUser user = userById.get(userId);
+                        com.dms.user.model.UserGroup group = groups.get(groupId);
+                        if (user != null && group != null) {
+                            user.getGroupIds().add(groupId);
+                            user.getGroups().add(group);
+                            group.getMemberIds().add(userId);
+                        }
                     }
                 }
             }
+        } catch (Exception ignored) {
+            // Keep users with empty groups when membership tables are unavailable.
         }
     }
 

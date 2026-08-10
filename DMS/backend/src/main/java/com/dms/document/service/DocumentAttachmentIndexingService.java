@@ -169,7 +169,7 @@ public class DocumentAttachmentIndexingService {
         }
         try {
             openSearchClient.delete(new DeleteRequest.Builder().index(attachmentsIndex).id(versionId).refresh(Refresh.WaitFor).build());
-        } catch (IOException ex) {
+        } catch (Exception ex) {
             log.debug("Attachment delete skipped for version {}: {}", versionId, ex.getMessage());
         }
     }
@@ -199,7 +199,7 @@ public class DocumentAttachmentIndexingService {
                 return Optional.empty();
             }
             return Optional.of(content.length() > maxChars ? content.substring(0, maxChars) : content);
-        } catch (IOException ex) {
+        } catch (Exception ex) {
             log.debug("Attachment preview lookup failed for version {}: {}", documentVersionId, ex.getMessage());
             return Optional.empty();
         }

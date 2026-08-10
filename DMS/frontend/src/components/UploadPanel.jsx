@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useContext } from 'react'
+import { useEffect, useMemo, useState, useContext, useCallback } from 'react'
 import { listApproverOptions, listSupervisorOptions } from '../api/documents'
 import FolderTree from './FolderTree'
 import { collectFolderIds, findFolderNode, findFolderPath } from '../utils/folders'
@@ -6,6 +6,7 @@ import { AnnounceContext } from '../contexts/AnnounceContext'
 import { AuthContext } from '../contexts/AuthContext'
 import MetadataTemplateBuilder from './MetadataTemplateBuilder'
 import MetadataFieldInputs from './MetadataFieldInputs'
+import UploadCategoryEform from './UploadCategoryEform'
 import { fetchActiveCodeTableItems } from '../api/codeTable'
 import {
   describeMetadataField,
@@ -321,6 +322,7 @@ const initialState = {
   expiryDate: '',
   tags: [],
   folderId: null,
+  reviewerId: null,
   approverId: null,
   supervisorId: null,
   runOcr: false,
@@ -365,6 +367,41 @@ const fileLooksPdf = (candidate) => {
   return fileName.endsWith('.pdf') || contentType.includes('pdf')
 }
 
+const normalizeEformSubmission = (submission) => {
+  if (!submission || typeof submission !== 'object' || Array.isArray(submission)) {
+    return {}
+  }
+
+  const normalized = {}
+  Object.entries(submission).forEach(([key, value]) => {
+    const normalizedKey = String(key || '').trim()
+    if (!normalizedKey) {
+      return
+    }
+    if (value == null) {
+      return
+    }
+    if (typeof value === 'string') {
+      const trimmed = value.trim()
+      if (trimmed) {
+        normalized[normalizedKey] = trimmed
+      }
+      return
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      normalized[normalizedKey] = String(value)
+      return
+    }
+    try {
+      normalized[normalizedKey] = JSON.stringify(value)
+    } catch {
+      // ignore non-serializable values
+    }
+  })
+
+  return normalized
+}
+
 export default function UploadPanel({
   onClose,
   onSubmit,
@@ -390,9 +427,14 @@ export default function UploadPanel({
   const [metadataErrors, setMetadataErrors] = useState({})
   const [codeTableItems, setCodeTableItems] = useState({})
   const [documentCategoryOptions, setDocumentCategoryOptions] = useState([])
+  const [eformValues, setEformValues] = useState({})
+  const [hasCategoryEform, setHasCategoryEform] = useState(false)
   const [approverOptions, setApproverOptions] = useState([])
   const [approverLoading, setApproverLoading] = useState(false)
   const [approverError, setApproverError] = useState('')
+  const [reviewerOptions, setReviewerOptions] = useState([])
+  const [reviewerLoading, setReviewerLoading] = useState(false)
+  const [reviewerError, setReviewerError] = useState('')
   const [supervisorOptions, setSupervisorOptions] = useState([])
   const [supervisorLoading, setSupervisorLoading] = useState(false)
   const [supervisorError, setSupervisorError] = useState('')
@@ -421,6 +463,10 @@ export default function UploadPanel({
   const selectedTemplate = selectedFolder?.metadataTemplate ?? []
   const isFolderLocked = Boolean(presetFolderId && knownFolderIds.has(presetFolderId))
   const currentOwner = (currentUser?.username || '').trim()
+  const selectedCategoryOption = useMemo(
+    () => documentCategoryOptions.find((option) => option?.itemCode === form.category) || null,
+    [documentCategoryOptions, form.category]
+  )
 
   useEffect(() => {
     if (form.folderId && !knownFolderIds.has(form.folderId)) {
@@ -468,6 +514,11 @@ export default function UploadPanel({
     }
     setForm((prev) => (prev.owner === currentOwner ? prev : { ...prev, owner: currentOwner }))
   }, [currentOwner])
+
+  useEffect(() => {
+    setEformValues({})
+    setHasCategoryEform(false)
+  }, [form.category])
 
   useEffect(() => {
     const dropdownFields = selectedTemplate.filter((f) => f.type === 'DROPDOWN' && f.codeTableCode)
@@ -581,6 +632,33 @@ export default function UploadPanel({
 
   useEffect(() => {
     let cancelled = false
+    const loadReviewers = async () => {
+      setReviewerLoading(true)
+      setReviewerError('')
+      try {
+        const data = await listApproverOptions()
+        if (!cancelled) {
+          setReviewerOptions(normalizeApproverOptions(data))
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setReviewerError(err.message || 'Unable to load reviewers')
+          setReviewerOptions([])
+        }
+      } finally {
+        if (!cancelled) {
+          setReviewerLoading(false)
+        }
+      }
+    }
+    loadReviewers()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
     const loadApprovers = async () => {
       setApproverLoading(true)
       setApproverError('')
@@ -622,6 +700,11 @@ export default function UploadPanel({
       toast && toast('Pick a destination folder before uploading', { type: 'error' })
       return
     }
+    if (!form.reviewerId) {
+      setError('Select a reviewer before uploading')
+      toast && toast('Select a reviewer before uploading', { type: 'error' })
+      return
+    }
     if (!form.approverId) {
       setError('Select an approver before uploading')
       toast && toast('Select an approver before uploading', { type: 'error' })
@@ -630,6 +713,12 @@ export default function UploadPanel({
     if (!form.supervisorId) {
       setError('Select a supervisor before uploading')
       toast && toast('Select a supervisor before uploading', { type: 'error' })
+      return
+    }
+    const normalizedReviewerId = String(form.reviewerId).trim()
+    if (!normalizedReviewerId) {
+      setError('Select a reviewer before uploading')
+      toast && toast('Select a reviewer before uploading', { type: 'error' })
       return
     }
     const normalizedApproverId = String(form.approverId).trim()
@@ -658,6 +747,11 @@ export default function UploadPanel({
       return
     }
     const normalizedMetadata = normalizeMetadataValues(selectedTemplate, metadataValues)
+    const normalizedEformMetadata = hasCategoryEform ? normalizeEformSubmission(eformValues) : {}
+    const mergedMetadata = {
+      ...normalizedMetadata,
+      ...normalizedEformMetadata,
+    }
     setError('')
     setMetadataErrors({})
 
@@ -666,15 +760,23 @@ export default function UploadPanel({
       uploadMode: normalizedUploadMode,
       isAiFiling,
       owner: currentOwner,
+      reviewerId: normalizedReviewerId,
       approverId: normalizedApproverId,
       supervisorId: normalizedSupervisorId,
       runOcr: Boolean((form.runOcr || form.runDataExtraction || form.runEmbedding) && fileLooksPdf(file)),
       runDataExtraction: Boolean(form.runDataExtraction && fileLooksPdf(file)),
       runEmbedding: Boolean(form.runEmbedding && fileLooksPdf(file)),
       tags: form.tags,
-      metadata: normalizedMetadata,
+      category: selectedCategoryOption?.itemLabel || form.category || '',
+      categoryCode: form.category || null,
+      metadata: mergedMetadata,
     }, file)
   }
+
+  const handleCategoryEformChange = useCallback((data, hasSchema) => {
+    setEformValues(data || {})
+    setHasCategoryEform(Boolean(hasSchema))
+  }, [])
 
   const handleChange = (field, value) => {
     setForm((prev) => ({ ...prev, [field]: value }))
@@ -1207,7 +1309,8 @@ export default function UploadPanel({
       <div className="upload-panel__backdrop" onClick={async () => {
         // if form has data, confirm discard
         const hasMetadataValues = Object.values(metadataValues).some((val) => val && String(val).trim().length)
-        const dirty = file || form.title || form.description || form.category || form.documentDate || form.expiryDate || (form.tags && form.tags.length) || form.folderId || form.approverId || form.supervisorId || hasMetadataValues
+        const hasEformValues = Object.values(eformValues).some((val) => val != null && String(val).trim().length)
+        const dirty = file || form.title || form.description || form.category || form.documentDate || form.expiryDate || (form.tags && form.tags.length) || form.folderId || form.reviewerId || form.approverId || form.supervisorId || hasMetadataValues || hasEformValues
         if (dirty) {
           const ok = await confirm('Discard upload and close? Any entered data will be lost.')
           if (!ok) {
@@ -1225,7 +1328,8 @@ export default function UploadPanel({
           </div>
           <button type="button" className="ghost" onClick={async () => {
             const hasMetadataValues = Object.values(metadataValues).some((val) => val && String(val).trim().length)
-            const dirty = file || form.title || form.description || form.category || form.documentDate || form.expiryDate || (form.tags && form.tags.length) || form.folderId || form.approverId || form.supervisorId || hasMetadataValues
+            const hasEformValues = Object.values(eformValues).some((val) => val != null && String(val).trim().length)
+            const dirty = file || form.title || form.description || form.category || form.documentDate || form.expiryDate || (form.tags && form.tags.length) || form.folderId || form.reviewerId || form.approverId || form.supervisorId || hasMetadataValues || hasEformValues
             if (dirty) {
               const ok = await confirm('Discard upload and close? Any entered data will be lost.')
               if (!ok) {
@@ -1469,6 +1573,30 @@ export default function UploadPanel({
               <input value={form.tags.join(', ')} onChange={(e) => handleChange('tags', e.target.value.split(','))} placeholder="policy, quarterly" />
             </label>
             <label>
+              <span>Reviewer</span>
+              {reviewerLoading ? (
+                <span className="pill pill--info">Loading reviewers…</span>
+              ) : reviewerOptions.length ? (
+                <select
+                  required
+                  value={form.reviewerId ?? ''}
+                  onChange={(e) => handleChange('reviewerId', e.target.value || null)}
+                  disabled={busy}
+                >
+                  <option value="" disabled>Select a reviewer</option>
+                  {reviewerOptions.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.displayName || option.username} · {option.username}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <span className="pill pill--warning">No eligible reviewers available</span>
+              )}
+              <small>Reviewer is used by BPMN workflow review steps.</small>
+              {reviewerError && <p className="feedback feedback--error">{reviewerError}</p>}
+            </label>
+            <label>
               <span>Approver</span>
               {approverLoading ? (
                 <span className="pill pill--info">Loading approvers…</span>
@@ -1513,7 +1641,7 @@ export default function UploadPanel({
               ) : (
                 <span className="pill pill--warning">No eligible supervisors available</span>
               )}
-              <small>Supervisor will receive reminder, retention, and rejection follow-up tasks.</small>
+              <small>Supervisor manages retention and reminder follow-up tasks.</small>
               {supervisorError && <p className="feedback feedback--error">{supervisorError}</p>}
             </label>
           </div>
@@ -1574,6 +1702,14 @@ export default function UploadPanel({
                     />
                   </div>
                 )}
+                {form.category && (
+                  <UploadCategoryEform
+                    categoryCode={form.category}
+                    categoryLabel={selectedCategoryOption?.itemLabel || form.category}
+                    disabled={busy}
+                    onChange={handleCategoryEformChange}
+                  />
+                )}
                 {!isFolderLocked && showFolderForm && (
                   <div className="folder-form">
                     <label>
@@ -1626,7 +1762,7 @@ export default function UploadPanel({
           <button
             type="submit"
             className="primary"
-            disabled={busy || approverLoading || supervisorLoading || !approverOptions.length || !supervisorOptions.length}
+            disabled={busy || reviewerLoading || approverLoading || supervisorLoading || !reviewerOptions.length || !approverOptions.length || !supervisorOptions.length}
             aria-label="Upload"
             title="Upload"
           >

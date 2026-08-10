@@ -34,6 +34,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/admin/**").hasRole("SYS_ADMIN")
                 .requestMatchers("/api/audit/**").authenticated()
                 .requestMatchers("/api/dashboard/**").authenticated()
+                .requestMatchers("/api/eforms/**").authenticated()
                 .requestMatchers("/api/folders/**").authenticated()
                 .requestMatchers("/api/knowledge/**").authenticated()
                 .requestMatchers("/api/me").authenticated()

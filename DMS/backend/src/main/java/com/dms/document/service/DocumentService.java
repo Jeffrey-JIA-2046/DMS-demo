@@ -58,6 +58,7 @@ import com.dms.document.model.FolderMetadataField;
 import com.dms.document.repository.DocumentFolderRepository;
 import com.dms.document.repository.DocumentRepository;
 import com.dms.document.repository.DocumentVersionRepository;
+import com.dms.eform.service.EformDefinitionService;
 import com.dms.exception.InvalidDocumentException;
 import com.dms.exception.ResourceNotFoundException;
 import com.dms.ocr.service.DocumentOcrProcessingService;
@@ -76,6 +77,7 @@ import com.dms.chatbot.service.ChatbotDocumentIndexService;
 import com.dms.codetable.model.CodeTableItem;
 import com.dms.codetable.repository.CodeTableRepository;
 import com.dms.workflow.service.WorkflowService;
+import com.dms.workflow.model.WorkflowInstance;
 
 @Service
 public class DocumentService {
@@ -112,6 +114,7 @@ public class DocumentService {
     private final Clock clock;
     private final CodeTableRepository codeTableRepository;
     private final ChatbotDocumentIndexService chatbotDocumentIndexService;
+    private final EformDefinitionService eformDefinitionService;
 
     @Value("${app.documents.max-upload-bytes:104857600}")
     private long maxUploadBytes;
@@ -129,7 +132,8 @@ public class DocumentService {
         WorkflowService workflowService,
         Clock clock,
         CodeTableRepository codeTableRepository,
-        ChatbotDocumentIndexService chatbotDocumentIndexService
+        ChatbotDocumentIndexService chatbotDocumentIndexService,
+        EformDefinitionService eformDefinitionService
     ) {
         this.documentRepository = documentRepository;
         this.documentVersionRepository = documentVersionRepository;
@@ -144,6 +148,7 @@ public class DocumentService {
         this.clock = clock;
         this.codeTableRepository = codeTableRepository;
         this.chatbotDocumentIndexService = chatbotDocumentIndexService;
+        this.eformDefinitionService = eformDefinitionService;
     }
 
     @Transactional(readOnly = true)
@@ -725,7 +730,12 @@ public class DocumentService {
             assertCanWrite(folder, user);
             document.setFolder(folder);
             document.setFolderId(folder.getId());
-            Map<String, String> resolvedMetadata = resolveMetadataValues(folder, request.metadata());
+            Set<String> eformMetadataKeys = eformDefinitionService.resolveMetadataKeysForCategory(document.getCategoryCode());
+            Map<String, String> resolvedMetadata = resolveMetadataValues(folder, request.metadata(), eformMetadataKeys);
+            AppUser reviewer = requireApprover(request.reviewerId());
+            assertApproverEligible(user, reviewer);
+            document.setReviewer(reviewer);
+            document.setReviewerId(reviewer.getId());
             AppUser approver = requireApprover(request.approverId());
             assertApproverEligible(user, approver);
             document.setApprover(approver);
@@ -758,8 +768,10 @@ public class DocumentService {
             Document saved = documentRepository.save(document);
             persistDocumentVersions(saved);
             indexLatestAttachment(saved);
-            createApprovalTask(saved, approver, now);
-            workflowService.startWorkflowForDocument(saved, username);
+            boolean workflowStarted = workflowService.startWorkflowForDocument(saved, username, reviewer.getId());
+            if (!workflowStarted) {
+                createApprovalTask(saved, reviewer, now);
+            }
             return toDetails(saved);
         } catch (IOException ex) {
             throw new RuntimeException("Failed to create document", ex);
@@ -845,10 +857,11 @@ public class DocumentService {
             Map<String, String> incomingMetadata = request.metadata();
             if (incomingMetadata != null || folderChanged) {
                 DocumentFolder folderForValidation = targetFolder != null ? targetFolder : document.getFolder();
+                Set<String> eformMetadataKeys = eformDefinitionService.resolveMetadataKeysForCategory(document.getCategoryCode());
                 Map<String, String> sourceValues = incomingMetadata != null
                     ? mergeSystemDateMetadata(incomingMetadata, document.getMetadataValues())
                     : document.getMetadataValues();
-                document.setMetadataValues(resolveMetadataValues(folderForValidation, sourceValues));
+                document.setMetadataValues(resolveMetadataValues(folderForValidation, sourceValues, eformMetadataKeys));
                 changed = true;
             }
 
@@ -884,7 +897,8 @@ public class DocumentService {
                 });
             }
 
-            document.setMetadataValues(resolveMetadataValues(folder, mergedMetadata));
+            Set<String> eformMetadataKeys = eformDefinitionService.resolveMetadataKeysForCategory(document.getCategoryCode());
+            document.setMetadataValues(resolveMetadataValues(folder, mergedMetadata, eformMetadataKeys));
             document.setUpdatedAt(Instant.now(clock));
             Document saved = documentRepository.save(document);
             return toDetails(saved);
@@ -1069,11 +1083,9 @@ public class DocumentService {
         }
         try {
             List<ApproverOptionResponse> sharedGroupCandidates = appUserRepository.findDistinctByGroupIds(groupIds).stream()
-                .filter(candidate -> !candidate.getId().equals(requester.getId()))
-                .sorted(Comparator.comparing(
-                    candidate -> StringUtils.hasText(candidate.getDisplayName()) ? candidate.getDisplayName() : candidate.getUsername(),
-                    String.CASE_INSENSITIVE_ORDER
-                ))
+                .filter(Objects::nonNull)
+                .filter(candidate -> !Objects.equals(candidate.getId(), requester.getId()))
+                .sorted(Comparator.comparing(this::userSortKey, String.CASE_INSENSITIVE_ORDER))
                 .map(this::toApproverOption)
                 .toList();
             if (!sharedGroupCandidates.isEmpty()) {
@@ -1090,10 +1102,8 @@ public class DocumentService {
         requireUser(username);
         try {
             return appUserRepository.findAll().stream()
-                .sorted(Comparator.comparing(
-                    candidate -> StringUtils.hasText(candidate.getDisplayName()) ? candidate.getDisplayName() : candidate.getUsername(),
-                    String.CASE_INSENSITIVE_ORDER
-                ))
+                .filter(Objects::nonNull)
+                .sorted(Comparator.comparing(this::userSortKey, String.CASE_INSENSITIVE_ORDER))
                 .map(this::toApproverOption)
                 .toList();
         } catch (IOException ex) {
@@ -1110,7 +1120,7 @@ public class DocumentService {
             if (request == null || !StringUtils.hasText(request.note())) {
                 throw new InvalidDocumentException("A note is required");
             }
-            if (document.getStatus() != DocumentStatus.DRAFT) {
+            if (!isAwaitingApproval(document)) {
                 throw new InvalidDocumentException("Document is not awaiting approval");
             }
             Instant now = Instant.now(clock);
@@ -1129,13 +1139,26 @@ public class DocumentService {
             AppUser actor = requireUser(username);
             Document document = findDocument(documentId);
             assertCanManageApproval(document, actor);
-            if (document.getStatus() != DocumentStatus.DRAFT) {
+            if (!isAwaitingApproval(document)) {
                 throw new InvalidDocumentException("Document is not awaiting approval");
             }
             Instant now = Instant.now(clock);
             if (request != null && StringUtils.hasText(request.note())) {
                 appendApprovalNote(document, actor, request.note(), now);
             }
+
+            if (isReviewerStageApproval(document, actor)) {
+                AppUser approver = document.getApprover();
+                document.setStatus(DocumentStatus.REVIEWED);
+                document.setApprovalRequestedAt(now);
+                document.setApprovalDecidedAt(null);
+                document.setUpdatedAt(now);
+                Document saved = documentRepository.save(document);
+                closeActorReviewTasks(saved, actor, "Reviewed", now);
+                reassignApprovalTask(saved, approver, now);
+                return toDetails(saved);
+            }
+
             document.setStatus(DocumentStatus.ACTIVE);
             document.setApprovalDecidedAt(now);
             document.setMetadataValues(applySystemDateMetadata(
@@ -1147,7 +1170,7 @@ public class DocumentService {
             ));
             document.setUpdatedAt(now);
             Document saved = documentRepository.save(document);
-            completeApprovalTask(saved, TaskStatus.COMPLETED, "Approved", now);
+            completeReviewTasks(saved, TaskStatus.COMPLETED, "Approved", now);
             return toDetails(saved);
         } catch (IOException ex) {
             throw new RuntimeException("Failed to approve document", ex);
@@ -1160,7 +1183,7 @@ public class DocumentService {
             AppUser actor = requireUser(username);
             Document document = findDocument(documentId);
             assertCanManageApproval(document, actor);
-            if (document.getStatus() != DocumentStatus.DRAFT) {
+            if (!isAwaitingApproval(document)) {
                 throw new InvalidDocumentException("Document is not awaiting approval");
             }
             Instant now = Instant.now(clock);
@@ -1171,7 +1194,7 @@ public class DocumentService {
             document.setApprovalDecidedAt(now);
             document.setUpdatedAt(now);
             Document saved = documentRepository.save(document);
-            completeApprovalTask(saved, TaskStatus.COMPLETED, "Rejected", now);
+            completeReviewTasks(saved, TaskStatus.COMPLETED, "Rejected", now);
             createOrUpdateSupervisorRejectionTask(saved, actor, request != null ? request.note() : null, now);
             return toDetails(saved);
         } catch (IOException ex) {
@@ -1185,7 +1208,7 @@ public class DocumentService {
             AppUser actor = requireUser(username);
             Document document = findDocument(documentId);
             assertCanManageApproval(document, actor);
-            if (document.getStatus() != DocumentStatus.DRAFT) {
+            if (!isAwaitingApproval(document)) {
                 throw new InvalidDocumentException("Document is not awaiting approval");
             }
             if (request == null || !StringUtils.hasText(request.approverId())) {
@@ -1202,10 +1225,54 @@ public class DocumentService {
             document.setUpdatedAt(now);
 
             Document saved = documentRepository.save(document);
+            closeActorReviewTasks(saved, actor, "Delegated", now);
             reassignApprovalTask(saved, delegate, now);
             return toDetails(saved);
         } catch (IOException ex) {
             throw new RuntimeException("Failed to delegate approval", ex);
+        }
+    }
+
+    @Transactional
+    public DocumentDetailsResponse resubmitRejectedApproval(String documentId, DocumentApprovalDecisionRequest request, String username) {
+        try {
+            AppUser actor = requireUser(username);
+            Document document = findDocument(documentId);
+            assertCanResubmitApproval(document, actor);
+
+            if (request == null || !StringUtils.hasText(request.reviewerId()) || !StringUtils.hasText(request.approverId())) {
+                throw new InvalidDocumentException("Reviewer and approver are required to resubmit approval");
+            }
+
+            AppUser reviewer = requireApprover(request.reviewerId().trim());
+            assertApproverEligible(actor, reviewer);
+            AppUser approver = requireApprover(request.approverId().trim());
+            assertApproverEligible(actor, approver);
+
+            Instant now = Instant.now(clock);
+            if (StringUtils.hasText(request.note())) {
+                appendApprovalNote(document, actor, "Resubmitted for approval. " + request.note().trim(), now);
+            }
+
+            document.setReviewer(reviewer);
+            document.setReviewerId(reviewer.getId());
+            document.setApprover(approver);
+            document.setApproverId(approver.getId());
+            document.setStatus(DocumentStatus.DRAFT);
+            document.setApprovalRequestedAt(now);
+            document.setApprovalDecidedAt(null);
+            document.setUpdatedAt(now);
+
+            Document saved = documentRepository.save(document);
+
+            cancelLinkedTasks(saved, "Resubmitted for approval", now);
+            boolean workflowStarted = workflowService.startWorkflowForDocument(saved, username, reviewer.getId());
+            if (!workflowStarted) {
+                createApprovalTask(saved, reviewer, now);
+            }
+            return toDetails(saved);
+        } catch (IOException ex) {
+            throw new RuntimeException("Failed to resubmit approval", ex);
         }
     }
 
@@ -1314,10 +1381,7 @@ public class DocumentService {
         try {
             return appUserRepository.findAll().stream()
                 .filter(candidate -> candidate != null && !Objects.equals(candidate.getId(), requester.getId()))
-                .sorted(Comparator.comparing(
-                    candidate -> StringUtils.hasText(candidate.getDisplayName()) ? candidate.getDisplayName() : candidate.getUsername(),
-                    String.CASE_INSENSITIVE_ORDER
-                ))
+                .sorted(Comparator.comparing(this::userSortKey, String.CASE_INSENSITIVE_ORDER))
                 .map(this::toApproverOption)
                 .toList();
         } catch (IOException ex) {
@@ -1362,8 +1426,171 @@ public class DocumentService {
             return;
         }
         if (!Objects.equals(approver.getId(), actor.getId())) {
-            throw new AccessDeniedException("Only the assigned approver may perform this action");
+            boolean reviewerStagePending = isReviewerStagePending(document, actor);
+            boolean reviewerNoTaskFallback = isReviewerWithoutTaskFallback(document, actor);
+            if (!reviewerStagePending && !reviewerNoTaskFallback) {
+                log.warn(
+                    "Approval authorization denied. docId={}, actorId={}, actorUsername={}, actorRole={}, approverId={}, approverUsername={}, reviewerId={}, reviewerUsername={}, tasks={}",
+                    document.getId(),
+                    actor.getId(),
+                    actor.getUsername(),
+                    actor.getRole(),
+                    approver.getId(),
+                    approver.getUsername(),
+                    document.getReviewerId(),
+                    document.getReviewer() != null ? document.getReviewer().getUsername() : null,
+                    summarizeDocumentTasks(document)
+                );
+                throw new AccessDeniedException("Only the current assigned reviewer/approver may perform this action");
+            }
         }
+    }
+
+    private void assertCanResubmitApproval(Document document, AppUser actor) {
+        if (document == null || actor == null) {
+            throw new AccessDeniedException("Only the uploader may resubmit this document");
+        }
+        if (document.getStatus() != DocumentStatus.REJECTED) {
+            throw new InvalidDocumentException("Only rejected documents can be resubmitted");
+        }
+        String owner = StringUtils.hasText(document.getOwner()) ? document.getOwner().trim() : null;
+        String username = StringUtils.hasText(actor.getUsername()) ? actor.getUsername().trim() : null;
+        if (!StringUtils.hasText(owner) || !StringUtils.hasText(username) || !owner.equalsIgnoreCase(username)) {
+            throw new AccessDeniedException("Only the uploader may resubmit this document");
+        }
+    }
+
+    private boolean isReviewerStageApproval(Document document, AppUser actor) {
+        if (document == null || actor == null) {
+            return false;
+        }
+        AppUser approver = document.getApprover();
+        return (approver == null || !Objects.equals(approver.getId(), actor.getId()))
+            && (isReviewerStagePending(document, actor) || isReviewerWithoutTaskFallback(document, actor));
+    }
+
+    private boolean isReviewerStagePending(Document document, AppUser actor) {
+        if (document == null || actor == null || !StringUtils.hasText(document.getId())) {
+            return false;
+        }
+        try {
+            List<UserTask> linkedTasks = userTaskRepository.findByDocumentId(document.getId());
+            boolean hasAssignedActiveReviewTask = linkedTasks.stream()
+                .filter(Objects::nonNull)
+                .filter(task -> task.getTaskType() == TaskType.APPROVAL || task.getTaskType() == TaskType.WORKFLOW)
+                .anyMatch(task -> isActiveApprovalTask(task) && isTaskAssignedToActor(task, actor));
+            if (hasAssignedActiveReviewTask) {
+                return true;
+            }
+
+            Optional<UserTask> taskOpt = resolveApprovalTask(document);
+            if (taskOpt.isPresent()) {
+                UserTask task = taskOpt.get();
+                if (isActiveApprovalTask(task) && isTaskAssignedToActor(task, actor)) {
+                    return true;
+                }
+            }
+
+            // Compatibility fallback: for workflow-driven reviewer steps, the pending task may be WORKFLOW.
+            Optional<UserTask> workflowTaskOpt = resolveWorkflowTask(document);
+            if (workflowTaskOpt.isPresent()) {
+                UserTask workflowTask = workflowTaskOpt.get();
+                return isActiveApprovalTask(workflowTask) && isTaskAssignedToActor(workflowTask, actor);
+            }
+            return false;
+        } catch (IOException ex) {
+            log.warn("Failed to resolve reviewer-stage approval task for document {}", document.getId(), ex);
+            return false;
+        }
+    }
+
+    private String summarizeDocumentTasks(Document document) {
+        if (document == null || !StringUtils.hasText(document.getId())) {
+            return "[]";
+        }
+        try {
+            return userTaskRepository.findByDocumentId(document.getId()).stream()
+                .map(this::formatTaskForLog)
+                .collect(Collectors.joining(", ", "[", "]"));
+        } catch (IOException ex) {
+            return "[error=" + ex.getMessage() + "]";
+        }
+    }
+
+    private String formatTaskForLog(UserTask task) {
+        if (task == null) {
+            return "null";
+        }
+        return "{id=" + task.getId()
+            + ",type=" + task.getTaskType()
+            + ",status=" + task.getStatus()
+            + ",assigneeId=" + task.getAssigneeId()
+            + ",assigneeUsername=" + task.getAssigneeUsername()
+            + "}";
+    }
+
+    private boolean isTaskAssignedToActor(UserTask task, AppUser actor) {
+        if (task == null || actor == null) {
+            return false;
+        }
+        if (StringUtils.hasText(task.getAssigneeId()) && task.getAssigneeId().trim().equals(actor.getId())) {
+            return true;
+        }
+        String actorUsername = StringUtils.hasText(actor.getUsername()) ? actor.getUsername().trim() : null;
+        String assigneeUsername = StringUtils.hasText(task.getAssigneeUsername()) ? task.getAssigneeUsername().trim() : null;
+        return StringUtils.hasText(actorUsername)
+            && StringUtils.hasText(assigneeUsername)
+            && assigneeUsername.equalsIgnoreCase(actorUsername);
+    }
+
+    private boolean isActiveApprovalTask(UserTask task) {
+        if (task == null || task.getStatus() == null) {
+            return false;
+        }
+        return task.getStatus() == TaskStatus.PENDING
+            || task.getStatus() == TaskStatus.IN_PROGRESS
+            || task.getStatus() == TaskStatus.BLOCKED;
+    }
+
+    private boolean isReviewerWithoutTaskFallback(Document document, AppUser actor) {
+        if (document == null || actor == null || document.getStatus() != DocumentStatus.DRAFT) {
+            return false;
+        }
+        if (!isDocumentReviewer(document, actor)) {
+            return false;
+        }
+        try {
+            return userTaskRepository.findByDocumentId(document.getId()).stream()
+                .filter(Objects::nonNull)
+                .noneMatch(task -> task.getTaskType() == TaskType.APPROVAL || task.getTaskType() == TaskType.WORKFLOW);
+        } catch (IOException ex) {
+            return false;
+        }
+    }
+
+    private boolean isDocumentReviewer(Document document, AppUser actor) {
+        if (document == null || actor == null) {
+            return false;
+        }
+        if (StringUtils.hasText(document.getReviewerId()) && document.getReviewerId().trim().equals(actor.getId())) {
+            return true;
+        }
+        String actorUsername = StringUtils.hasText(actor.getUsername()) ? actor.getUsername().trim() : null;
+        if (!StringUtils.hasText(actorUsername)) {
+            return false;
+        }
+        if (document.getReviewer() != null && StringUtils.hasText(document.getReviewer().getUsername())
+            && document.getReviewer().getUsername().trim().equalsIgnoreCase(actorUsername)) {
+            return true;
+        }
+        return false;
+    }
+
+    private boolean isAwaitingApproval(Document document) {
+        if (document == null || document.getStatus() == null) {
+            return false;
+        }
+        return document.getStatus() == DocumentStatus.DRAFT || document.getStatus() == DocumentStatus.REVIEWED;
     }
 
     private void appendApprovalNote(Document document, AppUser author, String rawNote, Instant createdAt) {
@@ -1396,6 +1623,8 @@ public class DocumentService {
             task.setDocumentTitle(document.getTitle());
             task.setDueDate(LocalDate.now(clock).plusDays(2));
             task.setAssignee(approver);
+            task.setAssigneeId(approver.getId());
+            task.setAssigneeUsername(approver.getUsername());
             task.setCreatedAt(now);
             task.setUpdatedAt(now);
             userTaskRepository.save(task);
@@ -1413,6 +1642,8 @@ public class DocumentService {
             }
             UserTask task = existing.get();
             task.setAssignee(delegate);
+            task.setAssigneeId(delegate.getId());
+            task.setAssigneeUsername(delegate.getUsername());
             task.setStatus(TaskStatus.PENDING);
             task.setWorkflowStep("Awaiting approval (delegated)");
             task.setUpdatedAt(timestamp);
@@ -1447,6 +1678,63 @@ public class DocumentService {
             });
         } catch (IOException ex) {
             log.warn("Failed to resolve approval task", ex);
+        }
+    }
+
+    private void closeActorReviewTasks(Document document, AppUser actor, String workflowStep, Instant timestamp) {
+        if (document == null || actor == null || !StringUtils.hasText(document.getId())) {
+            return;
+        }
+        try {
+            for (UserTask task : userTaskRepository.findByDocumentId(document.getId())) {
+                if (task == null || !isActiveApprovalTask(task)) {
+                    continue;
+                }
+                if (task.getTaskType() != TaskType.APPROVAL && task.getTaskType() != TaskType.WORKFLOW) {
+                    continue;
+                }
+                boolean isActorOwnedReviewTask = isTaskAssignedToActor(task, actor)
+                    || (task.getTaskType() == TaskType.WORKFLOW && isDocumentReviewer(document, actor));
+                if (!isActorOwnedReviewTask) {
+                    continue;
+                }
+                try {
+                    task.setStatus(TaskStatus.COMPLETED);
+                    task.setWorkflowStep(workflowStep);
+                    task.setUpdatedAt(timestamp);
+                    userTaskRepository.save(task);
+                } catch (IOException ex) {
+                    log.warn("Failed to close actor review task {} for document {}", task.getId(), document.getId(), ex);
+                }
+            }
+        } catch (IOException ex) {
+            log.warn("Failed to resolve actor review tasks for document {}", document.getId(), ex);
+        }
+    }
+
+    private void completeReviewTasks(Document document, TaskStatus status, String workflowStep, Instant timestamp) {
+        if (document == null || !StringUtils.hasText(document.getId())) {
+            return;
+        }
+        try {
+            for (UserTask task : userTaskRepository.findByDocumentId(document.getId())) {
+                if (task == null || !isActiveApprovalTask(task)) {
+                    continue;
+                }
+                if (task.getTaskType() != TaskType.APPROVAL && task.getTaskType() != TaskType.WORKFLOW) {
+                    continue;
+                }
+                try {
+                    task.setStatus(status);
+                    task.setWorkflowStep(workflowStep);
+                    task.setUpdatedAt(timestamp);
+                    userTaskRepository.save(task);
+                } catch (IOException ex) {
+                    log.warn("Failed to complete review task {} for document {}", task.getId(), document.getId(), ex);
+                }
+            }
+        } catch (IOException ex) {
+            log.warn("Failed to resolve review tasks for document {}", document.getId(), ex);
         }
     }
 
@@ -1511,21 +1799,99 @@ public class DocumentService {
         List<GroupSummary> groups = candidate.getGroups() == null
             ? List.of()
             : candidate.getGroups().stream()
-                .sorted(Comparator.comparing(UserGroup::getName, String.CASE_INSENSITIVE_ORDER))
+                .filter(Objects::nonNull)
+                .sorted(Comparator.comparing(group -> nullSafe(group.getName()), String.CASE_INSENSITIVE_ORDER))
                 .map(group -> new GroupSummary(group.getId(), group.getName()))
                 .toList();
         return new ApproverOptionResponse(candidate.getId(), candidate.getUsername(), candidate.getDisplayName(), groups);
     }
 
+    private String userSortKey(AppUser candidate) {
+        if (candidate == null) {
+            return "";
+        }
+        if (StringUtils.hasText(candidate.getDisplayName())) {
+            return candidate.getDisplayName();
+        }
+        if (StringUtils.hasText(candidate.getUsername())) {
+            return candidate.getUsername();
+        }
+        return nullSafe(candidate.getId());
+    }
+
+    private String nullSafe(String value) {
+        return value == null ? "" : value;
+    }
+
     private DocumentApprovalInfo toApprovalInfo(Document document) {
+        String uploaderUsername = StringUtils.hasText(document.getOwner()) ? document.getOwner().trim() : null;
+        AppUser uploader = null;
+        if (StringUtils.hasText(uploaderUsername)) {
+            uploader = appUserRepository.findByUsernameIgnoreCaseWithFallback(uploaderUsername).orElse(null);
+        }
+
+        String reviewerId = StringUtils.hasText(document.getReviewerId()) ? document.getReviewerId().trim() : null;
+        AppUser reviewer = document.getReviewer();
+        if (reviewer == null && StringUtils.hasText(reviewerId)) {
+            try {
+                reviewer = appUserRepository.findById(reviewerId).orElse(null);
+            } catch (IOException ex) {
+                log.debug("Failed to resolve reviewer {} from document {}", reviewerId, document.getId(), ex);
+            }
+        }
+        if (StringUtils.hasText(document.getId())) {
+            List<WorkflowInstance> instances = workflowService.listDocumentInstances(document.getId());
+            WorkflowInstance latest = (instances == null || instances.isEmpty()) ? null : instances.get(0);
+            String instanceReviewerId = latest != null && StringUtils.hasText(latest.getReviewerId()) ? latest.getReviewerId().trim() : null;
+            if (!StringUtils.hasText(reviewerId) && StringUtils.hasText(instanceReviewerId)) {
+                reviewerId = instanceReviewerId;
+            }
+            if (reviewer == null && StringUtils.hasText(reviewerId)) {
+                try {
+                    reviewer = appUserRepository.findById(reviewerId).orElse(null);
+                } catch (IOException ex) {
+                    log.debug("Failed to resolve reviewer {} for document {}", reviewerId, document.getId(), ex);
+                }
+            }
+        }
+
+        if (reviewer == null) {
+            try {
+                Optional<UserTask> workflowTask = resolveWorkflowTask(document);
+                if (workflowTask.isPresent()) {
+                    UserTask task = workflowTask.get();
+                    if (!StringUtils.hasText(reviewerId) && StringUtils.hasText(task.getAssigneeId())) {
+                        reviewerId = task.getAssigneeId().trim();
+                    }
+                    if (StringUtils.hasText(task.getAssigneeUsername())) {
+                        reviewer = appUserRepository.findByUsernameIgnoreCaseWithFallback(task.getAssigneeUsername().trim()).orElse(null);
+                    }
+                    if (reviewer == null && StringUtils.hasText(reviewerId)) {
+                        try {
+                            reviewer = appUserRepository.findById(reviewerId).orElse(null);
+                        } catch (IOException ex) {
+                            log.debug("Failed to resolve reviewer {} from workflow task for document {}", reviewerId, document.getId(), ex);
+                        }
+                    }
+                }
+            } catch (IOException ex) {
+                log.debug("Failed to resolve workflow task reviewer for document {}", document.getId(), ex);
+            }
+        }
+
         AppUser approver = document.getApprover();
-        if (approver == null) {
+        if (approver == null && uploader == null && reviewer == null && !StringUtils.hasText(reviewerId)) {
             return null;
         }
         return new DocumentApprovalInfo(
-            approver.getId(),
-            approver.getUsername(),
-            approver.getDisplayName(),
+            uploader != null ? uploader.getUsername() : uploaderUsername,
+            uploader != null ? uploader.getDisplayName() : null,
+            reviewerId,
+            reviewer != null ? reviewer.getUsername() : null,
+            reviewer != null ? reviewer.getDisplayName() : null,
+            approver != null ? approver.getId() : null,
+            approver != null ? approver.getUsername() : null,
+            approver != null ? approver.getDisplayName() : null,
             document.getApprovalRequestedAt(),
             document.getApprovalDecidedAt()
         );
@@ -1903,7 +2269,7 @@ public class DocumentService {
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (a, b) -> a, LinkedHashMap::new));
     }
 
-    private Map<String, String> resolveMetadataValues(DocumentFolder folder, Map<String, String> rawMetadata) {
+    private Map<String, String> resolveMetadataValues(DocumentFolder folder, Map<String, String> rawMetadata, Set<String> extraAllowedKeys) {
         Map<String, String> sanitizedInput = new HashMap<>();
         if (rawMetadata != null) {
             rawMetadata.forEach((key, value) -> {
@@ -1927,6 +2293,23 @@ public class DocumentService {
                     } else {
                         resolved.put(field.getKey(), normalized);
                     }
+                }
+            }
+        }
+
+        if (extraAllowedKeys != null && !extraAllowedKeys.isEmpty()) {
+            for (String key : extraAllowedKeys) {
+                if (!StringUtils.hasText(key)) {
+                    continue;
+                }
+                String normalizedKey = key.trim();
+                String rawValue = sanitizedInput.get(normalizedKey);
+                if (rawValue == null) {
+                    continue;
+                }
+                String normalizedValue = rawValue.trim();
+                if (StringUtils.hasText(normalizedValue)) {
+                    resolved.put(normalizedKey, normalizedValue);
                 }
             }
         }

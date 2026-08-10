@@ -32,11 +32,15 @@ public class Document {
     @JsonProperty("approver_id")
     private String approverId;
 
+    @JsonProperty("reviewer_id")
+    private String reviewerId;
+
     @JsonProperty("supervisor_id")
     private String supervisorId;
 
     private DocumentFolder folder;
     private com.dms.user.model.AppUser approver;
+    private com.dms.user.model.AppUser reviewer;
     private com.dms.user.model.AppUser supervisor;
 
     private Set<String> tags = new HashSet<>();
@@ -171,6 +175,14 @@ public class Document {
 
     public void setApproverId(String approverId) {
         this.approverId = approverId;
+    }
+
+    public String getReviewerId() {
+        return reviewerId;
+    }
+
+    public void setReviewerId(String reviewerId) {
+        this.reviewerId = reviewerId;
     }
 
     public String getSupervisorId() {
@@ -320,6 +332,14 @@ public class Document {
 
     public void setApprover(com.dms.user.model.AppUser approver) {
         this.approver = approver;
+    }
+
+    public com.dms.user.model.AppUser getReviewer() {
+        return reviewer;
+    }
+
+    public void setReviewer(com.dms.user.model.AppUser reviewer) {
+        this.reviewer = reviewer;
     }
 
     public com.dms.user.model.AppUser getSupervisor() {

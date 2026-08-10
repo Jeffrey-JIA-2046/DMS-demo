@@ -17,6 +17,7 @@ import ReminderManagement from './components/ReminderManagement'
 import JobManagement from './components/JobManagement'
 import CodeTableManagement from './components/CodeTableManagement'
 import WorkflowDesigner from './components/WorkflowDesigner'
+import EformDesigner from './components/EformDesigner'
 
 function SystemAdministration() {
   const [adminTab, setAdminTab] = useState('retention')
@@ -29,6 +30,7 @@ function SystemAdministration() {
           { key: 'jobs', label: 'Job Management' },
           { key: 'codetable', label: 'Code Table Management' },
           { key: 'workflow', label: 'Workflow Designer' },
+          { key: 'eform', label: 'eForm Designer' },
         ].map((tab) => (
           <button
             key={tab.key}
@@ -46,6 +48,7 @@ function SystemAdministration() {
       {adminTab === 'jobs' && <JobManagement />}
       {adminTab === 'codetable' && <CodeTableManagement />}
       {adminTab === 'workflow' && <WorkflowDesigner />}
+      {adminTab === 'eform' && <EformDesigner />}
     </div>
   )
 }
@@ -124,7 +127,21 @@ export default function App() {
   const renderContent = () => {
     switch (selected) {
       case 'My Dashboard':
-        return <UserDashboard />
+        return (
+          <UserDashboard
+            onOpenFavorite={(context) => {
+              if (!context || (!context.documentId && !context.folderId)) {
+                return
+              }
+              setDocumentNavigationContext({
+                documentId: context.documentId ? String(context.documentId) : '',
+                folderId: context.folderId ? String(context.folderId) : '',
+                stamp: Date.now(),
+              })
+              setSelected('Document Management')
+            }}
+          />
+        )
       case 'Knowledge Collaboration':
         return (
           <KnowledgeCollaboration
