@@ -9,12 +9,21 @@ public record DocumentSummaryResponse(
     String id,
     String title,
     String owner,
+    String supervisor,
     String category,
+    String categoryCode,
+    String categoryLabel,
     DocumentStatus status,
+    int confidenceScore,
     Set<String> tags,
     DocumentFolderInfo folder,
     int latestVersion,
     long latestSizeBytes,
-    Instant updatedAt
+    String latestFileName,
+    Instant updatedAt,
+    Boolean isOcr,
+    String ocrStatus,
+    String ocrStatusMessage,
+    Instant ocrStatusUpdatedAt
 ) {
 }

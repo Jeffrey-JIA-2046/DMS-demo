@@ -36,7 +36,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 @Component
 public class DotsOcrClient {
 
-    private static final String DEFAULT_PROMPT = "prompt_layout_all_en";
+    private static final String DEFAULT_PROMPT = "prompt_ocr";
     private static final int DEFAULT_CONFIDENCE = 95;
 
     private final DotsOcrProperties properties;
@@ -51,6 +51,7 @@ public class DotsOcrClient {
         int timeoutMs = (int) timeout.toMillis();
         requestFactory.setConnectTimeout(timeoutMs);
         requestFactory.setConnectionRequestTimeout(timeoutMs);
+        requestFactory.setReadTimeout(timeoutMs);
         this.restTemplate = new RestTemplate(requestFactory);
     }
 
@@ -172,7 +173,7 @@ public class DotsOcrClient {
     }
 
     private Duration safeTimeout(Duration timeout) {
-        return timeout != null ? timeout : Duration.ofSeconds(180);
+        return timeout != null ? timeout : Duration.ofMinutes(5);
     }
 
     private String trimBody(String body) {

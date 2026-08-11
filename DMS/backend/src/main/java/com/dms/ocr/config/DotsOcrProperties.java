@@ -20,7 +20,7 @@ public class DotsOcrProperties {
     private String pdfPath = "/ocr/pdf";
 
     @NotNull
-    private Duration timeout = Duration.ofSeconds(180);
+    private Duration timeout = Duration.ofMinutes(5);
 
     public URI getBaseUrl() {
         return baseUrl;

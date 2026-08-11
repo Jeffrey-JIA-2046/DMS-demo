@@ -5,6 +5,7 @@ import java.util.Optional;
 import java.util.Map;
 
 import org.opensearch.client.opensearch.OpenSearchClient;
+import org.opensearch.client.opensearch._types.Refresh;
 import org.opensearch.client.opensearch.core.SearchRequest;
 import org.opensearch.client.opensearch.core.IndexRequest;
 import org.opensearch.client.opensearch._types.query_dsl.Query;
@@ -42,7 +43,8 @@ public class KnowledgeTopicStarRepository extends BaseOpenSearchRepository<Knowl
 
         IndexRequest.Builder<Map<String, Object>> builder = new IndexRequest.Builder<Map<String, Object>>()
             .index(getIndexName())
-            .document(payload);
+            .document(payload)
+            .refresh(Refresh.WaitFor);
         if (id != null && !id.isBlank()) {
             builder.id(id);
         }
@@ -88,8 +90,8 @@ public class KnowledgeTopicStarRepository extends BaseOpenSearchRepository<Knowl
                 .query(termQuery)
                 .size(0)
                 .build();
-            
-            return (int) search(request).size();
+
+            return (int) openSearchClient.search(request, KnowledgeTopicStar.class).hits().total().value();
         } catch (IOException ex) {
             throw new RuntimeException("Failed to count stars", ex);
         }

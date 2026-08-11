@@ -1,11 +1,12 @@
 package com.dms.knowledge.repository;
 
 import java.io.IOException;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
 import org.opensearch.client.opensearch.OpenSearchClient;
-import org.opensearch.client.opensearch._types.SortOrder;
+import org.opensearch.client.opensearch._types.Refresh;
 import org.opensearch.client.opensearch.core.SearchRequest;
 import org.opensearch.client.opensearch.core.IndexRequest;
 import org.opensearch.client.opensearch._types.query_dsl.Query;
@@ -43,7 +44,8 @@ public class KnowledgeTopicShareRepository extends BaseOpenSearchRepository<Know
 
         IndexRequest.Builder<Map<String, Object>> builder = new IndexRequest.Builder<Map<String, Object>>()
             .index(getIndexName())
-            .document(payload);
+            .document(payload)
+            .refresh(Refresh.WaitFor);
         if (id != null && !id.isBlank()) {
             builder.id(id);
         }
@@ -80,11 +82,12 @@ public class KnowledgeTopicShareRepository extends BaseOpenSearchRepository<Know
             SearchRequest request = new SearchRequest.Builder()
                 .index(getIndexName())
                 .query(termQuery)
-                .sort(s -> s.field(f -> f.field("shared_at").order(SortOrder.Desc)))
                 .size(10000)
                 .build();
-            
-            return search(request);
+
+            List<KnowledgeTopicShare> results = search(request);
+            results.sort(Comparator.comparing(KnowledgeTopicShare::getSharedAt, Comparator.nullsLast(Comparator.reverseOrder())));
+            return results;
         } catch (IOException ex) {
             throw new RuntimeException("Failed to query shares", ex);
         }

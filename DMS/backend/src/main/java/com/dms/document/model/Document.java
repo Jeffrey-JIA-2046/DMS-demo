@@ -17,6 +17,13 @@ public class Document {
     private String description;
     private String owner;
     private String category;
+
+    @JsonProperty("category_code")
+    private String categoryCode;
+
+    @JsonProperty("category_label")
+    private String categoryLabel;
+
     private DocumentStatus status = DocumentStatus.DRAFT;
 
     @JsonProperty("folder_id")
@@ -25,8 +32,16 @@ public class Document {
     @JsonProperty("approver_id")
     private String approverId;
 
+    @JsonProperty("reviewer_id")
+    private String reviewerId;
+
+    @JsonProperty("supervisor_id")
+    private String supervisorId;
+
     private DocumentFolder folder;
     private com.dms.user.model.AppUser approver;
+    private com.dms.user.model.AppUser reviewer;
+    private com.dms.user.model.AppUser supervisor;
 
     private Set<String> tags = new HashSet<>();
     private List<DocumentVersion> versions = new ArrayList<>();
@@ -45,6 +60,30 @@ public class Document {
 
     @JsonProperty("updated_at")
     private Instant updatedAt;
+
+    @JsonProperty("is_ocr")
+    private Boolean isOcr = false;
+
+    @JsonProperty("ocr_status")
+    private String ocrStatus = "NOT_STARTED";
+
+    @JsonProperty("ocr_status_message")
+    private String ocrStatusMessage;
+
+    @JsonProperty("ocr_status_updated_at")
+    private Instant ocrStatusUpdatedAt;
+
+    @JsonProperty("has_data_extraction")
+    private Boolean hasDataExtraction = false;
+
+    @JsonProperty("extracted_json")
+    private Map<String, Object> extractedJson = new LinkedHashMap<>();
+
+    @JsonProperty("extraction_form_type")
+    private String extractionFormType;
+
+    @JsonProperty("extraction_saved_at")
+    private Instant extractionSavedAt;
 
     public String getId() {
         return id;
@@ -86,6 +125,22 @@ public class Document {
         this.category = category;
     }
 
+    public String getCategoryCode() {
+        return categoryCode;
+    }
+
+    public void setCategoryCode(String categoryCode) {
+        this.categoryCode = categoryCode;
+    }
+
+    public String getCategoryLabel() {
+        return categoryLabel;
+    }
+
+    public void setCategoryLabel(String categoryLabel) {
+        this.categoryLabel = categoryLabel;
+    }
+
     public DocumentStatus getStatus() {
         return status;
     }
@@ -120,6 +175,22 @@ public class Document {
 
     public void setApproverId(String approverId) {
         this.approverId = approverId;
+    }
+
+    public String getReviewerId() {
+        return reviewerId;
+    }
+
+    public void setReviewerId(String reviewerId) {
+        this.reviewerId = reviewerId;
+    }
+
+    public String getSupervisorId() {
+        return supervisorId;
+    }
+
+    public void setSupervisorId(String supervisorId) {
+        this.supervisorId = supervisorId;
     }
 
     public Instant getCreatedAt() {
@@ -157,6 +228,70 @@ public class Document {
 
     public void setUpdatedAt(Instant updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public Boolean getIsOcr() {
+        return isOcr;
+    }
+
+    public void setIsOcr(Boolean isOcr) {
+        this.isOcr = isOcr;
+    }
+
+    public String getOcrStatus() {
+        return ocrStatus;
+    }
+
+    public void setOcrStatus(String ocrStatus) {
+        this.ocrStatus = ocrStatus;
+    }
+
+    public String getOcrStatusMessage() {
+        return ocrStatusMessage;
+    }
+
+    public void setOcrStatusMessage(String ocrStatusMessage) {
+        this.ocrStatusMessage = ocrStatusMessage;
+    }
+
+    public Instant getOcrStatusUpdatedAt() {
+        return ocrStatusUpdatedAt;
+    }
+
+    public void setOcrStatusUpdatedAt(Instant ocrStatusUpdatedAt) {
+        this.ocrStatusUpdatedAt = ocrStatusUpdatedAt;
+    }
+
+    public Boolean getHasDataExtraction() {
+        return hasDataExtraction;
+    }
+
+    public void setHasDataExtraction(Boolean hasDataExtraction) {
+        this.hasDataExtraction = hasDataExtraction;
+    }
+
+    public Map<String, Object> getExtractedJson() {
+        return extractedJson;
+    }
+
+    public void setExtractedJson(Map<String, Object> extractedJson) {
+        this.extractedJson = extractedJson != null ? new LinkedHashMap<>(extractedJson) : new LinkedHashMap<>();
+    }
+
+    public String getExtractionFormType() {
+        return extractionFormType;
+    }
+
+    public void setExtractionFormType(String extractionFormType) {
+        this.extractionFormType = extractionFormType;
+    }
+
+    public Instant getExtractionSavedAt() {
+        return extractionSavedAt;
+    }
+
+    public void setExtractionSavedAt(Instant extractionSavedAt) {
+        this.extractionSavedAt = extractionSavedAt;
     }
 
     public Map<String, String> getMetadataValues() {
@@ -197,5 +332,21 @@ public class Document {
 
     public void setApprover(com.dms.user.model.AppUser approver) {
         this.approver = approver;
+    }
+
+    public com.dms.user.model.AppUser getReviewer() {
+        return reviewer;
+    }
+
+    public void setReviewer(com.dms.user.model.AppUser reviewer) {
+        this.reviewer = reviewer;
+    }
+
+    public com.dms.user.model.AppUser getSupervisor() {
+        return supervisor;
+    }
+
+    public void setSupervisor(com.dms.user.model.AppUser supervisor) {
+        this.supervisor = supervisor;
     }
 }

@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import org.opensearch.client.opensearch._types.query_dsl.Query;
+import org.opensearch.client.opensearch._types.Refresh;
 import org.opensearch.client.opensearch.core.IndexRequest;
 import org.opensearch.client.opensearch.core.SearchRequest;
 import org.opensearch.client.opensearch.OpenSearchClient;
@@ -46,7 +47,8 @@ public class KnowledgeTopicRepository extends BaseOpenSearchRepository<Knowledge
 
         IndexRequest.Builder<Map<String, Object>> builder = new IndexRequest.Builder<Map<String, Object>>()
             .index(getIndexName())
-            .document(payload);
+            .document(payload)
+            .refresh(Refresh.WaitFor);
         if (id != null && !id.isBlank()) {
             builder.id(id);
         }
@@ -62,7 +64,7 @@ public class KnowledgeTopicRepository extends BaseOpenSearchRepository<Knowledge
     public Optional<KnowledgeTopic> findById(String id) throws IOException {
         Query query = Query.of(q -> q.bool(b -> b
             .must(m1 -> m1.term(t -> t.field("entity_type").value(v -> v.stringValue(ENTITY_TYPE))))
-            .must(m2 -> m2.term(t -> t.field("id").value(v -> v.stringValue(id))))));
+            .must(m2 -> m2.ids(i -> i.values(id)))));
 
         SearchRequest request = new SearchRequest.Builder()
             .index(getIndexName())

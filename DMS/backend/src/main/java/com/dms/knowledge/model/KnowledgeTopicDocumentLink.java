@@ -92,6 +92,9 @@ public class KnowledgeTopicDocumentLink {
 
     public void setTopic(KnowledgeTopic topic) {
         this.topic = topic;
+        if (topic != null) {
+            this.topicId = topic.getId();
+        }
     }
 
     public com.dms.user.model.AppUser getLinkedBy() {
@@ -100,5 +103,8 @@ public class KnowledgeTopicDocumentLink {
 
     public void setLinkedBy(com.dms.user.model.AppUser linkedBy) {
         this.linkedBy = linkedBy;
+        if (linkedBy != null) {
+            this.linkedById = linkedBy.getId();
+        }
     }
 }

@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter;
 
@@ -17,6 +18,10 @@ import com.dms.chatbot.dto.ChatSearchRequest;
 import com.dms.chatbot.dto.ChatSearchResponse;
 import com.dms.chatbot.dto.DocumentAnswerResponse;
 import com.dms.chatbot.dto.DocumentQuestionRequest;
+import com.dms.chatbot.service.ChatbotDocumentIndexService.ChunkOcrContentBackfillResult;
+import com.dms.chatbot.service.ChatbotDocumentIndexService;
+import com.dms.chatbot.service.ChatbotDocumentIndexService.ChunkVectorBackfillResult;
+import com.dms.chatbot.service.ChatbotDocumentIndexService.HousekeepingResult;
 import com.dms.chatbot.service.ChatbotService;
 
 import jakarta.validation.Valid;
@@ -26,9 +31,12 @@ import jakarta.validation.Valid;
 public class ChatbotController {
 
     private final ChatbotService chatbotService;
+    private final ChatbotDocumentIndexService chatbotDocumentIndexService;
 
-    public ChatbotController(ChatbotService chatbotService) {
+    public ChatbotController(ChatbotService chatbotService,
+                             ChatbotDocumentIndexService chatbotDocumentIndexService) {
         this.chatbotService = chatbotService;
+        this.chatbotDocumentIndexService = chatbotDocumentIndexService;
     }
 
     @PostMapping("/search")
@@ -89,5 +97,31 @@ public class ChatbotController {
         } catch (IOException ex) {
             throw new IllegalStateException("Failed to stream chunk", ex);
         }
+    }
+
+    /**
+     * POST /api/chatbot/index/housekeeping
+     *
+     * Scans the dms-documents-chatbot index and removes any entries whose document
+     * ID no longer exists in dms-documents. Returns a summary of how many entries
+     * were scanned and deleted.
+     */
+    @PostMapping("/index/housekeeping")
+    public HousekeepingResult runHousekeeping() {
+        return chatbotDocumentIndexService.runHousekeeping();
+    }
+
+    @PostMapping({"/index/chunks/title-embedding/backfill", "/index/chunks/vectors/backfill"})
+    public ChunkVectorBackfillResult runChunkTitleEmbeddingBackfill(
+        @RequestParam(value = "dryRun", required = false, defaultValue = "true") boolean dryRun
+    ) {
+        return chatbotDocumentIndexService.runChunkTitleEmbeddingBackfill(dryRun);
+    }
+
+    @PostMapping("/index/chunks/ocr-content/backfill")
+    public ChunkOcrContentBackfillResult runChunkOcrContentBackfill(
+        @RequestParam(value = "dryRun", required = false, defaultValue = "true") boolean dryRun
+    ) {
+        return chatbotDocumentIndexService.runChunkOcrContentBackfill(dryRun);
     }
 }

@@ -54,4 +54,26 @@ public class DocumentOcrResultRepository extends BaseOpenSearchRepository<Docume
         List<DocumentOcrResult> results = search(request);
         return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
     }
+
+    public List<DocumentOcrResult> findAllByDocumentId(String documentId) throws IOException {
+        Query keywordQuery = Query.of(q -> q.term(t -> t.field("document_id.keyword").value(v -> v.stringValue(documentId))));
+        SearchRequest keywordRequest = new SearchRequest.Builder()
+            .index(getIndexName())
+            .query(keywordQuery)
+            .size(200)
+            .build();
+
+        List<DocumentOcrResult> keywordResults = search(keywordRequest);
+        if (!keywordResults.isEmpty()) {
+            return keywordResults;
+        }
+
+        Query query = Query.of(q -> q.term(t -> t.field("document_id").value(v -> v.stringValue(documentId))));
+        SearchRequest request = new SearchRequest.Builder()
+            .index(getIndexName())
+            .query(query)
+            .size(200)
+            .build();
+        return search(request);
+    }
 }

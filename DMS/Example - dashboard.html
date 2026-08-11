@@ -1,0 +1,1046 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <title>DMS Document Management – Drag & Resize</title>
+    <style>
+        /* ===== Reset ===== */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Roboto, system-ui, sans-serif;
+            background: #f0f4f8;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
+        }
+
+        /* ===== Navbar ===== */
+        .navbar {
+            background: linear-gradient(135deg, #1a2a3a, #0f1a26);
+            color: #fff;
+            padding: 0 32px;
+            height: 68px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .navbar-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .navbar-logo {
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            background: linear-gradient(135deg, #64b5f6, #42a5f5);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .navbar-logo span {
+            font-weight: 300;
+            color: #90a4ae;
+            -webkit-text-fill-color: #90a4ae;
+        }
+
+        .navbar-badge {
+            background: rgba(100, 181, 246, 0.18);
+            border: 1px solid rgba(100, 181, 246, 0.25);
+            border-radius: 20px;
+            padding: 4px 14px;
+            font-size: 12px;
+            font-weight: 500;
+            color: #90caf9;
+        }
+
+        .navbar-right {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            font-size: 14px;
+            color: #b0bec5;
+        }
+
+        .navbar-right .user {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .navbar-right .user-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #42a5f5, #1e88e5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 16px;
+            color: #fff;
+        }
+
+        .navbar-right .user-name {
+            color: #e0e0e0;
+            font-weight: 500;
+        }
+
+        /* ===== Main container ===== */
+        .main-container {
+            flex: 1;
+            padding: 28px 32px 40px;
+            max-width: 1600px;
+            margin: 0 auto;
+            width: 100%;
+        }
+
+        .page-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 28px;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .page-header h1 {
+            font-size: 26px;
+            font-weight: 600;
+            color: #1a2a3a;
+            letter-spacing: -0.3px;
+        }
+
+        .page-header h1 small {
+            font-size: 16px;
+            font-weight: 400;
+            color: #78909c;
+            margin-left: 12px;
+        }
+
+        .page-header .actions button {
+            padding: 8px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            background: #fff;
+            color: #1a2a3a;
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+            border: 1px solid #e0e7ef;
+        }
+
+        .page-header .actions button:hover {
+            background: #f5f8fc;
+            border-color: #b0c4d9;
+            transform: translateY(-1px);
+        }
+
+        .page-header .actions button.primary {
+            background: linear-gradient(135deg, #1e88e5, #1565c0);
+            color: #fff;
+            border: none;
+            box-shadow: 0 4px 14px rgba(30, 136, 229, 0.30);
+        }
+
+        .page-header .actions button.primary:hover {
+            background: linear-gradient(135deg, #42a5f5, #1e88e5);
+            transform: translateY(-2px);
+        }
+
+        /* ===== Card grid ===== */
+        .card-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            align-items: flex-start;
+            position: relative;
+        }
+
+        /* ===== Card ===== */
+        .card {
+            background: #ffffff;
+            border-radius: 16px;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            transition: box-shadow 0.25s ease, border-color 0.25s ease;
+            border: 1px solid #eef3f8;
+            min-width: 160px;
+            min-height: 120px;
+            flex: 0 0 auto;
+            overflow: hidden;
+            touch-action: none;
+            will-change: transform;
+        }
+
+        .card:hover {
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
+            border-color: #d5e0ea;
+        }
+
+        .card.dragging {
+            opacity: 0.85;
+            z-index: 1000;
+            box-shadow: 0 16px 48px rgba(0, 0, 0, 0.18);
+            border-color: #1e88e5;
+            transition: none;
+            cursor: grabbing;
+        }
+
+        .card.drag-over {
+            border-color: #1e88e5;
+            box-shadow: 0 0 0 2px #1e88e5, 0 8px 30px rgba(30, 136, 229, 0.15);
+            transform: scale(1.02);
+            transition: transform 0.15s ease;
+        }
+
+        .card.is-resizing {
+            cursor: nwse-resize;
+            border-color: #1e88e5;
+            box-shadow: 0 0 0 2px rgba(30, 136, 229, 0.25);
+        }
+
+        .card-header {
+            padding: 16px 20px 10px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+            border-bottom: 1px solid #f0f4f9;
+        }
+
+        .card-header .title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 600;
+            font-size: 15px;
+            color: #1a2a3a;
+            pointer-events: none;
+        }
+
+        .card-header .title .icon {
+            font-size: 20px;
+        }
+
+        .card-header .badge {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 3px 12px;
+            border-radius: 30px;
+            background: #eef3f8;
+            color: #546e7a;
+            pointer-events: none;
+        }
+
+        .card-body {
+            padding: 16px 20px 20px 20px;
+            flex: 1;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            pointer-events: none;
+        }
+
+        .card-body > * {
+            pointer-events: auto;
+        }
+
+        .card-body .stat-number {
+            font-size: 36px;
+            font-weight: 700;
+            color: #0d1b2a;
+            line-height: 1.1;
+            margin-bottom: 4px;
+        }
+
+        .card-body .stat-label {
+            font-size: 14px;
+            color: #78909c;
+        }
+
+        .card-body .stat-change {
+            font-size: 13px;
+            font-weight: 500;
+            color: #43a047;
+            background: #e8f5e9;
+            padding: 2px 10px;
+            border-radius: 30px;
+            display: inline-block;
+            margin-top: 4px;
+        }
+
+        .card-body .stat-change.down {
+            color: #e53935;
+            background: #ffebee;
+        }
+
+        .doc-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .doc-list li {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 6px 0;
+            border-bottom: 1px solid #f5f8fc;
+            font-size: 14px;
+            color: #1a2a3a;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .doc-list li:last-child {
+            border-bottom: none;
+        }
+
+        .doc-list li .doc-icon {
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+
+        .doc-list li .doc-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .doc-list li .doc-meta {
+            font-size: 12px;
+            color: #90a4ae;
+            flex-shrink: 0;
+        }
+
+        .storage-bar {
+            margin-top: 8px;
+            background: #eef3f8;
+            border-radius: 30px;
+            height: 10px;
+            overflow: hidden;
+            width: 100%;
+        }
+
+        .storage-bar .fill {
+            height: 100%;
+            border-radius: 30px;
+            background: linear-gradient(90deg, #42a5f5, #1e88e5);
+            transition: width 0.4s ease;
+        }
+
+        .storage-bar .fill.warning {
+            background: linear-gradient(90deg, #ffa726, #fb8c00);
+        }
+
+        .storage-info {
+            display: flex;
+            justify-content: space-between;
+            font-size: 14px;
+            color: #546e7a;
+            margin-top: 6px;
+        }
+
+        .activity-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .activity-list li {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 5px 0;
+            font-size: 13px;
+            color: #1a2a3a;
+            border-bottom: 1px solid #f5f8fc;
+        }
+
+        .activity-list li:last-child {
+            border-bottom: none;
+        }
+
+        .activity-list li .time {
+            font-size: 11px;
+            color: #90a4ae;
+            flex-shrink: 0;
+        }
+
+        .activity-list li .desc {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .quick-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            flex: 1;
+            align-content: center;
+        }
+
+        .quick-actions button {
+            padding: 10px 18px;
+            border: none;
+            border-radius: 10px;
+            background: #f5f8fc;
+            color: #1a2a3a;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            flex: 1 0 auto;
+            min-width: 70px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            border: 1px solid transparent;
+        }
+
+        .quick-actions button:hover {
+            background: #e8edf4;
+            border-color: #d0dce8;
+        }
+
+        .quick-actions button.primary-action {
+            background: linear-gradient(135deg, #1e88e5, #1565c0);
+            color: #fff;
+        }
+
+        .quick-actions button.primary-action:hover {
+            background: linear-gradient(135deg, #42a5f5, #1e88e5);
+            box-shadow: 0 4px 16px rgba(30, 136, 229, 0.30);
+        }
+
+        /* ===== Drag handle (top-left) ===== */
+        .drag-handle {
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            width: 28px;
+            height: 28px;
+            background: rgba(30, 136, 229, 0.08);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: grab;
+            z-index: 15;
+            transition: background 0.2s;
+            font-size: 18px;
+            color: #78909c;
+            pointer-events: auto;
+            touch-action: none;
+        }
+
+        .drag-handle:hover {
+            background: rgba(30, 136, 229, 0.18);
+            color: #1e88e5;
+        }
+
+        .drag-handle:active {
+            cursor: grabbing;
+            background: rgba(30, 136, 229, 0.25);
+        }
+
+        .card.dragging .drag-handle {
+            cursor: grabbing;
+        }
+
+        /* ===== Resize handle (bottom-right) ===== */
+        .resize-handle {
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            width: 28px;
+            height: 28px;
+            cursor: nwse-resize;
+            z-index: 20;
+            display: flex;
+            align-items: flex-end;
+            justify-content: flex-end;
+            padding: 4px;
+            background: rgba(30, 136, 229, 0.08);
+            border-top-left-radius: 8px;
+            transition: background 0.2s;
+            pointer-events: auto;
+            touch-action: none;
+        }
+
+        .resize-handle::after {
+            content: '';
+            display: block;
+            width: 18px;
+            height: 18px;
+            background: radial-gradient(circle at bottom right, #1e88e5 2px, transparent 2px);
+            background-size: 6px 6px;
+            background-position: bottom right;
+            background-repeat: no-repeat;
+            opacity: 0.6;
+            transition: opacity 0.2s;
+        }
+
+        .resize-handle:hover,
+        .resize-handle:active {
+            background: rgba(30, 136, 229, 0.20);
+        }
+
+        .resize-handle:hover::after,
+        .resize-handle:active::after {
+            opacity: 1;
+        }
+
+        /* ===== Size tooltip ===== */
+        .size-tooltip {
+            position: fixed;
+            background: rgba(0, 0, 0, 0.80);
+            color: #fff;
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 500;
+            pointer-events: none;
+            z-index: 999;
+            display: none;
+            backdrop-filter: blur(6px);
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* ===== Responsive ===== */
+        @media (max-width: 768px) {
+            .navbar {
+                padding: 0 16px;
+                height: 58px;
+            }
+            .navbar-logo {
+                font-size: 18px;
+            }
+            .navbar-badge {
+                display: none;
+            }
+            .navbar-right .user-name {
+                display: none;
+            }
+            .main-container {
+                padding: 16px;
+            }
+            .page-header h1 {
+                font-size: 20px;
+            }
+            .page-header h1 small {
+                font-size: 13px;
+                margin-left: 6px;
+                display: block;
+            }
+            .card-grid {
+                gap: 14px;
+            }
+            .card {
+                min-width: 120px;
+                min-height: 100px;
+            }
+            .card-header {
+                padding: 12px 14px 8px 14px;
+                padding-left: 48px;
+            }
+            .card-body {
+                padding: 10px 14px 14px 14px;
+            }
+            .card-body .stat-number {
+                font-size: 28px;
+            }
+            .drag-handle {
+                top: 6px;
+                left: 6px;
+                width: 24px;
+                height: 24px;
+                font-size: 16px;
+            }
+            .resize-handle {
+                width: 32px;
+                height: 32px;
+            }
+            .quick-actions button {
+                padding: 8px 12px;
+                font-size: 13px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- ===== Navbar ===== -->
+    <header class="navbar">
+        <div class="navbar-left">
+            <div class="navbar-logo">📁 DMS <span>· Document Management</span></div>
+            <div class="navbar-badge">v3.0 · Enterprise</div>
+        </div>
+        <div class="navbar-right">
+            <span>🔍</span>
+            <span style="color:#546e7a;font-size:13px;">Search documents...</span>
+            <div class="user">
+                <div class="user-avatar">JC</div>
+                <span class="user-name">John Chen</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- ===== Main content ===== -->
+    <main class="main-container">
+
+        <div class="page-header">
+            <h1>
+                📊 Dashboard
+                <small>Drag «⠿» to reorder · Resize with «⇲» handle</small>
+            </h1>
+            <div class="actions">
+                <button>📋 Export Report</button>
+                <button class="primary">＋ New Document</button>
+            </div>
+        </div>
+
+        <div class="card-grid" id="cardGrid">
+
+            <!-- Card 1 -->
+            <div class="card" data-minwidth="180" data-minheight="140" style="width:280px; height:190px;">
+                <div class="drag-handle" title="Drag to reorder">⠿</div>
+                <div class="card-header">
+                    <div class="title"><span class="icon">📄</span> Document Overview</div>
+                    <span class="badge">Live</span>
+                </div>
+                <div class="card-body">
+                    <div class="stat-number">2,847</div>
+                    <div class="stat-label">Total Documents</div>
+                    <div style="display:flex; gap:20px; margin-top:8px; flex-wrap:wrap;">
+                        <div><span style="font-weight:600;color:#1a2a3a;">+128</span> <span style="color:#78909c;font-size:13px;">this week</span></div>
+                        <div><span class="stat-change">▲ 12%</span></div>
+                    </div>
+                </div>
+                <div class="resize-handle"></div>
+            </div>
+
+            <!-- Card 2 -->
+            <div class="card" data-minwidth="180" data-minheight="140" style="width:260px; height:190px;">
+                <div class="drag-handle" title="Drag to reorder">⠿</div>
+                <div class="card-header">
+                    <div class="title"><span class="icon">⏳</span> Pending Approval</div>
+                    <span class="badge" style="background:#fff3e0;color:#e65100;">Action</span>
+                </div>
+                <div class="card-body">
+                    <div class="stat-number" style="color:#e65100;">23</div>
+                    <div class="stat-label">Awaiting your review</div>
+                    <div style="margin-top:10px;">
+                        <span class="stat-change" style="background:#fff3e0;color:#e65100;">⚠️ 3 overdue</span>
+                    </div>
+                </div>
+                <div class="resize-handle"></div>
+            </div>
+
+            <!-- Card 3 -->
+            <div class="card" data-minwidth="200" data-minheight="150" style="width:300px; height:190px;">
+                <div class="drag-handle" title="Drag to reorder">⠿</div>
+                <div class="card-header">
+                    <div class="title"><span class="icon">💾</span> Storage</div>
+                    <span class="badge">In Use</span>
+                </div>
+                <div class="card-body">
+                    <div style="display:flex; justify-content:space-between; align-items:baseline;">
+                        <span style="font-size:28px;font-weight:700;color:#0d1b2a;">68%</span>
+                        <span style="font-size:13px;color:#78909c;">256 GB / 376 GB</span>
+                    </div>
+                    <div class="storage-bar">
+                        <div class="fill warning" style="width:68%;"></div>
+                    </div>
+                    <div class="storage-info">
+                        <span>📁 Used 256 GB</span>
+                        <span>🟢 Free 120 GB</span>
+                    </div>
+                </div>
+                <div class="resize-handle"></div>
+            </div>
+
+            <!-- Card 4 -->
+            <div class="card" data-minwidth="200" data-minheight="160" style="width:320px; height:210px;">
+                <div class="drag-handle" title="Drag to reorder">⠿</div>
+                <div class="card-header">
+                    <div class="title"><span class="icon">📝</span> Recent Documents</div>
+                    <span class="badge">6 items</span>
+                </div>
+                <div class="card-body">
+                    <ul class="doc-list">
+                        <li><span class="doc-icon">📄</span><span class="doc-name">Q4_Financial_v3.2.pptx</span><span class="doc-meta">10:30</span></li>
+                        <li><span class="doc-icon">📄</span><span class="doc-name">Product_Spec_final.pdf</span><span class="doc-meta">yesterday</span></li>
+                        <li><span class="doc-icon">📄</span><span class="doc-name">Contract_scan_2026-07-05.pdf</span><span class="doc-meta">yesterday</span></li>
+                        <li><span class="doc-icon">📄</span><span class="doc-name">Design_Draft_v7.sketch</span><span class="doc-meta">2 days ago</span></li>
+                    </ul>
+                </div>
+                <div class="resize-handle"></div>
+            </div>
+
+            <!-- Card 5 -->
+            <div class="card" data-minwidth="200" data-minheight="160" style="width:300px; height:210px;">
+                <div class="drag-handle" title="Drag to reorder">⠿</div>
+                <div class="card-header">
+                    <div class="title"><span class="icon">📋</span> Activity Log</div>
+                    <span class="badge">Live</span>
+                </div>
+                <div class="card-body">
+                    <ul class="activity-list">
+                        <li><span class="time">10:32</span><span class="desc">Ms. Li uploaded "Meeting_Notes.docx"</span></li>
+                        <li><span class="time">09:15</span><span class="desc">Mr. Wang approved "Budget.xlsx"</span></li>
+                        <li><span class="time">08:40</span><span class="desc">System archived 12 documents</span></li>
+                        <li><span class="time">yesterday</span><span class="desc">Director Zhang shared "Strategy_Plan.pdf"</span></li>
+                    </ul>
+                </div>
+                <div class="resize-handle"></div>
+            </div>
+
+            <!-- Card 6 -->
+            <div class="card" data-minwidth="200" data-minheight="140" style="width:260px; height:190px;">
+                <div class="drag-handle" title="Drag to reorder">⠿</div>
+                <div class="card-header">
+                    <div class="title"><span class="icon">⚡</span> Quick Actions</div>
+                    <span class="badge">Favorites</span>
+                </div>
+                <div class="card-body">
+                    <div class="quick-actions">
+                        <button class="primary-action">📤 Upload</button>
+                        <button>📁 New</button>
+                        <button>🔍 Search</button>
+                        <button>📋 Tag</button>
+                        <button>🗑️ Clean</button>
+                    </div>
+                </div>
+                <div class="resize-handle"></div>
+            </div>
+
+        </div>
+
+        <div style="margin-top:24px; font-size:13px; color:#90a4ae; text-align:center; border-top:1px solid #e8edf4; padding-top:20px;">
+            💡 <strong>Reorder</strong>: drag the <strong>⠿</strong> handle (top-left) to move a card ｜
+            <strong>Resize</strong>: drag the <strong>⇲</strong> handle (bottom-right) to change size
+        </div>
+
+    </main>
+
+    <div class="size-tooltip" id="sizeTooltip"></div>
+
+    <script>
+        (function() {
+            'use strict';
+
+            // =====================================================
+            // 1. Resize (mouse + touch)
+            // =====================================================
+            const tooltip = document.getElementById('sizeTooltip');
+            let resizeCard = null;
+            let isResizing = false;
+
+            document.querySelectorAll('.resize-handle').forEach(handle => {
+                const card = handle.closest('.card');
+                if (!card) return;
+
+                const minW = parseInt(card.dataset.minwidth, 10) || 160;
+                const minH = parseInt(card.dataset.minheight, 10) || 120;
+
+                let startX = 0,
+                    startY = 0,
+                    startW = 0,
+                    startH = 0;
+
+                function startResize(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+
+                    const clientX = e.clientX || (e.touches && e.touches[0].clientX);
+                    const clientY = e.clientY || (e.touches && e.touches[0].clientY);
+                    if (clientX === undefined) return;
+
+                    if (card.classList.contains('dragging')) return;
+
+                    startX = clientX;
+                    startY = clientY;
+                    startW = card.offsetWidth;
+                    startH = card.offsetHeight;
+
+                    resizeCard = card;
+                    isResizing = true;
+                    card.classList.add('is-resizing');
+
+                    tooltip.style.display = 'block';
+                    tooltip.textContent = `${startW} × ${startH}`;
+                    tooltip.style.left = (clientX + 16) + 'px';
+                    tooltip.style.top = (clientY - 10) + 'px';
+
+                    document.body.style.overflow = 'hidden';
+                    document.body.style.cursor = 'nwse-resize';
+
+                    document.addEventListener('mousemove', onMove);
+                    document.addEventListener('mouseup', onEnd);
+                    document.addEventListener('touchmove', onMove, { passive: false });
+                    document.addEventListener('touchend', onEnd, { passive: false });
+                }
+
+                function onMove(e) {
+                    if (!isResizing || !resizeCard) return;
+                    e.preventDefault();
+
+                    const clientX = e.clientX || (e.touches && e.touches[0].clientX);
+                    const clientY = e.clientY || (e.touches && e.touches[0].clientY);
+                    if (clientX === undefined) return;
+
+                    let dx = clientX - startX;
+                    let dy = clientY - startY;
+
+                    let newW = Math.max(minW, startW + dx);
+                    let newH = Math.max(minH, startH + dy);
+
+                    const maxW = window.innerWidth - 40;
+                    const maxH = window.innerHeight - 80;
+                    newW = Math.min(newW, maxW);
+                    newH = Math.min(newH, maxH);
+
+                    resizeCard.style.width = newW + 'px';
+                    resizeCard.style.height = newH + 'px';
+
+                    tooltip.textContent = `${Math.round(newW)} × ${Math.round(newH)}`;
+                    tooltip.style.left = (clientX + 16) + 'px';
+                    tooltip.style.top = (clientY - 10) + 'px';
+
+                    const evt = new CustomEvent('cardresize', {
+                        detail: { card: resizeCard, width: newW, height: newH }
+                    });
+                    resizeCard.dispatchEvent(evt);
+                }
+
+                function onEnd(e) {
+                    if (!isResizing) return;
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onEnd);
+                    document.removeEventListener('touchmove', onMove);
+                    document.removeEventListener('touchend', onEnd);
+
+                    if (resizeCard) {
+                        resizeCard.classList.remove('is-resizing');
+                    }
+                    document.body.style.overflow = '';
+                    document.body.style.cursor = '';
+                    tooltip.style.display = 'none';
+                    isResizing = false;
+                    resizeCard = null;
+                }
+
+                handle.addEventListener('mousedown', startResize);
+                handle.addEventListener('touchstart', startResize, { passive: false });
+            });
+
+            // =====================================================
+            // 2. Reorder (drag & drop) with custom events
+            // =====================================================
+            const grid = document.getElementById('cardGrid');
+            let dragCard = null;
+            let isDragging = false;
+            let startX = 0,
+                startY = 0;
+            let dragOffsetX = 0,
+                dragOffsetY = 0;
+
+            const cards = document.querySelectorAll('.card');
+
+            document.querySelectorAll('.drag-handle').forEach(handle => {
+                const card = handle.closest('.card');
+                if (!card) return;
+
+                function onDragStart(e) {
+                    if (card.classList.contains('is-resizing')) return;
+
+                    const clientX = e.clientX || (e.touches && e.touches[0].clientX);
+                    const clientY = e.clientY || (e.touches && e.touches[0].clientY);
+                    if (clientX === undefined) return;
+
+                    e.preventDefault();
+
+                    dragCard = card;
+                    isDragging = true;
+                    startX = clientX;
+                    startY = clientY;
+
+                    const rect = card.getBoundingClientRect();
+                    dragOffsetX = clientX - rect.left;
+                    dragOffsetY = clientY - rect.top;
+
+                    card.classList.add('dragging');
+                    card.style.transition = 'none';
+
+                    document.body.style.overflow = 'hidden';
+
+                    document.addEventListener('mousemove', onDragMove);
+                    document.addEventListener('mouseup', onDragEnd);
+                    document.addEventListener('touchmove', onDragMove, { passive: false });
+                    document.addEventListener('touchend', onDragEnd, { passive: false });
+                }
+
+                function onDragMove(e) {
+                    if (!isDragging || !dragCard) return;
+                    e.preventDefault();
+
+                    const clientX = e.clientX || (e.touches && e.touches[0].clientX);
+                    const clientY = e.clientY || (e.touches && e.touches[0].clientY);
+                    if (clientX === undefined) return;
+
+                    const dx = clientX - startX;
+                    const dy = clientY - startY;
+
+                    dragCard.style.transform = `translate(${dx}px, ${dy}px)`;
+
+                    const allCards = Array.from(grid.children);
+                    let targetCard = null;
+                    for (let c of allCards) {
+                        if (c === dragCard) continue;
+                        const r = c.getBoundingClientRect();
+                        if (clientX >= r.left && clientX <= r.right &&
+                            clientY >= r.top && clientY <= r.bottom) {
+                            targetCard = c;
+                            break;
+                        }
+                    }
+
+                    allCards.forEach(c => c.classList.remove('drag-over'));
+                    if (targetCard) {
+                        targetCard.classList.add('drag-over');
+                    }
+                }
+
+                function onDragEnd(e) {
+                    if (!isDragging || !dragCard) return;
+
+                    document.removeEventListener('mousemove', onDragMove);
+                    document.removeEventListener('mouseup', onDragEnd);
+                    document.removeEventListener('touchmove', onDragMove);
+                    document.removeEventListener('touchend', onDragEnd);
+
+                    dragCard.classList.remove('dragging');
+                    dragCard.style.transform = '';
+                    dragCard.style.transition = '';
+                    document.body.style.overflow = '';
+
+                    const allCards = Array.from(grid.children);
+                    let targetCard = null;
+                    allCards.forEach(c => {
+                        if (c.classList.contains('drag-over')) {
+                            targetCard = c;
+                        }
+                        c.classList.remove('drag-over');
+                    });
+
+                    if (targetCard && targetCard !== dragCard) {
+                        const dragIndex = allCards.indexOf(dragCard);
+                        const targetIndex = allCards.indexOf(targetCard);
+                        if (dragIndex < targetIndex) {
+                            if (targetCard.nextSibling) {
+                                grid.insertBefore(dragCard, targetCard.nextSibling);
+                            } else {
+                                grid.appendChild(dragCard);
+                            }
+                        } else {
+                            grid.insertBefore(dragCard, targetCard);
+                        }
+
+                        const evt = new CustomEvent('cardsorted', {
+                            detail: { src: dragCard, target: targetCard }
+                        });
+                        document.dispatchEvent(evt);
+                    }
+
+                    isDragging = false;
+                    dragCard = null;
+                }
+
+                handle.addEventListener('mousedown', onDragStart);
+                handle.addEventListener('touchstart', onDragStart, { passive: false });
+            });
+
+            // =====================================================
+            // 3. Auto‑hide meta info on small cards
+            // =====================================================
+            cards.forEach(card => {
+                card.addEventListener('cardresize', function(e) {
+                    const { width } = e.detail;
+                    const docMeta = card.querySelectorAll('.doc-meta');
+                    const activityTime = card.querySelectorAll('.activity-list .time');
+                    const show = width >= 220;
+                    docMeta.forEach(el => el.style.display = show ? '' : 'none');
+                    activityTime.forEach(el => el.style.display = show ? '' : 'none');
+                });
+                // initial trigger
+                const initEvt = new CustomEvent('cardresize', {
+                    detail: { card, width: card.offsetWidth, height: card.offsetHeight }
+                });
+                card.dispatchEvent(initEvt);
+            });
+
+            // =====================================================
+            // 4. Double‑click resize handle to reset size
+            // =====================================================
+            document.querySelectorAll('.resize-handle').forEach(handle => {
+                handle.addEventListener('dblclick', function(e) {
+                    e.stopPropagation();
+                    const card = this.closest('.card');
+                    if (!card) return;
+                    let dw = 280,
+                        dh = 190;
+                    const headerText = card.querySelector('.card-header .title')?.textContent || '';
+                    if (headerText.includes('Overview')) { dw = 280;
+                        dh = 190; } else if (headerText.includes('Pending')) { dw = 260;
+                        dh = 190; } else if (headerText.includes('Storage')) { dw = 300;
+                        dh = 190; } else if (headerText.includes('Recent')) { dw = 320;
+                        dh = 210; } else if (headerText.includes('Activity')) { dw = 300;
+                        dh = 210; } else if (headerText.includes('Quick')) { dw = 260;
+                        dh = 190; }
+                    card.style.width = dw + 'px';
+                    card.style.height = dh + 'px';
+                    const evt = new CustomEvent('cardresize', {
+                        detail: { card, width: dw, height: dh }
+                    });
+                    card.dispatchEvent(evt);
+                });
+            });
+
+            console.log('✅ DMS Dashboard — Drag to reorder (⠿) + Resize (⇲) enabled');
+        })();
+    </script>
+
+</body>
+</html>

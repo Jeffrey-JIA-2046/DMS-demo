@@ -7,6 +7,7 @@ public record FolderMetadataFieldDto(
     String label,
     MetadataFieldType type,
     boolean required,
-    String hint
+    String hint,
+    String codeTableCode
 ) {
 }

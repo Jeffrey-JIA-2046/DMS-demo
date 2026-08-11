@@ -59,6 +59,9 @@ public class KnowledgeTopicStar {
 
     public void setTopic(KnowledgeTopic topic) {
         this.topic = topic;
+        if (topic != null) {
+            this.topicId = topic.getId();
+        }
     }
 
     public com.dms.user.model.AppUser getUser() {
@@ -67,5 +70,8 @@ public class KnowledgeTopicStar {
 
     public void setUser(com.dms.user.model.AppUser user) {
         this.user = user;
+        if (user != null) {
+            this.userId = user.getId();
+        }
     }
 }

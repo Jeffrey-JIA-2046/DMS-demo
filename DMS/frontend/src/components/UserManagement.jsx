@@ -51,6 +51,17 @@ export default function UserManagement() {
     return map
   }, [])
 
+  const validGroupIds = useMemo(() => new Set(groups.map((group) => String(group.id))), [groups])
+  const groupIdByNameLower = useMemo(() => {
+    const map = new Map()
+    groups.forEach((group) => {
+      if (group?.name) {
+        map.set(String(group.name).toLowerCase(), String(group.id))
+      }
+    })
+    return map
+  }, [groups])
+
   useEffect(() => {
     refreshAll()
   }, [])
@@ -153,7 +164,7 @@ export default function UserManagement() {
         username: userForm.username.trim(),
         displayName: userForm.displayName.trim(),
         role: userForm.role,
-        groupIds: userForm.groupIds,
+        groupIds: userForm.groupIds.filter((id) => validGroupIds.has(String(id))),
       }
       if (!editingUserId && trimmedPassword) {
         payload.password = trimmedPassword
@@ -194,12 +205,24 @@ export default function UserManagement() {
   function startEditUser(user) {
     setEditingUserId(user.id)
     const managedPassword = user.userPassword || ''
+    const normalizedGroupIds = (user.groups ?? [])
+      .map((group) => {
+        const directId = group?.id != null ? String(group.id) : null
+        if (directId && validGroupIds.has(directId)) {
+          return directId
+        }
+        if (group?.name) {
+          return groupIdByNameLower.get(String(group.name).toLowerCase()) ?? null
+        }
+        return null
+      })
+      .filter(Boolean)
     setUserForm({
       username: user.username,
       displayName: user.displayName,
       password: managedPassword,
       role: user.role,
-      groupIds: user.groups?.map((g) => g.id) ?? [],
+      groupIds: [...new Set(normalizedGroupIds)],
     })
     setOriginalPassword(managedPassword)
     setShowPassword(false)

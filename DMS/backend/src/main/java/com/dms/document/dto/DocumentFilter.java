@@ -1,5 +1,6 @@
 package com.dms.document.dto;
 
+import java.util.List;
 import java.util.Set;
 
 import com.dms.document.model.DocumentStatus;
@@ -10,6 +11,14 @@ public record DocumentFilter(
     String category,
     DocumentStatus status,
     Set<String> tags,
-    String folderId
+    String folderId,
+    Set<String> searchColumns,
+    String searchOperator,
+    List<String> conditionFields,
+    List<String> conditionValues,
+    List<String> conditionOperators,
+    List<Integer> conditionGroups,
+    List<String> conditionJoins,
+    String conditionOperator
 ) {
 }

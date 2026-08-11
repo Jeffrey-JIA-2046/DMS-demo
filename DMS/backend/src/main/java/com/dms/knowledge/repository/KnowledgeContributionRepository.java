@@ -1,11 +1,12 @@
 package com.dms.knowledge.repository;
 
 import java.io.IOException;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
 import org.opensearch.client.opensearch.OpenSearchClient;
-import org.opensearch.client.opensearch._types.SortOrder;
+import org.opensearch.client.opensearch._types.Refresh;
 import org.opensearch.client.opensearch.core.SearchRequest;
 import org.opensearch.client.opensearch.core.IndexRequest;
 import org.opensearch.client.opensearch._types.query_dsl.Query;
@@ -43,7 +44,8 @@ public class KnowledgeContributionRepository extends BaseOpenSearchRepository<Kn
 
         IndexRequest.Builder<Map<String, Object>> builder = new IndexRequest.Builder<Map<String, Object>>()
             .index(getIndexName())
-            .document(payload);
+            .document(payload)
+            .refresh(Refresh.WaitFor);
         if (id != null && !id.isBlank()) {
             builder.id(id);
         }
@@ -82,8 +84,8 @@ public class KnowledgeContributionRepository extends BaseOpenSearchRepository<Kn
                 .query(termQuery)
                 .size(0)
                 .build();
-            
-            return (int) search(request).size();
+
+            return (int) openSearchClient.search(request, KnowledgeContribution.class).hits().total().value();
         } catch (IOException ex) {
             throw new RuntimeException("Failed to count contributions", ex);
         }
@@ -97,11 +99,12 @@ public class KnowledgeContributionRepository extends BaseOpenSearchRepository<Kn
             SearchRequest request = new SearchRequest.Builder()
                 .index(getIndexName())
                 .query(termQuery)
-                .sort(s -> s.field(f -> f.field("created_at").order(SortOrder.Asc)))
                 .size(10000)
                 .build();
-            
-            return search(request);
+
+            List<KnowledgeContribution> results = search(request);
+            results.sort(Comparator.comparing(KnowledgeContribution::getCreatedAt, Comparator.nullsLast(Comparator.naturalOrder())));
+            return results;
         } catch (IOException ex) {
             throw new RuntimeException("Failed to query contributions", ex);
         }
@@ -115,11 +118,12 @@ public class KnowledgeContributionRepository extends BaseOpenSearchRepository<Kn
             SearchRequest request = new SearchRequest.Builder()
                 .index(getIndexName())
                 .query(termQuery)
-                .sort(s -> s.field(f -> f.field("created_at").order(SortOrder.Desc)))
                 .size(10000)
                 .build();
-            
-            return search(request);
+
+            List<KnowledgeContribution> results = search(request);
+            results.sort(Comparator.comparing(KnowledgeContribution::getCreatedAt, Comparator.nullsLast(Comparator.reverseOrder())));
+            return results;
         } catch (IOException ex) {
             throw new RuntimeException("Failed to query contributions", ex);
         }

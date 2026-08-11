@@ -37,8 +37,8 @@ public class DocumentFolderController {
     }
 
     @GetMapping("/tree")
-    public List<DocumentFolderTreeNode> getTree() {
-        return folderService.getTree();
+    public List<DocumentFolderTreeNode> getTree(java.security.Principal principal) {
+        return folderService.getTree(principal != null ? principal.getName() : null);
     }
 
     @PostMapping
@@ -59,14 +59,20 @@ public class DocumentFolderController {
     }
 
     @GetMapping("/{folderId}/permissions")
-    public FolderPermissionsResponse getPermissions(@PathVariable String folderId) {
-        return permissionService.getPermissions(folderId);
+    public FolderPermissionsResponse getPermissions(@PathVariable String folderId, java.security.Principal principal) {
+        return permissionService.getPermissions(folderId, principal != null ? principal.getName() : null);
+    }
+
+    @GetMapping("/permissions/template")
+    public FolderPermissionsResponse getPermissionTemplate(java.security.Principal principal) {
+        return permissionService.getPermissionTemplate(principal != null ? principal.getName() : null);
     }
 
     @PutMapping("/{folderId}/permissions")
     public FolderPermissionsResponse updatePermissions(@PathVariable String folderId,
-            @RequestBody FolderPermissionUpdateRequest request) {
-        return permissionService.updatePermissions(folderId, request);
+            @RequestBody FolderPermissionUpdateRequest request,
+            java.security.Principal principal) {
+        return permissionService.updatePermissions(folderId, request, principal != null ? principal.getName() : null);
     }
 
     @GetMapping("/{folderId}/my-permissions")

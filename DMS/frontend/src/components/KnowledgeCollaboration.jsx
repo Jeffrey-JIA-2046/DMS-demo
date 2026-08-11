@@ -46,6 +46,8 @@ const parseTags = (value) => {
     .filter(Boolean)
 }
 
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
 const downloadBlob = (blob, fileName) => {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
@@ -57,7 +59,18 @@ const downloadBlob = (blob, fileName) => {
   setTimeout(() => URL.revokeObjectURL(url), 2000)
 }
 
-export default function KnowledgeCollaboration() {
+const buildRelatedTopicQuery = (context) => {
+  if (!context) return ''
+  const title = (context.title || '').trim()
+  const description = (context.description || '').trim()
+  if (title) return title
+  if (description) {
+    return description.length > 120 ? `${description.slice(0, 120)}...` : description
+  }
+  return ''
+}
+
+export default function KnowledgeCollaboration({ navigationContext = null, onOpenLinkedDocument = null }) {
   const { isAuthenticated, currentUser } = useContext(AuthContext)
   const [filters, setFilters] = useState({ query: '', tags: '', starredOnly: false, joinedOnly: false })
   const [page, setPage] = useState(0)
@@ -101,7 +114,6 @@ export default function KnowledgeCollaboration() {
   const [editingTopicId, setEditingTopicId] = useState(null)
 
   const [detailPanelOpen, setDetailPanelOpen] = useState(false)
-  const [topicModalOpen, setTopicModalOpen] = useState(false)
 
   const renderTopicDetail = (topic) => {
     if (!topic) return null
@@ -181,21 +193,28 @@ export default function KnowledgeCollaboration() {
           joinedOnly: filters.joinedOnly,
         })
         if (ignore) return
-        setTopics(response?.content ?? [])
+        const sortedTopics = [...(response?.content ?? [])].sort((a, b) => {
+          const starDelta = (b?.starCount ?? 0) - (a?.starCount ?? 0)
+          if (starDelta !== 0) {
+            return starDelta
+          }
+          return (a?.title ?? '').localeCompare(b?.title ?? '')
+        })
+        setTopics(sortedTopics)
         setPageMeta({
           page: response?.page ?? 0,
           size: response?.size ?? 8,
           totalPages: response?.totalPages ?? 0,
           totalElements: response?.totalElements ?? 0,
         })
-        if ((response?.content?.length ?? 0) === 0) {
+        if (sortedTopics.length === 0) {
           setSelectedTopicId(null)
         } else {
           setSelectedTopicId((current) => {
-            if (current && response.content.some((topic) => topic.id === current)) {
+            if (current && sortedTopics.some((topic) => topic.id === current)) {
               return current
             }
-            return response.content[0]?.id ?? null
+            return sortedTopics[0]?.id ?? null
           })
         }
       } catch (err) {
@@ -286,6 +305,23 @@ export default function KnowledgeCollaboration() {
     }
   }, [documentQuery, isAuthenticated])
 
+  useEffect(() => {
+    if (!isAuthenticated || !navigationContext?.stamp) {
+      return
+    }
+    const query = buildRelatedTopicQuery(navigationContext)
+    setPage(0)
+    setFilters((prev) => ({
+      ...prev,
+      query,
+      starredOnly: false,
+      joinedOnly: false,
+    }))
+    if (query) {
+      showBanner(`Showing related topics for document: ${navigationContext.title || navigationContext.documentId}`, 'info')
+    }
+  }, [navigationContext?.stamp, isAuthenticated, showBanner])
+
   const canJoin = selectedTopic && !selectedTopic.member
   const canStar = !!selectedTopic
 
@@ -313,7 +349,23 @@ export default function KnowledgeCollaboration() {
       // If user selected an existing document to attach/link
       if (createForm.linkDocumentId) {
         try {
-          await linkKnowledgeDocument(topic.id, { documentId: Number(createForm.linkDocumentId), note: createForm.linkNote })
+          const linkPayload = {
+            documentId: String(createForm.linkDocumentId),
+            note: createForm.linkNote,
+          }
+          for (let attempt = 0; attempt < 4; attempt += 1) {
+            try {
+              await linkKnowledgeDocument(topic.id, linkPayload)
+              break
+            } catch (linkErr) {
+              const linkMessage = String(linkErr?.message || '').toLowerCase()
+              const shouldRetry = linkErr?.status === 404 || linkMessage.includes('knowledge topic not found')
+              if (!shouldRetry || attempt === 3) {
+                throw linkErr
+              }
+              await delay(250 * (attempt + 1))
+            }
+          }
         } catch (linkErr) {
           showBanner(linkErr.message || 'Unable to link document', 'error')
         }
@@ -378,7 +430,7 @@ export default function KnowledgeCollaboration() {
     try {
       const payload = {
         content: contributionText.trim(),
-        linkedDocumentId: contributionDocId ? Number(contributionDocId) : null,
+        linkedDocumentId: contributionDocId || null,
       }
       const updated = await addKnowledgeContribution(selectedTopicId, payload)
       setSelectedTopic(updated)
@@ -432,7 +484,7 @@ export default function KnowledgeCollaboration() {
     setLinking(true)
     try {
       const payload = {
-        documentId: Number(linkForm.documentId),
+        documentId: linkForm.documentId,
         note: linkForm.note.trim(),
       }
       const updated = await linkKnowledgeDocument(selectedTopicId, payload)
@@ -501,6 +553,15 @@ export default function KnowledgeCollaboration() {
     } catch (err) {
       showBanner(err.message || 'Unable to download attachment', 'error')
     }
+  }
+
+  const handleOpenLinkedDocument = async (documentId) => {
+    if (!documentId) return
+    if (typeof onOpenLinkedDocument === 'function') {
+      onOpenLinkedDocument(String(documentId))
+      return
+    }
+    showBanner('Document navigation is unavailable.', 'error')
   }
 
   const topicStats = useMemo(() => {
@@ -600,88 +661,127 @@ export default function KnowledgeCollaboration() {
           </div>
 
           {createModalOpen && (
-            <div className="modal-backdrop">
-              <div className="modal">
-                <header className="modal__header">
-                  <h3>{editingTopicId ? 'Edit topic' : 'Create topic'}</h3>
-                  <button className="ghost" onClick={() => { setCreateModalOpen(false); setEditingTopicId(null) }}>✕</button>
+            <div
+              className="upload-panel topic-create-panel"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="topic-create-modal-title"
+            >
+              <div className="upload-panel__backdrop" onClick={() => { setCreateModalOpen(false); setEditingTopicId(null) }} />
+              <form className="upload-panel__content topic-create-panel__content" onSubmit={handleCreateTopic} onClick={(e) => e.stopPropagation()}>
+                <header>
+                  <div>
+                    <p className="eyebrow">New upload</p>
+                    <h3 id="topic-create-modal-title">Topic metadata</h3>
+                  </div>
+                  <button type="button" className="ghost" onClick={() => { setCreateModalOpen(false); setEditingTopicId(null) }}>Close</button>
                 </header>
-                <form className="modal__body" onSubmit={handleCreateTopic}>
-                  <div className="field">
-                    <label>Title</label>
-                    <input
-                      type="text"
-                      value={createForm.title}
-                      onChange={(e) => setCreateForm((prev) => ({ ...prev, title: e.target.value }))}
-                      placeholder="Zero-trust onboarding"
-                    />
-                  </div>
-                  <div className="field">
-                    <label>Description</label>
-                    <textarea
-                      rows={3}
-                      value={createForm.description}
-                      onChange={(e) => setCreateForm((prev) => ({ ...prev, description: e.target.value }))}
-                      placeholder="What problem are we solving?"
-                    />
-                  </div>
-                  <div className="field">
-                    <label>Tags</label>
-                    <input
-                      type="text"
-                      value={createForm.tags}
-                      onChange={(e) => setCreateForm((prev) => ({ ...prev, tags: e.target.value }))}
-                      placeholder="compliance, onboarding"
-                    />
-                  </div>
-                  <div className="field">
-                    <label>Attach existing document (optional)</label>
-                    <input
-                      type="search"
-                      placeholder="Search documents by title, owner"
-                      value={documentQuery}
-                      onChange={(e) => setDocumentQuery(e.target.value)}
-                    />
-                    <select
-                      value={createForm.linkDocumentId}
-                      onChange={(e) => setCreateForm((prev) => ({ ...prev, linkDocumentId: e.target.value }))}
-                    >
-                      <option value="">Choose a document to link</option>
-                      {documentOptions.map((doc) => (
-                        <option key={doc.id} value={doc.id}>{describeDocumentOption(doc)}</option>
-                      ))}
-                    </select>
-                    <input
-                      type="text"
-                      placeholder="Note about link (optional)"
-                      value={createForm.linkNote}
-                      onChange={(e) => setCreateForm((prev) => ({ ...prev, linkNote: e.target.value }))}
-                    />
+
+                <div className="upload-panel__layout topic-create-panel__layout">
+                  <div className="upload-panel__primary">
+                    <label>
+                      <span>Title</span>
+                      <input
+                        type="text"
+                        value={createForm.title}
+                        onChange={(e) => setCreateForm((prev) => ({ ...prev, title: e.target.value }))}
+                        placeholder="Zero-trust onboarding"
+                      />
+                    </label>
+                    <label>
+                      <span>Description</span>
+                      <textarea
+                        rows={4}
+                        value={createForm.description}
+                        onChange={(e) => setCreateForm((prev) => ({ ...prev, description: e.target.value }))}
+                        placeholder="What problem are we solving?"
+                      />
+                    </label>
+                    <label>
+                      <span>Tags</span>
+                      <input
+                        type="text"
+                        value={createForm.tags}
+                        onChange={(e) => setCreateForm((prev) => ({ ...prev, tags: e.target.value }))}
+                        placeholder="compliance, onboarding"
+                      />
+                      <small>Use comma-separated tags.</small>
+                    </label>
                   </div>
 
-                  <div className="field">
-                    <label>Or upload new document (optional)</label>
-                    <input
-                      type="file"
-                      onChange={(e) => setCreateForm((prev) => ({ ...prev, uploadFile: e.target.files?.[0] ?? null }))}
-                    />
-                    <input
-                      type="text"
-                      placeholder="File notes (optional)"
-                      value={createForm.uploadDescription}
-                      onChange={(e) => setCreateForm((prev) => ({ ...prev, uploadDescription: e.target.value }))}
-                    />
+                  <div className="upload-panel__secondary topic-create-panel__secondary">
+                    <section className="folder-section">
+                      <div className="folder-section__header">
+                        <span>Attach document</span>
+                      </div>
+                      <label>
+                        <span>Search documents</span>
+                        <input
+                          type="search"
+                          placeholder="Search documents by title, owner"
+                          value={documentQuery}
+                          onChange={(e) => setDocumentQuery(e.target.value)}
+                        />
+                      </label>
+                      <label>
+                        <span>Select document</span>
+                        <select
+                          value={createForm.linkDocumentId}
+                          onChange={(e) => setCreateForm((prev) => ({ ...prev, linkDocumentId: e.target.value }))}
+                        >
+                          <option value="">Choose a document to link</option>
+                          {documentOptions.map((doc) => (
+                            <option key={doc.id} value={doc.id}>{describeDocumentOption(doc)}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        <span>Link note (optional)</span>
+                        <input
+                          type="text"
+                          placeholder="Why is this document relevant?"
+                          value={createForm.linkNote}
+                          onChange={(e) => setCreateForm((prev) => ({ ...prev, linkNote: e.target.value }))}
+                        />
+                      </label>
+                      {docOptionsLoading && <p className="feedback">Loading documents...</p>}
+                      {docOptionsError && <p className="feedback feedback--error">{docOptionsError}</p>}
+                    </section>
+
+                    <section className="folder-section">
+                      <div className="folder-section__header">
+                        <span>Upload document</span>
+                      </div>
+                      <label>
+                        <span>Attachment</span>
+                        <input
+                          type="file"
+                          onChange={(e) => setCreateForm((prev) => ({ ...prev, uploadFile: e.target.files?.[0] ?? null }))}
+                        />
+                        <small>{createForm.uploadFile ? `Selected: ${createForm.uploadFile.name}` : 'Optional file to include in this topic.'}</small>
+                      </label>
+                      <label>
+                        <span>Attachment note (optional)</span>
+                        <input
+                          type="text"
+                          placeholder="File notes"
+                          value={createForm.uploadDescription}
+                          onChange={(e) => setCreateForm((prev) => ({ ...prev, uploadDescription: e.target.value }))}
+                        />
+                      </label>
+                    </section>
                   </div>
-                  <div className="modal__actions">
-                    <button type="button" className="ghost" onClick={() => setCreateModalOpen(false)}>
-                      Cancel
-                    </button>
-                    <button className="primary" type="submit" disabled={creating}>
-                      {creating ? 'Saving…' : editingTopicId ? 'Save changes' : 'Create topic'}
-                    </button>
-                  </div>
-                </form>
-              </div>
+                </div>
+
+                <div className="upload-panel__actions topic-create-panel__actions">
+                  <button type="button" className="ghost" onClick={() => { setCreateModalOpen(false); setEditingTopicId(null) }}>
+                    Close
+                  </button>
+                  <button className="primary" type="submit" disabled={creating}>
+                    {creating ? 'Saving...' : editingTopicId ? 'Save' : 'Create'}
+                  </button>
+                </div>
+              </form>
             </div>
           )}
 
@@ -695,7 +795,7 @@ export default function KnowledgeCollaboration() {
               <button
                 key={topic.id}
                 className={`knowledge__topic ${selectedTopicId === topic.id ? 'is-active' : ''}`}
-                onClick={() => { setSelectedTopicId(topic.id); setTopicModalOpen(true); }}
+                onClick={() => { setSelectedTopicId(topic.id) }}
               >
                 <div>
                   <p className="knowledge__topic-title">{topic.title}</p>
@@ -708,56 +808,6 @@ export default function KnowledgeCollaboration() {
               </button>
             ))}
           </div>
-
-          {topicModalOpen && selectedTopic && (
-            <div className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="topic-modal-title">
-              <div className="modal-layer__backdrop" onClick={() => setTopicModalOpen(false)} />
-              <div className="modal-layer__content topic-modal">
-                <div className="modal-layer__header">
-                  <div>
-                    <p className="eyebrow">Topic</p>
-                    <h3 id="topic-modal-title">{selectedTopic.title}</h3>
-                    <p className="knowledge__topic-desc">{selectedTopic.description || 'No description yet.'}</p>
-                    <div className="knowledge__tags">{(selectedTopic.tags || []).map((tag) => (
-                      <span key={tag} className="pill pill--info">{tag}</span>
-                    ))}</div>
-                  </div>
-                  <button type="button" className="ghost" onClick={() => setTopicModalOpen(false)}>Close</button>
-                </div>
-                <div className="topic-modal__body">
-                  <div className="knowledge__stat-grid">
-                    {(() => {
-                      const topicStats = [
-                        { label: 'Stars', value: selectedTopic.starCount || 0 },
-                        { label: 'Members', value: selectedTopic.memberCount || 0 },
-                        { label: 'Contributions', value: selectedTopic.contributionCount || 0 },
-                      ]
-                      return topicStats.map((stat) => (
-                        <div key={stat.label} className="knowledge__stat">
-                          <span className="eyebrow">{stat.label}</span>
-                          <strong>{stat.value}</strong>
-                        </div>
-                      ))
-                    })()}
-                  </div>
-                  <div className="knowledge__actions" style={{ marginTop: '1rem' }}>
-                    <button className="ghost" onClick={handleStarToggle} disabled={!canStar}>
-                      {selectedTopic.starredByMe ? '★ Starred' : '☆ Star topic'}
-                    </button>
-                    {canJoin ? (
-                      <button className="primary" onClick={async () => { await handleJoin(); setTopicModalOpen(false); }}>
-                        Join topic
-                      </button>
-                    ) : (
-                      <button className="ghost" onClick={handleDownloadChain}>
-                        Download chain
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
 
           {pageMeta.totalPages > 1 && (
             <div className="knowledge__pagination">
@@ -1004,11 +1054,28 @@ export default function KnowledgeCollaboration() {
                           <p>{link.note || 'No notes provided.'}</p>
                           <small>Linked by {link.linkedBy}</small>
                         </div>
-                        {selectedTopic.member && (
-                          <button className="ghost ghost--small" onClick={() => handleUnlinkDocument(link.id)}>
-                            Remove
+                        <div className="knowledge__actions">
+                          <button
+                            type="button"
+                            className="ghost icon-btn"
+                            onClick={() => handleOpenLinkedDocument(link.documentId)}
+                            title="Open linked document"
+                            aria-label={`Open linked document ${link.documentTitle || link.documentId}`}
+                          >
+                            <span aria-hidden className="icon">↗️</span>
                           </button>
-                        )}
+                          {selectedTopic.member && (
+                            <button
+                              type="button"
+                              className="ghost icon-btn"
+                              onClick={() => handleUnlinkDocument(link.id)}
+                              title="Remove linked document"
+                              aria-label={`Remove linked document ${link.documentTitle || link.documentId}`}
+                            >
+                              <span aria-hidden className="icon">🗑️</span>
+                            </button>
+                          )}
+                        </div>
                       </li>
                     ))}
                   </ul>
@@ -1033,8 +1100,14 @@ export default function KnowledgeCollaboration() {
                           <p>{upload.description || 'No description'}</p>
                           <small>{(upload.size / 1024).toFixed(1)} KB · {upload.uploadedBy}</small>
                         </div>
-                        <button className="ghost ghost--small" onClick={() => handleDownloadAttachment(upload.id)}>
-                          Download
+                        <button
+                          type="button"
+                          className="ghost icon-btn"
+                          onClick={() => handleDownloadAttachment(upload.id)}
+                          title={`Download ${upload.fileName}`}
+                          aria-label={`Download ${upload.fileName}`}
+                        >
+                          <span aria-hidden className="icon">⬇️</span>
                         </button>
                       </li>
                     ))}

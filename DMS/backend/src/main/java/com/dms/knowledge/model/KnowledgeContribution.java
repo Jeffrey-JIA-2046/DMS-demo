@@ -92,6 +92,9 @@ public class KnowledgeContribution {
 
     public void setTopic(KnowledgeTopic topic) {
         this.topic = topic;
+        if (topic != null) {
+            this.topicId = topic.getId();
+        }
     }
 
     public com.dms.user.model.AppUser getAuthor() {
@@ -100,5 +103,8 @@ public class KnowledgeContribution {
 
     public void setAuthor(com.dms.user.model.AppUser author) {
         this.author = author;
+        if (author != null) {
+            this.authorId = author.getId();
+        }
     }
 }

@@ -22,6 +22,7 @@ import com.dms.document.model.DocumentFolder;
 import com.dms.document.model.DocumentFolderPermission;
 import com.dms.document.repository.DocumentFolderRepository;
 import com.dms.exception.ResourceNotFoundException;
+import com.dms.security.Role;
 import com.dms.user.model.AppUser;
 import com.dms.user.model.UserGroup;
 import com.dms.user.repository.AppUserRepository;
@@ -49,8 +50,9 @@ public class DocumentFolderPermissionService {
     }
 
     @Transactional(readOnly = true)
-    public FolderPermissionsResponse getPermissions(String folderId) {
+    public FolderPermissionsResponse getPermissions(String folderId, String username) {
         try {
+            assertCanManagePermissions(username);
             DocumentFolder folder = folderRepository.findById(folderId)
                 .orElseThrow(() -> new ResourceNotFoundException("Folder not found"));
             if (folder.getPermissions() == null) {
@@ -65,8 +67,30 @@ public class DocumentFolderPermissionService {
         }
     }
 
-    public FolderPermissionsResponse updatePermissions(String folderId, FolderPermissionUpdateRequest request) {
+    @Transactional(readOnly = true)
+    public FolderPermissionsResponse getPermissionTemplate(String username) {
+        assertCanManagePermissions(username);
+        List<UserGroup> groups = StreamSupport.stream(userGroupRepository.findAll().spliterator(), false)
+            .sorted(Comparator.comparing(UserGroup::getName, String.CASE_INSENSITIVE_ORDER))
+            .toList();
+
+        List<FolderPermissionEntryDto> entries = groups.stream()
+            .map(group -> new FolderPermissionEntryDto(
+                group.getId(),
+                group.getName(),
+                group.getDescription(),
+                false,
+                false,
+                false
+            ))
+            .toList();
+
+        return new FolderPermissionsResponse(null, entries);
+    }
+
+    public FolderPermissionsResponse updatePermissions(String folderId, FolderPermissionUpdateRequest request, String username) {
         try {
+            assertCanManagePermissions(username);
             DocumentFolder folder = folderRepository.findById(folderId)
                 .orElseThrow(() -> new ResourceNotFoundException("Folder not found"));
             List<UserGroup> groups = java.util.stream.StreamSupport.stream(userGroupRepository.findAll().spliterator(), false).toList();
@@ -190,11 +214,15 @@ public class DocumentFolderPermissionService {
         if (!StringUtils.hasText(username)) {
             throw new AccessDeniedException("Authentication required");
         }
-        try {
-            return appUserRepository.findByUsernameIgnoreCase(username)
-                .orElseThrow(() -> new AccessDeniedException("User not found"));
-        } catch (java.io.IOException ex) {
-            throw new RuntimeException("Failed to load user", ex);
+        return appUserRepository.findByUsernameIgnoreCaseWithFallback(username)
+            .orElseThrow(() -> new AccessDeniedException("User not found"));
+    }
+
+    private void assertCanManagePermissions(String username) {
+        AppUser actor = loadUser(username);
+        Role role = actor.getRole();
+        if (role != Role.SYS_ADMIN && role != Role.USER_ADMIN) {
+            throw new AccessDeniedException("Only system administrators and user administrators can manage folder permissions");
         }
     }
 

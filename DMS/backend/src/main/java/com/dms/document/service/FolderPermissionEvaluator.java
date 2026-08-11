@@ -22,15 +22,15 @@ public class FolderPermissionEvaluator {
         if (user == null) {
             return FolderPermissionSnapshot.none();
         }
-        if (user.getRole() == Role.SYS_ADMIN) {
-            return FolderPermissionSnapshot.fullAccess();
-        }
         if (folder == null) {
-            return defaultsForRole(user.getRole());
+            return FolderPermissionSnapshot.none();
+        }
+        if (user.getRole() == Role.SYS_ADMIN || user.getRole() == Role.USER_ADMIN) {
+            return new FolderPermissionSnapshot(true, true, true);
         }
         List<DocumentFolderPermission> folderPermissions = folder.getPermissions();
         if (folderPermissions == null || folderPermissions.isEmpty()) {
-            return defaultsForRole(user.getRole());
+            return FolderPermissionSnapshot.none();
         }
         Set<String> userGroupIds = new HashSet<>();
 
@@ -71,7 +71,13 @@ public class FolderPermissionEvaluator {
             return FolderPermissionSnapshot.none();
         }
 
-        return new FolderPermissionSnapshot(canRead, canWrite, canDelete);
+        // Effective policy:
+        // - Visibility/search: Read OR Write OR Delete
+        // - Edit/upload/version update: Write OR Delete
+        // - Delete: Delete only
+        boolean effectiveRead = canRead || canWrite || canDelete;
+        boolean effectiveWrite = canWrite || canDelete;
+        return new FolderPermissionSnapshot(effectiveRead, effectiveWrite, canDelete);
     }
 
     public boolean canRead(DocumentFolder folder, AppUser user) {
@@ -84,15 +90,6 @@ public class FolderPermissionEvaluator {
 
     public boolean canDelete(DocumentFolder folder, AppUser user) {
         return evaluate(folder, user).canDelete();
-    }
-
-    private FolderPermissionSnapshot defaultsForRole(Role role) {
-        return switch (role) {
-            case SYS_ADMIN -> FolderPermissionSnapshot.fullAccess();
-            case USER_ADMIN -> FolderPermissionSnapshot.fullAccess();
-            case DOC_ADMIN -> new FolderPermissionSnapshot(true, true, false);
-            case DOC_VIEWER -> new FolderPermissionSnapshot(true, false, false);
-        };
     }
 
     private String resolvePermissionGroupId(DocumentFolderPermission permission) {

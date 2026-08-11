@@ -19,6 +19,9 @@ public class FolderMetadataField {
     @JsonProperty("hint")
     private String hint;
 
+    @JsonProperty("code_table_code")
+    private String codeTableCode;
+
     public String getKey() {
         return key;
     }
@@ -57,5 +60,13 @@ public class FolderMetadataField {
 
     public void setHint(String hint) {
         this.hint = hint;
+    }
+
+    public String getCodeTableCode() {
+        return codeTableCode;
+    }
+
+    public void setCodeTableCode(String codeTableCode) {
+        this.codeTableCode = codeTableCode;
     }
 }
