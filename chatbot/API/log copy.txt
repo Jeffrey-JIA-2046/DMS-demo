@@ -1,0 +1,185 @@
+INFO:     Application startup complete.
+INFO:dms-chatbot-api:Step 1: Receive /api/chatbot/agent-chat request | {"chat_id": null, "stream": true, "question": "Question1: Please search any reply letter containing the phrase “不屬於職權範圍”", "press_releases_count": 0, "include_neighbor_pages": false, "statistics_generation": false}
+INFO:dms-chatbot-api:Step 2: Agent1 prompt sent to LLM
+
+INFO:dms-chatbot-api:Step 2: Agent1 classifier endpoint used: http://172.20.10.9:8100/completion
+WARNING:dms-chatbot-api:Step 2: Agent1 response JSON parse failed: Expecting value: line 1 column 1 (char 0) | raw=<think>
+
+</think>
+
+{
+  "search_strategy": "hybrid_search",
+  "confidence": 0.95,
+  "search_mode": "hybrid",
+  "match_mode": "exact_phrase",
+  "requires_exact_match": true,
+  "doc_id": null,
+  "start_date": "",
+  "end_date": "",
+  "owners": [],
+  "category": [],
+  "tags": [],
+  "folder_names": [],
+  "folder_paths": [],
+  "metadata_filters": {},
+  "date_range": null,
+  "topic": null,
+  "must_terms": [],
+  "should_terms": [],
+  "phrase": "不屬於職權範圍"
+}
+INFO:dms-chatbot-api:Step 2: Task classification result | {"question": "Question1: Please search any reply letter containing the phrase “不屬於職權範圍”", "intent": "general_rag_qa", "search_strategy": "hybrid_search", "task_type": "answer_question", "confidence": 1.0, "classification_source": "fallback_general_rag_qa", "search_template": {"query": "Question1: Please search any reply letter containing the phrase “不屬於職權範圍”", "search_mode": "hybrid", "match_mode": null, "exact_phrase": null, "must_terms": [], "should_terms": [], "start_date": "", "end_date": "", "owners": [], "category": [], "tags": [], "folder_names": [], "folder_paths": [], "metadata_filters": {}}}
+INFO:sentence_transformers.base.model:No device provided, using cpu
+INFO:sentence_transformers.base.model:Loading SentenceTransformer model from ./local_models/multilingual-e5-small.
+Loading weights: 100%|████████████████████████████████████████████████████████████████| 199/199 [00:00<00:00, 13275.65it/s]
+INFO:dms-chatbot-api:Loaded embedding model from ./local_models/multilingual-e5-small
+Batches: 100%|███████████████████████████████████████████████████████████████████████████████| 1/1 [00:00<00:00, 25.72it/s]
+INFO:opensearch:POST https://localhost:9200/dms-documents-chatbot/_search?preference=rag-debug-fixed [status:200 request:0.666s]
+Batches: 100%|███████████████████████████████████████████████████████████████████████████████| 1/1 [00:00<00:00, 84.17it/s]
+INFO:watchfiles.main:1 change detected
+INFO:opensearch:POST https://localhost:9200/dms-documents-chatbot-chunks-a/_search?preference=rag-debug-fixed [status:200 request:1.585s]
+INFO:dms-chatbot-api:Step 4: Chunk retrieval returned=100; selected_top_k=10 for LLM context
+INFO:dms-chatbot-api:Step 4: Top chunk hits | top_k=10 returned=10 question=Question1: Please search any reply letter containing the phrase “不屬於職權範圍”
+INFO:dms-chatbot-api:Step 4: Chunk #1 | {"id": "a3f09150-40f0-4bbc-bb0a-b3829bdc5425::chunk::1", "document_id": "a3f09150-40f0-4bbc-bb0a-b3829bdc5425", "chunk_index": 1, "page": 1, "page_start": 1, "page_end": 1, "score": 0.015327382, "title": "Reply letter (Chin)", "folder_name": "folder1", "folder_path": "folder1", "created_at": "2026-05-04T04:06:26.935413300Z"}
+INFO:dms-chatbot-api:Step 4: Chunk #2 | {"id": "1d3b17f2-b912-4ba5-a79b-5349a3eeb127::chunk::1", "document_id": "1d3b17f2-b912-4ba5-a79b-5349a3eeb127", "chunk_index": 1, "page": 1, "page_start": 1, "page_end": 1, "score": 0.014634146, "title": "Reply letter (Eng)", "folder_name": "folder1", "folder_path": "folder1", "created_at": "2026-05-04T04:09:02.559013700Z"}
+INFO:dms-chatbot-api:Step 4: Chunk #3 | {"id": "a3f09150-40f0-4bbc-bb0a-b3829bdc5425::chunk::3", "document_id": "a3f09150-40f0-4bbc-bb0a-b3829bdc5425", "chunk_index": 3, "page": 2, "page_start": 2, "page_end": 2, "score": 0.013953489, "title": "Reply letter (Chin)", "folder_name": "folder1", "folder_path": "folder1", "created_at": "2026-05-04T04:06:26.935413300Z"}
+INFO:dms-chatbot-api:Step 4: Chunk #4 | {"id": "ae1b6f5b-5dd9-4351-bd74-55c0777f1a49::chunk::141", "document_id": "ae1b6f5b-5dd9-4351-bd74-55c0777f1a49", "chunk_index": 141, "page": 79, "page_start": 79, "page_end": 80, "score": 0.0137968855, "title": "NRC_MASKED_MISC_MISC_LR 36_218_2023 LM 6", "folder_name": "folder2", "folder_path": "LR Sample / folder2", "created_at": "2026-05-05T09:38:09.048958500Z"}
+INFO:dms-chatbot-api:Step 4: Chunk #5 | {"id": "a3f09150-40f0-4bbc-bb0a-b3829bdc5425::chunk::4", "document_id": "a3f09150-40f0-4bbc-bb0a-b3829bdc5425", "chunk_index": 4, "page": 2, "page_start": 2, "page_end": 5, "score": 0.013636365, "title": "Reply letter (Chin)", "folder_name": "folder1", "folder_path": "folder1", "created_at": "2026-05-04T04:06:26.935413300Z"}
+INFO:dms-chatbot-api:Step 4: Chunk #6 | {"id": "5f3c62c6-7860-4741-8d1c-5c5d3c0e658d::chunk::70", "document_id": "5f3c62c6-7860-4741-8d1c-5c5d3c0e658d", "chunk_index": 70, "page": 23, "page_start": 23, "page_end": 24, "score": 0.013467619, "title": "Minutes (Chi)", "folder_name": "(2025.05.02) Minutes of Meeting", "folder_path": "(2025.05.02) Minutes of Meeting", "created_at": "2026-05-06T02:36:47.418953100Z"}
+INFO:dms-chatbot-api:Step 4: Chunk #7 | {"id": "a3f09150-40f0-4bbc-bb0a-b3829bdc5425::chunk::2", "document_id": "a3f09150-40f0-4bbc-bb0a-b3829bdc5425", "chunk_index": 2, "page": 1, "page_start": 1, "page_end": 2, "score": 0.013333335, "title": "Reply letter (Chin)", "folder_name": "folder1", "folder_path": "folder1", "created_at": "2026-05-04T04:06:26.935413300Z"}
+INFO:dms-chatbot-api:Step 4: Chunk #8 | {"id": "1d3b17f2-b912-4ba5-a79b-5349a3eeb127::chunk::2", "document_id": "1d3b17f2-b912-4ba5-a79b-5349a3eeb127", "chunk_index": 2, "page": 1, "page_start": 1, "page_end": 1, "score": 0.013043479, "title": "Reply letter (Eng)", "folder_name": "folder1", "folder_path": "folder1", "created_at": "2026-05-04T04:09:02.559013700Z"}
+INFO:dms-chatbot-api:Step 4: Chunk #9 | {"id": "05cf53e5-c9e2-46cb-8224-c35bf71a2872::chunk::54", "document_id": "05cf53e5-c9e2-46cb-8224-c35bf71a2872", "chunk_index": 54, "page": 31, "page_start": 31, "page_end": 32, "score": 0.012500001, "title": "BOX_MASKED_CORRECTION OF ERRORS_CORRECTION OF MEM BOX_LR 39_218_2009 L_M 7 ALL", "folder_name": "folder2", "folder_path": "LR Sample / folder2", "created_at": "2026-05-04T04:24:36.495870400Z"}
+INFO:dms-chatbot-api:Step 4: Chunk #10 | {"id": "05cf53e5-c9e2-46cb-8224-c35bf71a2872::chunk::84", "document_id": "05cf53e5-c9e2-46cb-8224-c35bf71a2872", "chunk_index": 84, "page": 46, "page_start": 46, "page_end": 47, "score": 0.012457118, "title": "BOX_MASKED_CORRECTION OF ERRORS_CORRECTION OF MEM BOX_LR 39_218_2009 L_M 7 ALL", "folder_name": "folder2", "folder_path": "LR Sample / folder2", "created_at": "2026-05-04T04:24:36.495870400Z"}
+INFO:dms-chatbot-api:Step 4: Selected pages after budget | max_pages=20 selected=14
+Total tokens in context: 3380
+INFO:dms-chatbot-api:Step 5: Agent3 prompt sent to LLM | stream=True
+
+INFO:     127.0.0.1:58943 - "POST /api/chatbot/agent-chat HTTP/1.1" 200 OK
+INFO:dms-chatbot-api:Step 1: Receive /api/chatbot/agent-chat request | {"chat_id": null, "stream": true, "question": "Question2: Please find the new registration fees for 2026.", "press_releases_count": 0, "include_neighbor_pages": false, "statistics_generation": false}
+INFO:dms-chatbot-api:Step 2: Agent1 prompt sent to LLM
+
+INFO:dms-chatbot-api:Step 5: Stream completion stats | chat_id=a9be7d14-50ff-4d37-b7a1-0e584e553b94 chunk_count=0 response_chars=0
+WARNING:dms-chatbot-api:Step 5: Empty streamed assistant response; attempting non-stream fallback | chat_id=a9be7d14-50ff-4d37-b7a1-0e584e553b94
+INFO:dms-chatbot-api:Step 2: Agent1 classifier endpoint used: http://172.20.10.9:8100/completion
+WARNING:dms-chatbot-api:Step 2: Agent1 response JSON parse failed: Expecting value: line 1 column 1 (char 0) | raw=<think>
+Thinking Process:
+
+1.  **Analyze the Request:**
+    *   Role: Agent1 in a sequential workflow for a document-management chatbot.
+    *   Task: Classify `search_strategy` and fill the search template based on the user question.
+    *   Input Question: "Question2: Please find the new registration fees for 2026."
+    *   Current Year: 2026.
+    *   Constraints: Return JSON only, follow the schema exactly, no explanations outside JSON.
+    *   Rules:
+        *   Choose `search_strategy`: `hybrid_search` (most likely/first choice) or `no_search`.
+        *   `hybrid_search` is preferred for document retrieval.
+        *   Fill date filters (`start_date`, `end_date`) if specified.
+        *   Do not use `category` or `tags` as filters (keep empty arrays).
+        *   Keep `phrase` for literal phrases if applicable.
+        *   `match_mode` usually null unless necessary.
+        *   Output must match the provided Response schema.
+
+2.  **Analyze the User Question:**
+    *   "Please find the new registration fees for 2026."
+    *   Intent: Retrieve information about registration fees for the year 2026.
+    *   Context: Document management system.
+    *   Keywords: "registration fees", "2026".
+    *   Date Context: Current year is 2026. The user is asking for fees *for* 2026. This implies a temporal filter or a keyword filter involving "2026".
+    *   Search Strategy: This requires retrieving documents containing this information. It is not a free open question (like "What do you think about..."). It requires document retrieval. So `search_strategy` should be `hybrid_search`.
+
+3.  **Determine Template Fields:**
+    *   `search_strategy`: "hybrid_search" (per rules, default/preferred for retrieval).
+    *   `confidence`: High confidence since it's a clear retrieval task. Let's say 0.95.
+    *   `search_mode`: "hybrid" (matches `search_strategy` usually, schema says "text|hybrid").
+    *
+INFO:dms-chatbot-api:Step 2: Task classification result | {"question": "Question2: Please find the new registration fees for 2026.", "intent": "general_rag_qa", "search_strategy": "hybrid_search", "task_type": "answer_question", "confidence": 1.0, "classification_source": "fallback_general_rag_qa", "search_template": {"query": "Question2: Please find the new registration fees for 2026.", "search_mode": "hybrid", "match_mode": null, "exact_phrase": null, "must_terms": [], "should_terms": [], "start_date": "", "end_date": "", "owners": [], "category": [], "tags": [], "folder_names": [], "folder_paths": [], "metadata_filters": {}}}
+Batches: 100%|███████████████████████████████████████████████████████████████████████████████| 1/1 [00:00<00:00, 77.93it/s]
+INFO:opensearch:POST https://localhost:9200/dms-documents-chatbot/_search?preference=rag-debug-fixed [status:200 request:1.466s]
+Batches: 100%|███████████████████████████████████████████████████████████████████████████████| 1/1 [00:00<00:00, 87.13it/s]
+INFO:watchfiles.main:1 change detected
+INFO:opensearch:POST https://localhost:9200/dms-documents-chatbot-chunks-a/_search?preference=rag-debug-fixed [status:200 request:2.451s]
+INFO:dms-chatbot-api:Step 4: Chunk retrieval returned=100; selected_top_k=10 for LLM context
+INFO:dms-chatbot-api:Step 4: Top chunk hits | top_k=10 returned=10 question=Question2: Please find the new registration fees for 2026.
+INFO:dms-chatbot-api:Step 4: Chunk #1 | {"id": "3d9c5917-ba23-4988-9187-79c44b045606::chunk::1", "document_id": "3d9c5917-ba23-4988-9187-79c44b045606", "chunk_index": 1, "page": 1, "page_start": 1, "page_end": 1, "score": 0.017073171, "title": "LRCM 2025", "folder_name": "folder1", "folder_path": "LR Sample / folder1", "created_at": "2026-05-04T03:50:04.319096600Z"}
+INFO:dms-chatbot-api:Step 4: Chunk #2 | {"id": "3d9c5917-ba23-4988-9187-79c44b045606::chunk::2", "document_id": "3d9c5917-ba23-4988-9187-79c44b045606", "chunk_index": 2, "page": 1, "page_start": 1, "page_end": 2, "score": 0.016017318, "title": "LRCM 2025", "folder_name": "folder1", "folder_path": "LR Sample / folder1", "created_at": "2026-05-04T03:50:04.319096600Z"}
+INFO:dms-chatbot-api:Step 4: Chunk #3 | {"id": "3d9c5917-ba23-4988-9187-79c44b045606::chunk::3", "document_id": "3d9c5917-ba23-4988-9187-79c44b045606", "chunk_index": 3, "page": 2, "page_start": 2, "page_end": 3, "score": 0.015584417, "title": "LRCM 2025", "folder_name": "folder1", "folder_path": "LR Sample / folder1", "created_at": "2026-05-04T03:50:04.319096600Z"}
+INFO:dms-chatbot-api:Step 4: Chunk #4 | {"id": "3d9c5917-ba23-4988-9187-79c44b045606::chunk::4", "document_id": "3d9c5917-ba23-4988-9187-79c44b045606", "chunk_index": 4, "page": 3, "page_start": 3, "page_end": 4, "score": 0.015269279, "title": "LRCM 2025", "folder_name": "folder1", "folder_path": "LR Sample / folder1", "created_at": "2026-05-04T03:50:04.319096600Z"}
+INFO:dms-chatbot-api:Step 4: Chunk #5 | {"id": "ae1b6f5b-5dd9-4351-bd74-55c0777f1a49::chunk::198", "document_id": "ae1b6f5b-5dd9-4351-bd74-55c0777f1a49", "chunk_index": 198, "page": 110, "page_start": 110, "page_end": 111, "score": 0.015126812, "title": "NRC_MASKED_MISC_MISC_LR 36_218_2023 LM 6", "folder_name": "folder2", "folder_path": "LR Sample / folder2", "created_at": "2026-05-05T09:38:09.048958500Z"}
+INFO:dms-chatbot-api:Step 4: Chunk #6 | {"id": "53d94c29-4a20-4ab0-b1b9-ad73a25974a9::chunk::15", "document_id": "53d94c29-4a20-4ab0-b1b9-ad73a25974a9", "chunk_index": 15, "page": 9, "page_start": 9, "page_end": 9, "score": 0.014772728, "title": "Minutes (Eng)", "folder_name": "(2025.05.02) Minutes of Meeting", "folder_path": "(2025.05.02) Minutes of Meeting", "created_at": "2026-05-06T02:42:30.536784100Z"}
+INFO:dms-chatbot-api:Step 4: Chunk #7 | {"id": "5f3c62c6-7860-4741-8d1c-5c5d3c0e658d::chunk::18", "document_id": "5f3c62c6-7860-4741-8d1c-5c5d3c0e658d", "chunk_index": 18, "page": 9, "page_start": 9, "page_end": 9, "score": 0.01446712, "title": "Minutes (Chi)", "folder_name": "(2025.05.02) Minutes of Meeting", "folder_path": "(2025.05.02) Minutes of Meeting", "created_at": "2026-05-06T02:36:47.418953100Z"}
+INFO:dms-chatbot-api:Step 4: Chunk #8 | {"id": "ae1b6f5b-5dd9-4351-bd74-55c0777f1a49::chunk::94", "document_id": "ae1b6f5b-5dd9-4351-bd74-55c0777f1a49", "chunk_index": 94, "page": 52, "page_start": 52, "page_end": 53, "score": 0.01428051, "title": "NRC_MASKED_MISC_MISC_LR 36_218_2023 LM 6", "folder_name": "folder2", "folder_path": "LR Sample / folder2", "created_at": "2026-05-05T09:38:09.048958500Z"}
+INFO:dms-chatbot-api:Step 4: Chunk #9 | {"id": "ae1b6f5b-5dd9-4351-bd74-55c0777f1a49::chunk::199", "document_id": "ae1b6f5b-5dd9-4351-bd74-55c0777f1a49", "chunk_index": 199, "page": 111, "page_start": 111, "page_end": 111, "score": 0.013333335, "title": "NRC_MASKED_MISC_MISC_LR 36_218_2023 LM 6", "folder_name": "folder2", "folder_path": "LR Sample / folder2", "created_at": "2026-05-05T09:38:09.048958500Z"}
+INFO:dms-chatbot-api:Step 4: Chunk #10 | {"id": "4a3931ec-ba68-4dd8-8b73-65ed443591a7::chunk::306", "document_id": "4a3931ec-ba68-4dd8-8b73-65ed443591a7", "chunk_index": 306, "page": 289, "page_start": 289, "page_end": 290, "score": 0.013014707, "title": "COE_MASKED_CORRECTION OF ERRORS_MISC_YLNTLR 30_221_1998 ALL", "folder_name": "folder2", "folder_path": "LR Sample / folder2", "created_at": "2026-05-05T09:01:40.695189400Z"}
+INFO:dms-chatbot-api:Step 4: Selected pages after budget | max_pages=20 selected=12
+INFO:opensearch:GET https://localhost:9200/dms-documents-chatbot/_doc/3d9c5917-ba23-4988-9187-79c44b045606 [status:200 request:0.058s]
+WARNING:opensearch:GET https://localhost:9200/dms-documents-chatbot/_doc/ae1b6f5b-5dd9-4351-bd74-55c0777f1a49 [status:404 request:0.002s]
+INFO:opensearch:GET https://localhost:9200/dms-documents-chatbot/_doc/53d94c29-4a20-4ab0-b1b9-ad73a25974a9 [status:200 request:0.009s]
+INFO:opensearch:GET https://localhost:9200/dms-documents-chatbot/_doc/5f3c62c6-7860-4741-8d1c-5c5d3c0e658d [status:200 request:0.012s]
+INFO:opensearch:GET https://localhost:9200/dms-documents-chatbot/_doc/4a3931ec-ba68-4dd8-8b73-65ed443591a7 [status:200 request:0.048s]
+WARNING:opensearch:GET https://localhost:9200/dms-ocr-document/_doc/3d9c5917-ba23-4988-9187-79c44b045606 [status:404 request:0.003s]
+INFO:opensearch:POST https://localhost:9200/dms-ocr-document/_search [status:200 request:0.045s]
+INFO:opensearch:POST https://localhost:9200/dms-ocr-document/_search [status:200 request:0.091s]
+WARNING:opensearch:GET https://localhost:9200/dms-ocr-document/_doc/53d94c29-4a20-4ab0-b1b9-ad73a25974a9 [status:404 request:0.002s]
+INFO:opensearch:POST https://localhost:9200/dms-ocr-document/_search [status:200 request:0.045s]
+INFO:opensearch:POST https://localhost:9200/dms-ocr-document/_search [status:200 request:0.048s]
+WARNING:opensearch:GET https://localhost:9200/dms-ocr-document/_doc/4a3931ec-ba68-4dd8-8b73-65ed443591a7 [status:404 request:0.002s]
+INFO:opensearch:POST https://localhost:9200/dms-ocr-document/_search [status:200 request:0.048s]
+INFO:opensearch:POST https://localhost:9200/dms-ocr-document/_search [status:200 request:0.052s]
+WARNING:opensearch:GET https://localhost:9200/chat_logs_dms/_doc/08c40c6b-c7b1-4114-93ff-61aa95e9c95d [status:404 request:0.003s]
+Total tokens in context: 5498
+INFO:dms-chatbot-api:Step 5: Agent3 prompt sent to LLM | stream=True
+
+INFO:     127.0.0.1:60090 - "POST /api/chatbot/agent-chat HTTP/1.1" 200 OK
+INFO:dms-chatbot-api:Step 5: Non-stream fallback recovered response | chat_id=a9be7d14-50ff-4d37-b7a1-0e584e553b94 response_chars=1878
+INFO:dms-chatbot-api:Step 5: Agent3 response from LLM | stream=True
+<think>
+Thinking Process:
+
+1.  **Analyze the Request:**
+    *   User Question: "Please search any reply letter containing the phrase “不屬於職權範圍”" (Please search any reply letter containing the phrase "not within the scope of authority").
+    *   Instructions:
+        1.  Answer language: English (unless user specifies otherwise).
+        2.  Scan documents for relevant info.
+        3.  Extract specific facts/details.
+        4.  State answer directly with details (numbers, dates, amounts).
+        5.  Cite document and page number.
+        6.  Select the most similar case (if multiple).
+        7.  Focus on the selected case.
+        8.  Quote exact wording.
+        9.  Check nearest "------[Page X:]" marker before quoted text.
+        10. Do not mention unrelated documents.
+        11. Prioritize Best-Effort Answering.
+
+2.  **Scan Documents for the Phrase:**
+    *   **Document 1 (Reply letter (Chin)):**
+        *   Content on Page 1: "就你電郵內所述事宜，由於並不屬於本處的職權範圍，恕本處未能提供意見。" (Regarding the matter mentioned in your email, since it does not belong to the scope of authority of this office, this office regrets to be unable to provide opinion.)
+        *   This matches the phrase “不屬於職權範圍” (does not belong to the scope of authority).
+        *   Context: Reply from Customer Service CSA/LANDREG/HKSARG to 陳女士 (Ms. Chan) dated 15/06/2023 regarding a complaint about an illegal gas station.
+    *   **Document 2 (Reply letter (Eng)):**
+        *   Content: Regarding ordering land register online. No Chinese phrase found.
+    *   **Document 3 (Minutes (Chi)):**
+        *   Content: Meeting minutes regarding land registry access, title certificates, etc. No specific phrase “不屬於職權範圍” found in the provided chunks.
+    *   **Document 4 (BOX_MASKED_CORRECTION...):**
+        *   Content: Correspondence regarding correction of errors in land register. No specific phrase
+INFO:opensearch:PUT https://localhost:9200/chat_logs_dms/_doc/a9be7d14-50ff-4d37-b7a1-0e584e553b94?refresh=true [status:201 request:0.064s]
+INFO:dms-chatbot-api:Step 5: Stream completion stats | chat_id=08c40c6b-c7b1-4114-93ff-61aa95e9c95d chunk_count=498 response_chars=1669
+INFO:dms-chatbot-api:Step 5: Agent3 response from LLM | stream=True
+</think>
+
+The new registration fees for 2026 are effective on **1 July 2026** (Phase 2) under the Land Registration Fees (Amendment) Regulation 2025. According to the table in **Document 1 (LRCM 2025)** on **Page 4**, the revised fees for this phase are as follows:
+
+*   **Registration of any instrument** (e.g., assignment, conveyance, mortgage) where the value of the property or consideration:
+    *   Does not exceed $750,000: **$305**
+    *   Exceeds $750,000: **$605**
+*   **Registration of any agreement for sale and purchase or for mortgage**: **$375**
+*   **Registration of any lease, agreement for a lease, or renewal or surrender of a lease**: **$375**
+*   **Registration of any probate, letters of administration, deed of appointment of new trustees, lis pendens, writ of foreign attachment, judgment, decree, prohibitory order, or other order of Court**, or any other instrument not specifically mentioned: **$375**
+*   **Registration of any instrument whereby any charge or mortgage is assigned or transferred** (per 100 charges or mortgages or part thereof): **$3,540**
+
+These figures are explicitly listed in the column titled "Effective on 1 July 2026" in the table on Page 4 of Document 1. The document states: "The revised fees will come into effect in three phases on 16 July 2025 (Phase 1), **1 July 2026** (Phase 2) and 1 July 2027 (Phase 3) respectively." (Page 1, Document 1).
+
+**Source:**
+*   **Document:** LRCM 2025 (Land Registry Circular Memorandum No. 2/25)
+*   **Page:** 1 (for effective dates) and 4 (for specific fee amounts)
+*   **Quote:** "The revised fees will come into effect in three phases on 16 July 2025 (Phase 1), 1 July 2026 (
+INFO:opensearch:PUT https://localhost:9200/chat_logs_dms/_doc/08c40c6b-c7b1-4114-93ff-61aa95e9c95d?refresh=true [status:201 request:0.058s]

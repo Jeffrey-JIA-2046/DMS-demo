@@ -1,0 +1,70 @@
+document.getElementById('uploadForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    
+    const fileInput = document.getElementById('fileInput');
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+
+    try {
+        const response = await fetch('/upload-pdf', {
+            method: 'POST',
+            body: formData,
+        });
+        const result = await response.json();
+        
+        if (response.ok) {
+            document.getElementById('encodedFileResult').innerText = "Encoded file ready.";
+            window.encodedFile = result.encoded_file; // Store the encoded file for later use
+        } else {
+            alert("Error: " + result.error);
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        alert("An error occurred while uploading the file.");
+    }
+});
+
+document.getElementById('decodeFileButton').addEventListener('click', async () => {
+    if (!window.encodedFile) {
+        alert("Please upload a PDF first.");
+        return;
+    }
+    
+    try {
+        const response = await fetch('/decode-file', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ encoded_file: window.encodedFile })
+        });
+        const result = await response.json();
+
+        if (response.ok) {
+            alert("File decoded successfully!");
+        } else {
+            alert("Error: " + result.error);
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        alert("An error occurred while decoding the file.");
+    }
+});
+
+document.getElementById('fetchTextButton').addEventListener('click', async () => {
+    try {
+        const response = await fetch('/get-json', {
+            method: 'POST',
+        });
+        const result = await response.json();
+
+        if (response.ok) {
+            document.getElementById('result').innerText = result.extracted_json ? JSON.stringify(result.extracted_json, null, 2) : "No text extracted.";
+        } else {
+            document.getElementById('result').innerText = "Error: " + result.error;
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        document.getElementById('result').innerText = "An error occurred while fetching the text.";
+    }
+});

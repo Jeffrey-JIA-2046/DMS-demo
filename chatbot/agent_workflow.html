@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DMS Chatbot Agent Workflow</title>
+  <style>
+    :root {
+      --bg: #f6f1e8;
+      --panel: #fffaf2;
+      --ink: #1f2937;
+      --muted: #5b6573;
+      --accent: #0f766e;
+      --border: #d9cdb8;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      background:
+        radial-gradient(circle at top right, rgba(15, 118, 110, 0.10), transparent 28%),
+        linear-gradient(180deg, #f8f3ea 0%, var(--bg) 100%);
+      color: var(--ink);
+    }
+
+    .page {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 32px 24px 48px;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: clamp(28px, 4vw, 48px);
+      line-height: 1.05;
+      letter-spacing: -0.02em;
+    }
+
+    p {
+      margin: 0;
+      max-width: 900px;
+      color: var(--muted);
+      font-size: 18px;
+      line-height: 1.6;
+    }
+
+    .panel {
+      margin-top: 24px;
+      padding: 24px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      box-shadow: 0 20px 50px rgba(84, 62, 25, 0.08);
+      overflow: auto;
+    }
+
+    .flowchart {
+      display: grid;
+      gap: 16px;
+    }
+
+    .row {
+      display: flex;
+      align-items: stretch;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .box {
+      min-width: 220px;
+      max-width: 320px;
+      padding: 16px 18px;
+      border-radius: 16px;
+      border: 1px solid var(--border);
+      background: #fffefb;
+      box-shadow: 0 10px 20px rgba(84, 62, 25, 0.05);
+    }
+
+    .box strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 17px;
+    }
+
+    .box span {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .box.decision {
+      background: #fff4db;
+      border-color: #d8b96e;
+    }
+
+    .box.agent {
+      background: #e9f7f2;
+      border-color: #6ca89d;
+    }
+
+    .box.storage {
+      background: #eef2ff;
+      border-color: #98a4d4;
+    }
+
+    .arrow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 28px;
+      color: var(--accent);
+      min-width: 32px;
+    }
+
+    .branch {
+      border-left: 3px solid #cdbd9e;
+      margin-left: 20px;
+      padding-left: 20px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .branch-title {
+      font-size: 15px;
+      color: var(--muted);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .legend {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .pill {
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.7);
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <h1>DMS Chatbot Agent Workflow</h1>
+    <p>This view shows how a question enters the backend, gets classified into a task, routes to the right agent, and then returns either JSON or SSE with chat logging.</p>
+
+    <section class="panel">
+      <div class="flowchart">
+        <div class="row">
+          <div class="box"><strong>1. Request Entry</strong><span>Frontend sends POST /api/chatbot/agent-chat with question, chat_id, and stream flag.</span></div>
+          <div class="arrow">→</div>
+          <div class="box decision"><strong>2. Selected Documents?</strong><span>If documents are included, the backend uses the older /api/chatbot/chat path.</span></div>
+        </div>
+
+        <div class="branch">
+          <div class="branch-title">Main Agent Path</div>
+          <div class="row">
+            <div class="box"><strong>3. Intent Classification</strong><span>IntentClassifier.classify builds search hints and asks the LLM to choose the task.</span></div>
+            <div class="arrow">→</div>
+            <div class="box storage"><strong>4. Clean Debug Log</strong><span>Backend prints one clear line: Task classification result with intent, confidence, source, and parameters.</span></div>
+          </div>
+
+          <div class="row">
+            <div class="box decision"><strong>5. Stream Mode?</strong><span>Non-stream requests go to orchestrate_agent_chat. Stream requests go to _build_agent_stream.</span></div>
+          </div>
+
+          <div class="row">
+            <div class="box agent"><strong>6A. keyword_search</strong><span>Uses exact phrase or must-term search through _execute_raw_search or _execute_search.</span></div>
+            <div class="box agent"><strong>6B. semantic_search</strong><span>Uses hybrid retrieval in OpenSearch to find similar documents.</span></div>
+            <div class="box agent"><strong>6C. stats_count</strong><span>Runs an OpenSearch count-style query using date and topic constraints.</span></div>
+          </div>
+
+          <div class="row">
+            <div class="box agent"><strong>6D. single_doc_summary</strong><span>Loads one document by ID and asks the LLM for a short summary.</span></div>
+            <div class="box agent"><strong>6E. mixed_search_summary</strong><span>Finds relevant documents first, then asks the LLM to summarize them together.</span></div>
+            <div class="box agent"><strong>6F. general_rag_qa</strong><span>Main chatbot flow: retrieve relevant documents, build RAG context, then answer with the LLM.</span></div>
+          </div>
+
+          <div class="row">
+            <div class="box"><strong>7. Retrieval and Answering</strong><span>general_rag_qa uses SemanticSearchAgent, _build_rag_context, and then _generate_completion or _generate_completion_stream.</span></div>
+            <div class="arrow">→</div>
+            <div class="box storage"><strong>8. Save Chat Log</strong><span>Messages, response, and token usage are saved to the chat_logs_dms index in OpenSearch.</span></div>
+            <div class="arrow">→</div>
+            <div class="box"><strong>9. Return Result</strong><span>The backend returns either JSON or SSE stream back to the frontend, including the chosen intent.</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="legend">
+      <div class="pill">Classification: IntentClassifier</div>
+      <div class="pill">Main chatbot path: general_rag_qa</div>
+      <div class="pill">Retrieval: OpenSearch hybrid search</div>
+      <div class="pill">Answering: LLM completion or stream</div>
+    </div>
+  </main>
+
+</body>
+</html>
