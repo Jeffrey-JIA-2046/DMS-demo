@@ -1,0 +1,990 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DMS Advanced Search</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        body {
+            background: #f4f6f9;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 24px;
+        }
+
+        .container {
+            max-width: 1100px;
+            width: 100%;
+            background: #ffffff;
+            border-radius: 24px;
+            box-shadow: 0 20px 40px -12px rgba(0, 0, 0, 0.15);
+            padding: 32px 36px 40px;
+        }
+
+        /* Header / Quick Search */
+        .search-header {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 14px 18px;
+            margin-bottom: 24px;
+        }
+
+        .quick-search {
+            flex: 1;
+            min-width: 240px;
+            display: flex;
+            align-items: center;
+            background: #f0f2f5;
+            border-radius: 40px;
+            padding: 0 18px;
+            border: 1px solid transparent;
+            transition: border 0.2s, background 0.2s;
+        }
+        .quick-search:focus-within {
+            background: #ffffff;
+            border-color: #4f7df3;
+            box-shadow: 0 0 0 4px rgba(79, 125, 243, 0.15);
+        }
+        .quick-search i {
+            color: #6b7a8f;
+            font-size: 1.1rem;
+        }
+        .quick-search input {
+            border: none;
+            background: transparent;
+            padding: 14px 12px;
+            font-size: 0.95rem;
+            width: 100%;
+            outline: none;
+            color: #1e293b;
+        }
+        .quick-search input::placeholder {
+            color: #8b9aaf;
+            font-weight: 400;
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .header-actions button {
+            background: transparent;
+            border: none;
+            padding: 10px 18px;
+            border-radius: 30px;
+            font-weight: 500;
+            font-size: 0.9rem;
+            color: #334155;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: background 0.15s, color 0.15s;
+            background: #f0f2f5;
+        }
+        .header-actions button i {
+            font-size: 1rem;
+        }
+        .header-actions button:hover {
+            background: #e2e6ed;
+        }
+        .header-actions .btn-primary {
+            background: #4f7df3;
+            color: white;
+        }
+        .header-actions .btn-primary:hover {
+            background: #3b64d4;
+        }
+
+        /* Toggle */
+        .advanced-toggle {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            border-top: 1px solid #e9edf2;
+            padding-top: 18px;
+            margin-bottom: 18px;
+            flex-wrap: wrap;
+        }
+        .advanced-toggle label {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 500;
+            color: #1e293b;
+            cursor: pointer;
+            font-size: 0.95rem;
+        }
+        .advanced-toggle input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            accent-color: #4f7df3;
+            cursor: pointer;
+        }
+        .advanced-toggle .badge {
+            background: #e9edf2;
+            padding: 2px 12px;
+            border-radius: 40px;
+            font-size: 0.75rem;
+            color: #475569;
+            font-weight: 500;
+        }
+        .query-preview {
+            margin-left: auto;
+            background: #f8fafc;
+            padding: 6px 16px;
+            border-radius: 30px;
+            font-size: 0.85rem;
+            color: #475569;
+            border: 1px dashed #cad1db;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 380px;
+        }
+        .query-preview i {
+            color: #6b7a8f;
+            font-size: 0.9rem;
+        }
+        .query-preview span {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* Builder */
+        .builder {
+            display: none;
+            margin-top: 6px;
+            animation: fadeIn 0.25s ease;
+        }
+        .builder.visible {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0.4;
+                transform: translateY(-6px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .builder-topbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px 16px;
+            margin-bottom: 18px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #eef2f6;
+        }
+        .builder-topbar .hint {
+            font-size: 0.85rem;
+            color: #6b7a8f;
+        }
+        .builder-topbar .hint i {
+            margin-right: 6px;
+        }
+
+        .condition-group {
+            background: #fafcff;
+            border: 1px solid #e2e8f0;
+            border-radius: 16px;
+            padding: 20px 22px 22px;
+            margin-bottom: 16px;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.02);
+        }
+        .condition-group.group-nested {
+            background: #f5f8ff;
+            border-left: 4px solid #4f7df3;
+        }
+
+        .group-header {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px 16px;
+            margin-bottom: 16px;
+        }
+        .group-header .logic-toggle {
+            display: flex;
+            background: #eef2f6;
+            border-radius: 30px;
+            overflow: hidden;
+            border: 1px solid #dce2ea;
+        }
+        .group-header .logic-toggle button {
+            background: transparent;
+            border: none;
+            padding: 5px 18px;
+            font-weight: 600;
+            font-size: 0.8rem;
+            color: #475569;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+        .group-header .logic-toggle button.active {
+            background: #ffffff;
+            color: #1e293b;
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+            border-radius: 30px;
+        }
+        .group-header .logic-toggle button:first-child.active {
+            border-radius: 30px 0 0 30px;
+        }
+        .group-header .logic-toggle button:last-child.active {
+            border-radius: 0 30px 30px 0;
+        }
+        .group-header .logic-toggle button:hover:not(.active) {
+            background: #dce2ea;
+        }
+
+        .group-actions {
+            display: flex;
+            gap: 6px;
+            margin-left: auto;
+        }
+        .group-actions button {
+            background: transparent;
+            border: none;
+            color: #6b7a8f;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: background 0.1s, color 0.1s;
+        }
+        .group-actions button:hover {
+            background: #e9edf2;
+            color: #1e293b;
+        }
+        .group-actions .remove-group {
+            color: #b91c1c;
+        }
+        .group-actions .remove-group:hover {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        /* Condition rows */
+        .conditions {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .condition-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 10px 14px;
+            background: #ffffff;
+            padding: 10px 14px 10px 18px;
+            border-radius: 12px;
+            border: 1px solid #e9edf2;
+            transition: border 0.15s, box-shadow 0.15s;
+        }
+        .condition-row:hover {
+            border-color: #cbd5e1;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02);
+        }
+
+        .condition-row .row-logic {
+            font-weight: 600;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            color: #64748b;
+            min-width: 34px;
+            background: #f1f4f9;
+            padding: 3px 10px;
+            border-radius: 30px;
+            text-align: center;
+        }
+        .condition-row .row-logic.and {
+            color: #2563eb;
+            background: #dbeafe;
+        }
+        .condition-row .row-logic.or {
+            color: #b45309;
+            background: #fef3c7;
+        }
+
+        .condition-row select,
+        .condition-row input {
+            padding: 8px 14px;
+            border-radius: 30px;
+            border: 1px solid #dce2ea;
+            background: #ffffff;
+            font-size: 0.9rem;
+            color: #1e293b;
+            outline: none;
+            transition: border 0.15s, box-shadow 0.15s;
+        }
+        .condition-row select:focus,
+        .condition-row input:focus {
+            border-color: #4f7df3;
+            box-shadow: 0 0 0 3px rgba(79, 125, 243, 0.15);
+        }
+
+        .condition-row .field-select {
+            min-width: 130px;
+            flex: 1 0 110px;
+        }
+        .condition-row .operator-select {
+            min-width: 100px;
+            flex: 0 1 110px;
+        }
+        .condition-row .value-input {
+            flex: 2 1 180px;
+            min-width: 130px;
+        }
+        .condition-row .value-input[type="date"] {
+            min-width: 150px;
+        }
+        .condition-row .value-input[type="text"] {
+            min-width: 140px;
+        }
+
+        .condition-row .row-actions {
+            display: flex;
+            gap: 4px;
+            margin-left: auto;
+        }
+        .condition-row .row-actions button {
+            background: transparent;
+            border: none;
+            color: #8b9aaf;
+            padding: 4px 8px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: background 0.1s, color 0.1s;
+        }
+        .condition-row .row-actions button:hover {
+            background: #e9edf2;
+            color: #1e293b;
+        }
+        .condition-row .row-actions .remove-row {
+            color: #b91c1c;
+        }
+        .condition-row .row-actions .remove-row:hover {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .add-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 10px 16px;
+            margin-top: 4px;
+        }
+        .add-buttons button {
+            background: transparent;
+            border: 1px dashed #cbd5e1;
+            padding: 8px 20px;
+            border-radius: 30px;
+            font-size: 0.85rem;
+            color: #475569;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            transition: background 0.15s, border 0.15s, color 0.15s;
+        }
+        .add-buttons button:hover {
+            background: #f1f5f9;
+            border-color: #4f7df3;
+            color: #1e293b;
+        }
+        .add-buttons .btn-add-group {
+            border-color: #4f7df3;
+            color: #4f7df3;
+            background: #f0f5ff;
+        }
+        .add-buttons .btn-add-group:hover {
+            background: #dbeafe;
+            border-color: #2563eb;
+            color: #2563eb;
+        }
+
+        /* Action bar */
+        .builder-actions {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 14px;
+            margin-top: 26px;
+            padding-top: 18px;
+            border-top: 1px solid #e9edf2;
+        }
+        .builder-actions .btn {
+            padding: 10px 28px;
+            border-radius: 40px;
+            font-weight: 500;
+            font-size: 0.9rem;
+            border: none;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            transition: background 0.15s, box-shadow 0.15s;
+        }
+        .builder-actions .btn-search {
+            background: #4f7df3;
+            color: white;
+            box-shadow: 0 4px 12px rgba(79, 125, 243, 0.3);
+        }
+        .builder-actions .btn-search:hover {
+            background: #3b64d4;
+            box-shadow: 0 6px 16px rgba(79, 125, 243, 0.35);
+        }
+        .builder-actions .btn-outline {
+            background: transparent;
+            border: 1px solid #dce2ea;
+            color: #475569;
+        }
+        .builder-actions .btn-outline:hover {
+            background: #f1f5f9;
+            border-color: #b3c0d0;
+        }
+        .builder-actions .result-count {
+            margin-left: auto;
+            font-size: 0.9rem;
+            color: #475569;
+            background: #f1f4f9;
+            padding: 6px 18px;
+            border-radius: 40px;
+        }
+        .builder-actions .result-count strong {
+            color: #1e293b;
+        }
+
+        /* Responsive */
+        @media (max-width: 700px) {
+            .container {
+                padding: 20px 16px;
+            }
+            .condition-row {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .condition-row .row-logic {
+                align-self: flex-start;
+            }
+            .condition-row .row-actions {
+                margin-left: 0;
+                justify-content: flex-end;
+            }
+            .query-preview {
+                max-width: 100%;
+                white-space: normal;
+                margin-left: 0;
+                margin-top: 8px;
+            }
+            .advanced-toggle {
+                flex-wrap: wrap;
+            }
+            .builder-actions {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .builder-actions .result-count {
+                margin-left: 0;
+                text-align: center;
+            }
+            .builder-topbar {
+                flex-direction: column;
+                align-items: stretch;
+            }
+        }
+
+        .hidden {
+            display: none !important;
+        }
+        .text-muted {
+            color: #6b7a8f;
+            font-size: 0.8rem;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+
+    <!-- Header -->
+    <div class="search-header">
+        <div class="quick-search">
+            <i class="fas fa-search"></i>
+            <input type="text" placeholder='Try "contracts signed after Jan 2025" or "budget reports"' />
+        </div>
+        <div class="header-actions">
+            <!-- Removed "Saved" button as requested -->
+            <button class="btn-primary" onclick="toggleBuilder()"><i class="fas fa-sliders-h"></i> Advanced</button>
+        </div>
+    </div>
+
+    <!-- Toggle -->
+    <div class="advanced-toggle">
+        <label>
+            <input type="checkbox" id="builderToggle" onchange="toggleBuilder()" />
+            <i class="fas fa-code-branch"></i> Enable condition groups
+        </label>
+        <span class="badge">Nested AND / OR</span>
+        <div class="query-preview">
+            <i class="fas fa-quote-right"></i>
+            <span id="queryPreview">No conditions added</span>
+        </div>
+    </div>
+
+    <!-- Builder -->
+    <div class="builder" id="builderArea">
+
+        <!-- Top bar: Add Group -->
+        <div class="builder-topbar">
+            <div class="add-buttons">
+                <button class="btn-add-group" onclick="addGroup()"><i class="fas fa-layer-group"></i> Add condition group</button>
+            </div>
+            <span class="hint"><i class="fas fa-lightbulb"></i> Groups allow nested AND/OR logic, e.g., (A AND B) OR (C AND D)</span>
+        </div>
+
+        <!-- Group 1 -->
+        <div class="condition-group" data-group="0">
+            <div class="group-header">
+                <div class="logic-toggle">
+                    <button class="active" data-group="0" data-logic="AND" onclick="setGroupLogic(0, 'AND')">AND</button>
+                    <button data-group="0" data-logic="OR" onclick="setGroupLogic(0, 'OR')">OR</button>
+                </div>
+                <span class="text-muted" style="font-size:0.8rem;">Group 1</span>
+                <div class="group-actions">
+                    <button onclick="addCondition(0)"><i class="fas fa-plus"></i> Add condition</button>
+                    <button class="remove-group" onclick="removeGroup(0)" title="Remove group"><i class="fas fa-trash"></i></button>
+                </div>
+            </div>
+            <div class="conditions" id="conditionsGroup0"></div>
+        </div>
+
+        <!-- Group 2 (nested) -->
+        <div class="condition-group group-nested" data-group="1">
+            <div class="group-header">
+                <div class="logic-toggle">
+                    <button class="active" data-group="1" data-logic="AND" onclick="setGroupLogic(1, 'AND')">AND</button>
+                    <button data-group="1" data-logic="OR" onclick="setGroupLogic(1, 'OR')">OR</button>
+                </div>
+                <span class="text-muted" style="font-size:0.8rem;">Group 2 (nested)</span>
+                <div class="group-actions">
+                    <button onclick="addCondition(1)"><i class="fas fa-plus"></i> Add condition</button>
+                    <button class="remove-group" onclick="removeGroup(1)" title="Remove group"><i class="fas fa-trash"></i></button>
+                </div>
+            </div>
+            <div class="conditions" id="conditionsGroup1"></div>
+        </div>
+
+        <!-- No facet row – removed as requested -->
+
+        <!-- Actions -->
+        <div class="builder-actions">
+            <button class="btn btn-search" onclick="performSearch()"><i class="fas fa-search"></i> Search</button>
+            <button class="btn btn-outline" onclick="resetBuilder()"><i class="fas fa-undo-alt"></i> Reset</button>
+            <!-- Removed Save as template button -->
+            <div class="result-count"><i class="far fa-file-alt"></i> <strong>0</strong> documents match</div>
+        </div>
+
+    </div><!-- /builder -->
+
+    <!-- Footer note (removed to keep clean) -->
+</div>
+
+<script>
+    (function() {
+        // State
+        const state = {
+            groups: {
+                0: { logic: 'AND', conditions: [] },
+                1: { logic: 'AND', conditions: [] }
+            },
+            nextGroupId: 2
+        };
+
+        function getGroupIds() {
+            return Object.keys(state.groups).map(Number).sort((a,b) => a - b);
+        }
+
+        function renderAll() {
+            const groupIds = getGroupIds();
+            document.querySelectorAll('.condition-group').forEach(el => {
+                const gid = parseInt(el.dataset.group);
+                el.style.display = groupIds.includes(gid) ? 'block' : 'none';
+            });
+
+            groupIds.forEach(gid => {
+                renderConditions(gid);
+                const logic = state.groups[gid].logic;
+                document.querySelectorAll(`.logic-toggle [data-group="${gid}"]`).forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.logic === logic);
+                });
+            });
+
+            updatePreview();
+            updateResultCount();
+        }
+
+        function renderConditions(gid) {
+            const container = document.getElementById(`conditionsGroup${gid}`);
+            if (!container) return;
+            const conditions = state.groups[gid].conditions;
+            container.innerHTML = '';
+            if (conditions.length === 0) {
+                const empty = document.createElement('div');
+                empty.style.padding = '12px 0 6px';
+                empty.style.color = '#8b9aaf';
+                empty.style.fontSize = '0.85rem';
+                empty.style.fontStyle = 'italic';
+                empty.innerText = 'No conditions added. Click "Add condition" to start.';
+                container.appendChild(empty);
+                return;
+            }
+
+            conditions.forEach((cond, idx) => {
+                const row = createConditionRow(gid, idx, cond);
+                container.appendChild(row);
+            });
+        }
+
+        function createConditionRow(gid, idx, cond) {
+            const div = document.createElement('div');
+            div.className = 'condition-row';
+            div.dataset.gid = gid;
+            div.dataset.idx = idx;
+
+            const logicLabel = document.createElement('span');
+            logicLabel.className = `row-logic ${idx === 0 ? 'hidden' : ''}`;
+            if (idx > 0) {
+                const logic = state.groups[gid].logic;
+                logicLabel.classList.add(logic.toLowerCase());
+                logicLabel.textContent = logic;
+            }
+            div.appendChild(logicLabel);
+
+            const fieldSelect = document.createElement('select');
+            fieldSelect.className = 'field-select';
+            const fields = [
+                ['Title', 'title'],
+                ['Description', 'description'],
+                ['Owner', 'owner'],
+                ['Category', 'category'],
+                ['Tags', 'tags'],
+                ['Folder name', 'folder'],
+                ['Folder metadata', 'folderMeta'],
+                ['Created date', 'createdDate'],
+                ['Modified date', 'modifiedDate']
+            ];
+            fields.forEach(([label, val]) => {
+                const opt = document.createElement('option');
+                opt.value = val;
+                opt.textContent = label;
+                if (val === cond.field) opt.selected = true;
+                fieldSelect.appendChild(opt);
+            });
+            fieldSelect.addEventListener('change', function() {
+                cond.field = this.value;
+                const valInput = div.querySelector('.value-input');
+                updateValueInputType(valInput, cond.field);
+                updatePreview();
+            });
+            div.appendChild(fieldSelect);
+
+            const opSelect = document.createElement('select');
+            opSelect.className = 'operator-select';
+            const ops = [
+                ['contains', 'contains'],
+                ['not contains', 'not contains'],
+                ['starts with', 'starts with'],
+                ['ends with', 'ends with'],
+                ['is', 'is'],
+                ['is not', 'is not'],
+                ['between', 'between'],
+                ['after', 'after'],
+                ['before', 'before'],
+                ['includes', 'includes'],
+                ['excludes', 'excludes']
+            ];
+            ops.forEach(([label, val]) => {
+                const opt = document.createElement('option');
+                opt.value = val;
+                opt.textContent = label;
+                if (val === cond.operator) opt.selected = true;
+                opSelect.appendChild(opt);
+            });
+            opSelect.addEventListener('change', function() {
+                cond.operator = this.value;
+                updatePreview();
+            });
+            div.appendChild(opSelect);
+
+            const valInput = document.createElement('input');
+            valInput.className = 'value-input';
+            valInput.type = 'text';
+            if (cond.field === 'createdDate' || cond.field === 'modifiedDate') {
+                valInput.type = 'date';
+            }
+            valInput.value = cond.value || '';
+            valInput.placeholder = 'Enter value...';
+            valInput.addEventListener('input', function() {
+                cond.value = this.value;
+                updatePreview();
+            });
+            div.appendChild(valInput);
+
+            const actions = document.createElement('div');
+            actions.className = 'row-actions';
+            const removeBtn = document.createElement('button');
+            removeBtn.className = 'remove-row';
+            removeBtn.innerHTML = '<i class="fas fa-times"></i>';
+            removeBtn.title = 'Remove condition';
+            removeBtn.addEventListener('click', function() {
+                removeCondition(gid, idx);
+            });
+            actions.appendChild(removeBtn);
+            div.appendChild(actions);
+
+            return div;
+        }
+
+        function updateValueInputType(input, field) {
+            if (field === 'createdDate' || field === 'modifiedDate') {
+                input.type = 'date';
+                input.placeholder = 'Select date';
+            } else if (field === 'owner' || field === 'category') {
+                input.type = 'text';
+                input.placeholder = 'Type to autocomplete...';
+            } else {
+                input.type = 'text';
+                input.placeholder = 'Enter value...';
+            }
+        }
+
+        // ---- Global functions ----
+        window.addCondition = function(gid) {
+            if (!state.groups[gid]) return;
+            state.groups[gid].conditions.push({
+                field: 'title',
+                operator: 'contains',
+                value: ''
+            });
+            renderAll();
+        };
+
+        window.removeCondition = function(gid, idx) {
+            if (!state.groups[gid]) return;
+            state.groups[gid].conditions.splice(idx, 1);
+            renderAll();
+        };
+
+        window.setGroupLogic = function(gid, logic) {
+            if (!state.groups[gid]) return;
+            state.groups[gid].logic = logic;
+            renderAll();
+        };
+
+        window.addGroup = function() {
+            const id = state.nextGroupId++;
+            state.groups[id] = { logic: 'AND', conditions: [] };
+            const builder = document.getElementById('builderArea');
+            const newGroup = document.createElement('div');
+            newGroup.className = 'condition-group group-nested';
+            newGroup.dataset.group = id;
+            newGroup.innerHTML = `
+                <div class="group-header">
+                    <div class="logic-toggle">
+                        <button class="active" data-group="${id}" data-logic="AND" onclick="setGroupLogic(${id}, 'AND')">AND</button>
+                        <button data-group="${id}" data-logic="OR" onclick="setGroupLogic(${id}, 'OR')">OR</button>
+                    </div>
+                    <span class="text-muted" style="font-size:0.8rem;">Group ${id}</span>
+                    <div class="group-actions">
+                        <button onclick="addCondition(${id})"><i class="fas fa-plus"></i> Add condition</button>
+                        <button class="remove-group" onclick="removeGroup(${id})" title="Remove group"><i class="fas fa-trash"></i></button>
+                    </div>
+                </div>
+                <div class="conditions" id="conditionsGroup${id}"></div>
+            `;
+            // Insert before the action bar (or after existing groups)
+            const actions = document.querySelector('.builder-actions');
+            builder.insertBefore(newGroup, actions);
+            renderAll();
+        };
+
+        window.removeGroup = function(gid) {
+            if (getGroupIds().length <= 1) {
+                alert('Keep at least one group.');
+                return;
+            }
+            if (!confirm(`Remove Group ${gid} and all its conditions?`)) return;
+            delete state.groups[gid];
+            const el = document.querySelector(`.condition-group[data-group="${gid}"]`);
+            if (el) el.remove();
+            renderAll();
+        };
+
+        window.resetBuilder = function() {
+            if (!confirm('Reset all conditions?')) return;
+            const groupIds = getGroupIds();
+            groupIds.forEach(gid => {
+                state.groups[gid].conditions = [];
+            });
+            renderAll();
+        };
+
+        function updatePreview() {
+            const preview = document.getElementById('queryPreview');
+            const parts = [];
+            const groupIds = getGroupIds();
+            groupIds.forEach(gid => {
+                const group = state.groups[gid];
+                const conds = group.conditions.filter(c => c.value && c.value.trim() !== '');
+                if (conds.length === 0) return;
+                const groupParts = conds.map(c => {
+                    const fieldMap = {
+                        title: 'Title', description: 'Description', owner: 'Owner',
+                        category: 'Category', tags: 'Tags', folder: 'Folder',
+                        folderMeta: 'Folder metadata', createdDate: 'Created date',
+                        modifiedDate: 'Modified date'
+                    };
+                    const f = fieldMap[c.field] || c.field;
+                    const op = c.operator;
+                    let val = c.value;
+                    if (c.field === 'createdDate' || c.field === 'modifiedDate') {
+                        // keep as is
+                    }
+                    return `${f} ${op} “${val}”`;
+                });
+                const logic = group.logic;
+                const joined = groupParts.join(` ${logic} `);
+                parts.push(joined);
+            });
+            if (parts.length === 0) {
+                preview.textContent = 'No conditions added';
+                return;
+            }
+            let result = parts.join(' AND ');
+            if (parts.length > 1) {
+                result = parts.map(p => `(${p})`).join(' AND ');
+            }
+            preview.textContent = result;
+        }
+
+        function updateResultCount() {
+            const countEl = document.querySelector('.result-count strong');
+            if (!countEl) return;
+            let total = 0;
+            const groupIds = getGroupIds();
+            groupIds.forEach(gid => {
+                const conds = state.groups[gid].conditions.filter(c => c.value && c.value.trim() !== '');
+                if (conds.length > 0) total += Math.floor(Math.random() * 20) + 3;
+            });
+            countEl.textContent = total === 0 ? '0' : Math.min(total, 99);
+        }
+
+        window.toggleBuilder = function() {
+            const builder = document.getElementById('builderArea');
+            const toggle = document.getElementById('builderToggle');
+            const isChecked = toggle.checked;
+            builder.classList.toggle('visible', isChecked);
+            const headerBtn = document.querySelector('.header-actions .btn-primary');
+            if (isChecked) {
+                headerBtn.style.background = '#e9edf2';
+                headerBtn.style.color = '#334155';
+                headerBtn.innerHTML = '<i class="fas fa-sliders-h"></i> Advanced';
+            } else {
+                headerBtn.style.background = '#4f7df3';
+                headerBtn.style.color = 'white';
+                headerBtn.innerHTML = '<i class="fas fa-sliders-h"></i> Advanced';
+            }
+        };
+
+        window.performSearch = function() {
+            alert('🔍 Search executed with current filters.\n(Check the preview for your query.)');
+        };
+
+        // Init
+        function init() {
+            state.groups[0].conditions = [];
+            state.groups[1].conditions = [];
+            const builder = document.getElementById('builderArea');
+            document.querySelectorAll('.condition-group').forEach(el => el.remove());
+
+            // Rebuild group 0
+            const g0 = document.createElement('div');
+            g0.className = 'condition-group';
+            g0.dataset.group = 0;
+            g0.innerHTML = `
+                <div class="group-header">
+                    <div class="logic-toggle">
+                        <button class="active" data-group="0" data-logic="AND" onclick="setGroupLogic(0, 'AND')">AND</button>
+                        <button data-group="0" data-logic="OR" onclick="setGroupLogic(0, 'OR')">OR</button>
+                    </div>
+                    <span class="text-muted" style="font-size:0.8rem;">Group 1</span>
+                    <div class="group-actions">
+                        <button onclick="addCondition(0)"><i class="fas fa-plus"></i> Add condition</button>
+                        <button class="remove-group" onclick="removeGroup(0)" title="Remove group"><i class="fas fa-trash"></i></button>
+                    </div>
+                </div>
+                <div class="conditions" id="conditionsGroup0"></div>
+            `;
+
+            const g1 = document.createElement('div');
+            g1.className = 'condition-group group-nested';
+            g1.dataset.group = 1;
+            g1.innerHTML = `
+                <div class="group-header">
+                    <div class="logic-toggle">
+                        <button class="active" data-group="1" data-logic="AND" onclick="setGroupLogic(1, 'AND')">AND</button>
+                        <button data-group="1" data-logic="OR" onclick="setGroupLogic(1, 'OR')">OR</button>
+                    </div>
+                    <span class="text-muted" style="font-size:0.8rem;">Group 2 (nested)</span>
+                    <div class="group-actions">
+                        <button onclick="addCondition(1)"><i class="fas fa-plus"></i> Add condition</button>
+                        <button class="remove-group" onclick="removeGroup(1)" title="Remove group"><i class="fas fa-trash"></i></button>
+                    </div>
+                </div>
+                <div class="conditions" id="conditionsGroup1"></div>
+            `;
+
+            const actions = document.querySelector('.builder-actions');
+            builder.insertBefore(g0, actions);
+            builder.insertBefore(g1, actions);
+            renderAll();
+            document.getElementById('builderArea').classList.remove('visible');
+            document.getElementById('builderToggle').checked = false;
+        }
+
+        init();
+    })();
+</script>
+</body>
+</html>

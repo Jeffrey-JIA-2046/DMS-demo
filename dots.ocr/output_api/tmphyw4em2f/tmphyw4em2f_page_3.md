@@ -1,0 +1,21 @@
+<table><tr><td>102</td><td>筭箕灣</td><td>→</td><td>美孚</td><td></td></tr><tr><td>106</td><td>黃大仙</td><td>→</td><td>小西灣（藍灣半島）</td><td></td></tr><tr><td>110</td><td>筭箕灣</td><td>→</td><td>尖沙咀東（麼地道）</td><td></td></tr><tr><td>116</td><td>慈雲山（中）</td><td>→</td><td>鰂魚涌（祐民街）</td><td></td></tr><tr><td>606</td><td>彩雲（豐盛街）</td><td>→</td><td>小西灣（藍灣半島）</td><td>平日上午繁忙時間停止服務</td></tr><tr><td>608</td><td>馬頭圍邨</td><td>→</td><td>筭箕灣</td><td></td></tr><tr><td>613</td><td>安泰（西）</td><td>→</td><td>筭箕灣</td><td></td></tr><tr><td>682</td><td>柴灣（東）</td><td>→</td><td>馬鞍山（烏溪沙站）</td><td>平日上午繁忙時間往港島方向以馬鞍山（利安邨）為起點站</td></tr><tr><td>694</td><td>調景嶺站</td><td>→</td><td>小西灣邨</td><td></td></tr><tr><td>933</td><td>荃灣西站</td><td>→</td><td>西灣河</td><td>只限平日繁忙時間服務</td></tr><tr><td>948E</td><td>青衣站</td><td>→</td><td>太古（康怡廣場）</td><td>只限平日繁忙時間服務</td></tr><tr><td>952C</td><td>掃管笏</td><td>→</td><td>太古（康怡廣場）</td><td>只限平日繁忙時間服務</td></tr><tr><td></td><td></td><td>←</td><td>鰂魚涌（新威園）</td><td>只限平日繁忙時間服務</td></tr><tr><td>955</td><td>屯門（菁田及和田）</td><td>→</td><td>西灣河</td><td>只限平日繁忙時間服務</td></tr><tr><td>960B</td><td>屯門（建生邨）</td><td>→</td><td>鰂魚涌（英皇道）</td><td>只限平日繁忙時間服務</td></tr><tr><td>960X</td><td>洪水橋（洪元路）</td><td>→</td><td>鰂魚涌（英皇道）</td><td>只限平日繁忙時間服務</td></tr><tr><td></td><td>洪水橋（洪福邨）</td><td>←</td><td>鰂魚涌（英皇道）</td><td>只限平日繁忙時間服務</td></tr><tr><td>962C</td><td>屯門（龍門居）</td><td>→</td><td>太古（康怡廣場）</td><td>只限平日繁忙時間服務</td></tr><tr><td></td><td></td><td>←</td><td>鰂魚涌（新威園）</td><td>只限平日繁忙時間服務</td></tr><tr><td>968X</td><td>元朗（德業街）</td><td>→</td><td>鰂魚涌（英皇道）</td><td>只限平日繁忙時間服務</td></tr><tr><td>969C</td><td>嘉湖山莊美湖居</td><td>→</td><td>太古（康怡廣場）</td><td>只限平日繁忙時間服務</td></tr><tr><td></td><td>天水圍（天瑞邨）</td><td>←</td><td>鰂魚涌（新威園）</td><td>只限平日繁忙時間服務</td></tr><tr><td>976</td><td>新田</td><td>→</td><td>西灣河</td><td>只限平日繁忙時間服務</td></tr><tr><td>976A</td><td>新田</td><td>→</td><td>小西灣（藍灣半島）</td><td>只限平日繁忙時間服務</td></tr><tr><td>986</td><td>沙田圍</td><td>→</td><td>西灣河</td><td>只限平日上午繁忙時間服務</td></tr><tr><td>988</td><td></td><td></td><td></td><td>（沒有資料，請加入至Module:香港巴士/crh。）</td></tr><tr><td>989</td><td>火炭（駿洋邨）</td><td>→</td><td>西灣河</td><td>只限平日上午繁忙時間服務</td></tr></table>
+
+大嶼山或機場巴士
+
+A12 小西灣（藍灣半島） → 機場
+
+小巴
+
+港島專線小巴
+
+32 康怡花園 → 筭箕灣
+
+32A 康怡花園 → 太古站
+
+33 康怡花園 → 北角（馬寶道）
+
+33M 康怡花園 → 太古站
+
+68 愛秩序灣 → 鰂魚涌（太古坊） 只限早上繁忙時間服務
+
+69 數碼港 → 鰂魚涌（船塢里）

@@ -1,0 +1,543 @@
+.formio-compat {
+  font-family: "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background: #fff;
+}
+
+.formio-compat .formbuilder {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 6fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.formio-compat .formbuilder > .formcomponents,
+.formio-compat .formbuilder > .formarea {
+  float: none;
+  width: 100% !important;
+  max-width: none;
+}
+
+.formio-compat .formbuilder > .formcomponents {
+  grid-column: 1;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+}
+
+.formio-compat .formbuilder > .formarea {
+  grid-column: 2;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+  min-height: 640px;
+}
+
+@media (max-width: 1024px) {
+  .formio-compat .formbuilder {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 6fr);
+  }
+}
+
+@media (max-width: 520px) {
+  .formio-compat .formbuilder {
+    grid-template-columns: 1fr;
+  }
+
+  .formio-compat .formbuilder > .formarea {
+    min-height: 420px;
+  }
+}
+
+.formio-compat .btn {
+  display: inline-block;
+  margin-bottom: 0;
+  font-weight: 400;
+  text-align: center;
+  vertical-align: middle;
+  cursor: pointer;
+  background-image: none;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  padding: 6px 12px;
+  font-size: 14px;
+  line-height: 1.42857143;
+  border-radius: 4px;
+  user-select: none;
+  font-family: inherit;
+}
+
+.formio-compat .btn.btn-block {
+  display: block;
+  width: 100%;
+}
+
+.formio-compat .btn-default {
+  color: #333;
+  background-color: #fff;
+  border-color: #ccc;
+}
+
+.formio-compat .btn-primary {
+  color: #fff;
+  background-color: #337ab7;
+  border-color: #2e6da4;
+}
+
+.formio-compat .btn-success {
+  color: #fff;
+  background-color: #5cb85c;
+  border-color: #4cae4c;
+}
+
+.formio-compat .btn-danger {
+  color: #fff;
+  background-color: #d9534f;
+  border-color: #d43f3a;
+}
+
+.formio-compat .btn-warning {
+  color: #fff;
+  background-color: #f0ad4e;
+  border-color: #eea236;
+}
+
+.formio-compat .btn-link {
+  color: #337ab7;
+  background: transparent;
+  border-color: transparent;
+}
+
+.formio-compat .form-control {
+  display: block;
+  width: 100%;
+  height: 34px;
+  padding: 6px 12px;
+  font-size: 14px;
+  line-height: 1.42857143;
+  color: #555;
+  background-color: #fff;
+  background-image: none;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.075);
+}
+
+.formio-compat textarea.form-control,
+.formio-compat select[multiple].form-control {
+  height: auto;
+}
+
+.formio-compat .form-group,
+.formio-compat .formio-form-group {
+  margin-bottom: 15px;
+}
+
+.formio-compat .control-label,
+.formio-compat .help-block {
+  font-size: 14px;
+  color: #333;
+}
+
+.formio-compat .help-block {
+  color: #737373;
+}
+
+.formio-compat .panel {
+  margin-bottom: 20px;
+  background-color: #fff;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.05);
+}
+
+.formio-compat .panel-default {
+  border-color: #ddd;
+}
+
+.formio-compat .panel-heading {
+  padding: 10px 15px;
+  border-bottom: 1px solid transparent;
+  border-top-left-radius: 3px;
+  border-top-right-radius: 3px;
+}
+
+.formio-compat .panel-default > .panel-heading {
+  color: #333;
+  background-color: #f5f5f5;
+  border-color: #ddd;
+}
+
+.formio-compat .panel-body {
+  padding: 15px;
+}
+
+.formio-compat .nav {
+  padding-left: 0;
+  margin-bottom: 0;
+  list-style: none;
+}
+
+.formio-compat .nav > li {
+  position: relative;
+  display: block;
+}
+
+.formio-compat .nav > li > a {
+  position: relative;
+  display: block;
+  padding: 10px 15px;
+  text-decoration: none;
+  color: #337ab7;
+}
+
+.formio-compat .nav-tabs {
+  border-bottom: 1px solid #ddd;
+}
+
+.formio-compat .nav-tabs > li {
+  float: left;
+  margin-bottom: -1px;
+}
+
+.formio-compat .nav-tabs > li > a {
+  margin-right: 2px;
+  border: 1px solid transparent;
+  border-radius: 4px 4px 0 0;
+}
+
+.formio-compat .nav-tabs > li.active > a,
+.formio-compat .nav-tabs > li.active > a:focus,
+.formio-compat .nav-tabs > li.active > a:hover {
+  color: #555;
+  background-color: #fff;
+  border: 1px solid #ddd;
+  border-bottom-color: transparent;
+}
+
+.formio-compat .tab-content > .tab-pane {
+  display: none;
+}
+
+.formio-compat .tab-content > .active {
+  display: block;
+}
+
+.formio-compat .formbuilder .drag-container {
+  background: #fff;
+}
+
+.formio-compat .formbuilder .builder-group-button {
+  font-weight: 400;
+  color: #777;
+  background-color: transparent;
+  border-color: transparent;
+  border-radius: 6px;
+  font-size: 16px;
+  line-height: 24px;
+}
+
+.formio-compat .formbuilder .builder-group-button:hover,
+.formio-compat .formbuilder .builder-group-button:focus {
+  color: #555;
+  background-color: #f8f9fa;
+  border-color: #dee2e6;
+}
+
+.formio-compat .builder-sidebar_search,
+.formio-compat .builder-sidebar_search input,
+.formio-compat input.builder-sidebar_search {
+  border-color: #dee2e6;
+  border-radius: 6px;
+  color: #777;
+  font-size: 16px;
+  line-height: 24px;
+}
+
+.formio-compat .formcomponents .formcomponent,
+.formio-compat .formcomponents .formcomponent.btn,
+.formio-compat .formcomponents .formcomponent.btn-primary,
+.formio-compat .formcomponents .formcomponent.btn.btn-primary {
+  color: #446e9b;
+  background-color: transparent;
+  border-color: #446e9b;
+  text-align: left;
+  font-size: 0.8em;
+  line-height: 1.2;
+  padding: 5px 5px 5px 8px;
+  margin-top: 0.2rem;
+  border-radius: 0.24rem;
+}
+
+.formio-compat .formcomponents .formcomponent.btn:hover,
+.formio-compat .formcomponents .formcomponent.btn:focus {
+  color: #2d537d;
+  border-color: #2d537d;
+  background-color: rgba(68, 110, 155, 0.08);
+}
+
+/* Match official Form.io styling in control-edit popup dialogs. */
+.formio-dialog,
+.formio-dialog .formio-dialog-content,
+.formio-dialog .formio-dialog-content * {
+  font-family: "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+.formio-dialog .btn {
+  display: inline-block;
+  margin-bottom: 0;
+  font-weight: 400;
+  text-align: center;
+  vertical-align: middle;
+  cursor: pointer;
+  background-image: none;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  padding: 6px 12px;
+  font-size: 14px;
+  line-height: 1.42857143;
+  border-radius: 4px;
+}
+
+.formio-dialog .btn-primary {
+  color: #fff;
+  background-color: #337ab7;
+  border-color: #2e6da4;
+}
+
+.formio-dialog .btn-default {
+  color: #333;
+  background-color: #fff;
+  border-color: #ccc;
+}
+
+.formio-dialog .form-control {
+  display: block;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 12px;
+  font-size: 14px;
+  line-height: 1.42857143;
+  color: #555;
+  background-color: #fff;
+  background-image: none;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.075);
+}
+
+.formio-dialog .nav {
+  padding-left: 0;
+  margin-bottom: 0;
+  list-style: none;
+}
+
+.formio-dialog .nav > li {
+  position: relative;
+  display: block;
+}
+
+.formio-dialog .nav > li > a {
+  position: relative;
+  display: block;
+  padding: 10px 15px;
+  text-decoration: none;
+  color: #337ab7;
+}
+
+.formio-dialog .nav-tabs {
+  border-bottom: 1px solid #ddd;
+}
+
+.formio-dialog .nav-tabs > li {
+  float: left;
+  margin-bottom: -1px;
+}
+
+.formio-dialog .nav-tabs > li > a {
+  margin-right: 2px;
+  border: 1px solid transparent;
+  border-radius: 4px 4px 0 0;
+}
+
+.formio-dialog .nav-tabs > li.active > a,
+.formio-dialog .nav-tabs > li.active > a:focus,
+.formio-dialog .nav-tabs > li.active > a:hover {
+  color: #555;
+  background-color: #fff;
+  border: 1px solid #ddd;
+  border-bottom-color: transparent;
+}
+
+.formio-dialog .tab-content {
+  background: #fff;
+  border: 1px solid #ddd;
+  border-top: 0;
+  border-radius: 0 0 4px 4px;
+  padding: 12px;
+}
+
+.formio-dialog .component-settings .form-group,
+.formio-dialog .component-settings .formio-form-group {
+  margin-bottom: 15px;
+}
+
+/* Bootstrap-like grid support required by Form.io Columns component. */
+.formio-compat .row,
+.formio-dialog .row {
+  margin-left: -15px;
+  margin-right: -15px;
+}
+
+.formio-compat .row::before,
+.formio-compat .row::after,
+.formio-dialog .row::before,
+.formio-dialog .row::after {
+  content: " ";
+  display: table;
+}
+
+.formio-compat .row::after,
+.formio-dialog .row::after {
+  clear: both;
+}
+
+.formio-compat [class^="col-"],
+.formio-compat [class*=" col-"],
+.formio-dialog [class^="col-"],
+.formio-dialog [class*=" col-"] {
+  position: relative;
+  min-height: 1px;
+  padding-left: 15px;
+  padding-right: 15px;
+}
+
+.formio-compat .col-xs-1,
+.formio-dialog .col-xs-1 { float: left; width: 8.33333333%; }
+.formio-compat .col-xs-2,
+.formio-dialog .col-xs-2 { float: left; width: 16.66666667%; }
+.formio-compat .col-xs-3,
+.formio-dialog .col-xs-3 { float: left; width: 25%; }
+.formio-compat .col-xs-4,
+.formio-dialog .col-xs-4 { float: left; width: 33.33333333%; }
+.formio-compat .col-xs-5,
+.formio-dialog .col-xs-5 { float: left; width: 41.66666667%; }
+.formio-compat .col-xs-6,
+.formio-dialog .col-xs-6 { float: left; width: 50%; }
+.formio-compat .col-xs-7,
+.formio-dialog .col-xs-7 { float: left; width: 58.33333333%; }
+.formio-compat .col-xs-8,
+.formio-dialog .col-xs-8 { float: left; width: 66.66666667%; }
+.formio-compat .col-xs-9,
+.formio-dialog .col-xs-9 { float: left; width: 75%; }
+.formio-compat .col-xs-10,
+.formio-dialog .col-xs-10 { float: left; width: 83.33333333%; }
+.formio-compat .col-xs-11,
+.formio-dialog .col-xs-11 { float: left; width: 91.66666667%; }
+.formio-compat .col-xs-12,
+.formio-dialog .col-xs-12 { float: left; width: 100%; }
+
+/* In the Form Builder canvas, honor col-sm/col-md widths regardless of viewport width. */
+.formio-compat .col-sm-1,
+.formio-dialog .col-sm-1,
+.formio-compat .col-md-1,
+.formio-dialog .col-md-1 { float: left; width: 8.33333333%; }
+.formio-compat .col-sm-2,
+.formio-dialog .col-sm-2,
+.formio-compat .col-md-2,
+.formio-dialog .col-md-2 { float: left; width: 16.66666667%; }
+.formio-compat .col-sm-3,
+.formio-dialog .col-sm-3,
+.formio-compat .col-md-3,
+.formio-dialog .col-md-3 { float: left; width: 25%; }
+.formio-compat .col-sm-4,
+.formio-dialog .col-sm-4,
+.formio-compat .col-md-4,
+.formio-dialog .col-md-4 { float: left; width: 33.33333333%; }
+.formio-compat .col-sm-5,
+.formio-dialog .col-sm-5,
+.formio-compat .col-md-5,
+.formio-dialog .col-md-5 { float: left; width: 41.66666667%; }
+.formio-compat .col-sm-6,
+.formio-dialog .col-sm-6,
+.formio-compat .col-md-6,
+.formio-dialog .col-md-6 { float: left; width: 50%; }
+.formio-compat .col-sm-7,
+.formio-dialog .col-sm-7,
+.formio-compat .col-md-7,
+.formio-dialog .col-md-7 { float: left; width: 58.33333333%; }
+.formio-compat .col-sm-8,
+.formio-dialog .col-sm-8,
+.formio-compat .col-md-8,
+.formio-dialog .col-md-8 { float: left; width: 66.66666667%; }
+.formio-compat .col-sm-9,
+.formio-dialog .col-sm-9,
+.formio-compat .col-md-9,
+.formio-dialog .col-md-9 { float: left; width: 75%; }
+.formio-compat .col-sm-10,
+.formio-dialog .col-sm-10,
+.formio-compat .col-md-10,
+.formio-dialog .col-md-10 { float: left; width: 83.33333333%; }
+.formio-compat .col-sm-11,
+.formio-dialog .col-sm-11,
+.formio-compat .col-md-11,
+.formio-dialog .col-md-11 { float: left; width: 91.66666667%; }
+.formio-compat .col-sm-12,
+.formio-dialog .col-sm-12,
+.formio-compat .col-md-12,
+.formio-dialog .col-md-12 { float: left; width: 100%; }
+
+@media (min-width: 768px) {
+  .formio-compat .col-sm-1,
+  .formio-dialog .col-sm-1 { float: left; width: 8.33333333%; }
+  .formio-compat .col-sm-2,
+  .formio-dialog .col-sm-2 { float: left; width: 16.66666667%; }
+  .formio-compat .col-sm-3,
+  .formio-dialog .col-sm-3 { float: left; width: 25%; }
+  .formio-compat .col-sm-4,
+  .formio-dialog .col-sm-4 { float: left; width: 33.33333333%; }
+  .formio-compat .col-sm-5,
+  .formio-dialog .col-sm-5 { float: left; width: 41.66666667%; }
+  .formio-compat .col-sm-6,
+  .formio-dialog .col-sm-6 { float: left; width: 50%; }
+  .formio-compat .col-sm-7,
+  .formio-dialog .col-sm-7 { float: left; width: 58.33333333%; }
+  .formio-compat .col-sm-8,
+  .formio-dialog .col-sm-8 { float: left; width: 66.66666667%; }
+  .formio-compat .col-sm-9,
+  .formio-dialog .col-sm-9 { float: left; width: 75%; }
+  .formio-compat .col-sm-10,
+  .formio-dialog .col-sm-10 { float: left; width: 83.33333333%; }
+  .formio-compat .col-sm-11,
+  .formio-dialog .col-sm-11 { float: left; width: 91.66666667%; }
+  .formio-compat .col-sm-12,
+  .formio-dialog .col-sm-12 { float: left; width: 100%; }
+}
+
+@media (min-width: 992px) {
+  .formio-compat .col-md-1,
+  .formio-dialog .col-md-1 { float: left; width: 8.33333333%; }
+  .formio-compat .col-md-2,
+  .formio-dialog .col-md-2 { float: left; width: 16.66666667%; }
+  .formio-compat .col-md-3,
+  .formio-dialog .col-md-3 { float: left; width: 25%; }
+  .formio-compat .col-md-4,
+  .formio-dialog .col-md-4 { float: left; width: 33.33333333%; }
+  .formio-compat .col-md-5,
+  .formio-dialog .col-md-5 { float: left; width: 41.66666667%; }
+  .formio-compat .col-md-6,
+  .formio-dialog .col-md-6 { float: left; width: 50%; }
+  .formio-compat .col-md-7,
+  .formio-dialog .col-md-7 { float: left; width: 58.33333333%; }
+  .formio-compat .col-md-8,
+  .formio-dialog .col-md-8 { float: left; width: 66.66666667%; }
+  .formio-compat .col-md-9,
+  .formio-dialog .col-md-9 { float: left; width: 75%; }
+  .formio-compat .col-md-10,
+  .formio-dialog .col-md-10 { float: left; width: 83.33333333%; }
+  .formio-compat .col-md-11,
+  .formio-dialog .col-md-11 { float: left; width: 91.66666667%; }
+  .formio-compat .col-md-12,
+  .formio-dialog .col-md-12 { float: left; width: 100%; }
+}

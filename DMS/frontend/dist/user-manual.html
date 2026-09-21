@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Automated Smart ECM User Help Manual</title>
+    <style>
+      :root {
+        --bg: #f7fafc;
+        --card: #ffffff;
+        --ink: #0f172a;
+        --muted: #475569;
+        --line: #dbe3ef;
+        --accent: #0059c9;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+        background: var(--bg);
+        color: var(--ink);
+        line-height: 1.55;
+      }
+      .page {
+        max-width: 980px;
+        margin: 0 auto;
+        padding: 28px 18px 44px;
+      }
+      .hero {
+        background: linear-gradient(120deg, #e6f0ff, #f7fbff);
+        border: 1px solid #cfe0ff;
+        border-radius: 16px;
+        padding: 18px 20px;
+        margin-bottom: 18px;
+      }
+      h1 {
+        margin: 0 0 6px;
+        font-size: 1.85rem;
+      }
+      h2 {
+        margin: 20px 0 8px;
+        font-size: 1.2rem;
+      }
+      p { margin: 8px 0; }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 14px 16px;
+        margin-top: 12px;
+      }
+      ul, ol { margin: 8px 0 8px 20px; }
+      li { margin: 4px 0; }
+      code {
+        background: #f1f5f9;
+        border: 1px solid #e2e8f0;
+        border-radius: 6px;
+        padding: 1px 6px;
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 0.92em;
+      }
+      .muted { color: var(--muted); }
+      .toc a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+      .toc a:hover { text-decoration: underline; }
+      .kicker {
+        font-weight: 700;
+        color: var(--accent);
+        letter-spacing: 0.02em;
+      }
+      .footer {
+        margin-top: 20px;
+        color: var(--muted);
+        border-top: 1px dashed #b8c7de;
+        padding-top: 10px;
+        font-size: 0.9rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <p class="kicker">AUTOMATED SMART ECM OPERATIONS GUIDE</p>
+        <h1>Automated Smart ECM User Help Manual</h1>
+        <p class="muted">Version: April 2026</p>
+        <p>This manual explains daily operation of Automated Smart ECM, including document workflows, knowledge collaboration, and admin modules.</p>
+      </header>
+
+      <section class="card toc" id="toc">
+        <h2>Contents</h2>
+        <ol>
+          <li><a href="#getting-started">Getting Started</a></li>
+          <li><a href="#function-panel">Function Panel Navigation</a></li>
+          <li><a href="#document-management">Document Management</a></li>
+          <li><a href="#knowledge-collaboration">Knowledge Collaboration</a></li>
+          <li><a href="#dashboard">My Dashboard</a></li>
+          <li><a href="#admin">System Administration</a></li>
+          <li><a href="#auditing-reports">System Auditing and Reports</a></li>
+          <li><a href="#tips">Operational Tips and Troubleshooting</a></li>
+        </ol>
+      </section>
+
+      <section class="card" id="getting-started">
+        <h2>1. Getting Started</h2>
+        <ol>
+          <li>Open the Automated Smart ECM web application in your browser.</li>
+          <li>Click <code>Sign in</code> and enter your Windows account credentials.</li>
+          <li>After login, use the left function panel to switch modules.</li>
+          <li>Your available modules depend on your assigned role.</li>
+        </ol>
+      </section>
+
+      <section class="card" id="function-panel">
+        <h2>2. Function Panel Navigation</h2>
+        <ul>
+          <li><code>My Dashboard</code>: Personal tasks and reminders overview.</li>
+          <li><code>Document Management</code>: Folder/document operations, approvals, uploads, versions.</li>
+          <li><code>Knowledge Collaboration</code>: Topic-based collaboration linked to documents.</li>
+          <li><code>System Administration</code>: Retention, reminders, job schedules, code tables.</li>
+          <li><code>User Management</code>: Users, groups, and role assignments (admin only).</li>
+          <li><code>System Auditing</code>: Audit trail search and review.</li>
+          <li><code>Reports</code>: Generate and review reports.</li>
+        </ul>
+      </section>
+
+      <section class="card" id="document-management">
+        <h2>3. Document Management</h2>
+        <h3>3.1 Folder operations</h3>
+        <ul>
+          <li>Create folders and set group permissions (Read/Write/Delete).</li>
+          <li>Edit folder details and permission matrix when authorized.</li>
+          <li>Only folders with your effective permissions are visible and searchable.</li>
+        </ul>
+        <h3>3.2 Document operations</h3>
+        <ul>
+          <li>Upload new documents to permitted folders.</li>
+          <li>Edit metadata and maintain document versions.</li>
+          <li>Open document details to preview content and copy selectable text.</li>
+          <li>Use row actions to create knowledge topics or find related topics.</li>
+        </ul>
+        <h3>3.3 Sorting and filtering</h3>
+        <ul>
+          <li>Use keyword, owner, category, status, and tag filters.</li>
+          <li>Apply sorting options in the document list.</li>
+        </ul>
+      </section>
+
+      <section class="card" id="knowledge-collaboration">
+        <h2>4. Knowledge Collaboration</h2>
+        <ol>
+          <li>Create a topic with title, description, and tags.</li>
+          <li>Join the topic to enable update/contribution/share/link/upload actions.</li>
+          <li>Add contributions and optionally link related documents.</li>
+          <li>Share a topic with users and upload supporting files.</li>
+          <li>Download the knowledge chain for topic history export.</li>
+        </ol>
+        <p class="muted">Tip: When entering from document actions, the topic search can auto-focus based on document context.</p>
+      </section>
+
+      <section class="card" id="dashboard">
+        <h2>5. My Dashboard</h2>
+        <ul>
+          <li>Review KPI tiles for workload and status.</li>
+          <li>Use the calendar view to inspect due items by day.</li>
+          <li>Track workflow tasks and reminders in dedicated lists.</li>
+        </ul>
+      </section>
+
+      <section class="card" id="admin">
+        <h2>6. System Administration</h2>
+        <ul>
+          <li><strong>Retention Management:</strong> Configure retention rules and sweeps.</li>
+          <li><strong>Reminder Management:</strong> Configure reminder offsets and trigger logic.</li>
+          <li><strong>Job Management:</strong> Manage scheduled jobs and execution settings.</li>
+          <li><strong>Code Table Management:</strong> Maintain reference data for business fields.</li>
+        </ul>
+      </section>
+
+      <section class="card" id="auditing-reports">
+        <h2>7. System Auditing and Reports</h2>
+        <ul>
+          <li>Use <code>System Auditing</code> for traceability of user and document actions.</li>
+          <li>Use <code>Reports</code> to generate operational and compliance outputs.</li>
+        </ul>
+      </section>
+
+      <section class="card" id="tips">
+        <h2>8. Operational Tips and Troubleshooting</h2>
+        <ul>
+          <li>If an action is unavailable, verify your role and folder permissions first.</li>
+          <li>If document/topic lists look stale, refresh the page and retry the operation.</li>
+          <li>When file upload fails, verify file type/size and your folder/topic permissions.</li>
+          <li>If login fails, confirm account credentials and account status with admin.</li>
+        </ul>
+      </section>
+
+      <p class="footer">Copyright (c) 2026 Automated Smart ECM. Internal user manual for operational guidance.</p>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,97 @@
+{
+  "name": "Document Reviewer-Approver Workflow",
+  "description": "Submit -> Reviewer -> Approver, with reject/return to uploader and full step history.",
+  "bpmnXml": "",
+  "activities": [
+    {
+      "id": "Activity_Begin",
+      "name": "Begin",
+      "type": "BEGIN",
+      "x": 120,
+      "y": 220,
+      "config": {}
+    },
+    {
+      "id": "Activity_Reviewer",
+      "name": "Reviewer Review",
+      "type": "MANUAL",
+      "x": 220,
+      "y": 200,
+      "config": {
+        "assigneeType": "DOCUMENT_REVIEWER"
+      }
+    },
+    {
+      "id": "Activity_Approver",
+      "name": "Approver Approval",
+      "type": "MANUAL",
+      "x": 430,
+      "y": 120,
+      "config": {
+        "assigneeType": "DOCUMENT_APPROVER"
+      }
+    },
+    {
+      "id": "Activity_Uploader",
+      "name": "Returned to Uploader",
+      "type": "MANUAL",
+      "x": 430,
+      "y": 280,
+      "config": {
+        "assigneeType": "DOCUMENT_OWNER"
+      }
+    },
+    {
+      "id": "Activity_End",
+      "name": "End",
+      "type": "END",
+      "x": 660,
+      "y": 220,
+      "config": {}
+    }
+  ],
+  "connections": [
+    {
+      "id": "Flow_Begin_Reviewer",
+      "fromActivityId": "Activity_Begin",
+      "toActivityId": "Activity_Reviewer",
+      "conditionCase": "",
+      "label": "Start"
+    },
+    {
+      "id": "Flow_Reviewer_Approver",
+      "fromActivityId": "Activity_Reviewer",
+      "toActivityId": "Activity_Approver",
+      "conditionCase": "TRUE",
+      "label": "Reviewer APPROVE"
+    },
+    {
+      "id": "Flow_Reviewer_Uploader",
+      "fromActivityId": "Activity_Reviewer",
+      "toActivityId": "Activity_Uploader",
+      "conditionCase": "FALSE",
+      "label": "Reviewer REJECT"
+    },
+    {
+      "id": "Flow_Approver_End",
+      "fromActivityId": "Activity_Approver",
+      "toActivityId": "Activity_End",
+      "conditionCase": "TRUE",
+      "label": "Approver APPROVE"
+    },
+    {
+      "id": "Flow_Approver_Uploader",
+      "fromActivityId": "Activity_Approver",
+      "toActivityId": "Activity_Uploader",
+      "conditionCase": "FALSE",
+      "label": "Approver REJECT"
+    },
+    {
+      "id": "Flow_Uploader_End",
+      "fromActivityId": "Activity_Uploader",
+      "toActivityId": "Activity_End",
+      "conditionCase": "DEFAULT",
+      "label": "Uploader ACK"
+    }
+  ]
+}

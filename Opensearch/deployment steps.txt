@@ -1,0 +1,18 @@
+step1:
+===========================
+install docker desktop
+ 
+opensearch server：
+ 
+$ cd /Opensearch
+$ docker-compose up -d
+
+
+step2:
+==============================
+go to http://localhost:5601/
+
+login to OpenSearch dashboard
+user: admin
+pwd: ASLgemini916
+ 
