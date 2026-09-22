@@ -1,4 +1,4 @@
-import React, { memo, useContext } from 'react'
+import React, { memo, useContext, useEffect, useState } from 'react'
 import { AuthContext } from '../contexts/AuthContext'
 
 const STATUS_TONE = {
@@ -115,6 +115,19 @@ function DocumentList({
   onToggleDocumentFavorite = null,
 }) {
   const { documentPermissions } = useContext(AuthContext)
+  const [localFilterQuery, setLocalFilterQuery] = useState(filterQuery || '')
+
+  useEffect(() => {
+    setLocalFilterQuery(filterQuery || '')
+  }, [filterQuery])
+
+  useEffect(() => {
+    if (typeof onFilterQueryChange !== 'function' || localFilterQuery === (filterQuery || '')) {
+      return undefined
+    }
+    const timer = window.setTimeout(() => onFilterQueryChange(localFilterQuery), 250)
+    return () => window.clearTimeout(timer)
+  }, [filterQuery, localFilterQuery, onFilterQueryChange])
   const handleDragStart = (event, id) => {
     if (!(documentPermissions?.write ?? false)) {
       // not allowed to drag/move documents
@@ -243,8 +256,8 @@ function DocumentList({
               <input
                 type="search"
                 placeholder="Filter keywords"
-                value={filterQuery || ''}
-                onChange={(e) => onFilterQueryChange && onFilterQueryChange(e.target.value)}
+                value={localFilterQuery}
+                onChange={(e) => setLocalFilterQuery(e.target.value)}
                 style={{padding:'6px 8px', borderRadius:6, border:'1px solid rgba(15,23,42,0.06)'}}
               />
             </div>
