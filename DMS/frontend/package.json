@@ -10,6 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@file-viewer/react-full": "^3.1.2",
+    "@file-viewer/vite-plugin": "^3.1.2",
     "bpmn-js": "^18.15.0",
     "formiojs": "^4.21.7",
     "pdf-lib": "^1.17.1",

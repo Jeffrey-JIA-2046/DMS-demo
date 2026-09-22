@@ -732,18 +732,25 @@ public class DocumentService {
             document.setFolderId(folder.getId());
             Set<String> eformMetadataKeys = eformDefinitionService.resolveMetadataKeysForCategory(document.getCategoryCode());
             Map<String, String> resolvedMetadata = resolveMetadataValues(folder, request.metadata(), eformMetadataKeys);
-            AppUser reviewer = requireApprover(request.reviewerId());
-            assertApproverEligible(user, reviewer);
-            document.setReviewer(reviewer);
-            document.setReviewerId(reviewer.getId());
-            AppUser approver = requireApprover(request.approverId());
-            assertApproverEligible(user, approver);
-            document.setApprover(approver);
-            document.setApproverId(approver.getId());
-            AppUser supervisor = requireSupervisor(request.supervisorId());
-            assertSupervisorEligible(user, supervisor);
-            document.setSupervisor(supervisor);
-            document.setSupervisorId(supervisor.getId());
+            AppUser reviewer = null;
+            if (StringUtils.hasText(request.reviewerId())) {
+                reviewer = requireApprover(request.reviewerId());
+                assertApproverEligible(user, reviewer);
+                document.setReviewer(reviewer);
+                document.setReviewerId(reviewer.getId());
+            }
+            if (StringUtils.hasText(request.approverId())) {
+                AppUser approver = requireApprover(request.approverId());
+                assertApproverEligible(user, approver);
+                document.setApprover(approver);
+                document.setApproverId(approver.getId());
+            }
+            if (StringUtils.hasText(request.supervisorId())) {
+                AppUser supervisor = requireSupervisor(request.supervisorId());
+                assertSupervisorEligible(user, supervisor);
+                document.setSupervisor(supervisor);
+                document.setSupervisorId(supervisor.getId());
+            }
             document.setStatus(DocumentStatus.DRAFT);
 
             Instant now = Instant.now(clock);
@@ -768,8 +775,9 @@ public class DocumentService {
             Document saved = documentRepository.save(document);
             persistDocumentVersions(saved);
             indexLatestAttachment(saved);
-            boolean workflowStarted = workflowService.startWorkflowForDocument(saved, username, reviewer.getId());
-            if (!workflowStarted) {
+            boolean workflowStarted = reviewer != null
+                && workflowService.startWorkflowForDocument(saved, username, reviewer.getId());
+            if (!workflowStarted && reviewer != null) {
                 createApprovalTask(saved, reviewer, now);
             }
             return toDetails(saved);
@@ -2377,18 +2385,19 @@ public class DocumentService {
             next.get(META_DOCUMENT_DATE),
             "Document date is required and must follow YYYY-MM-DD"
         );
-        LocalDate expiryDate = parseRequiredDate(
-            expiryDateRaw,
-            next.get(META_EXPIRY_DATE),
-            "Expiry date is required and must follow YYYY-MM-DD"
-        );
-        if (expiryDate.isBefore(documentDate)) {
-            throw new InvalidDocumentException("Expiry date cannot be earlier than document date");
-        }
-
         next.put(META_DOCUMENT_DATE, documentDate.toString());
-        next.put(META_EXPIRY_DATE, expiryDate.toString());
-        next.put(META_ARCHIVE_DATE, expiryDate.plusYears(7).toString());
+        String expiryDateValue = StringUtils.hasText(expiryDateRaw) ? expiryDateRaw : next.get(META_EXPIRY_DATE);
+        if (StringUtils.hasText(expiryDateValue)) {
+            LocalDate expiryDate = parseDate(expiryDateValue, "Expiry date must follow YYYY-MM-DD");
+            if (expiryDate.isBefore(documentDate)) {
+                throw new InvalidDocumentException("Expiry date cannot be earlier than document date");
+            }
+            next.put(META_EXPIRY_DATE, expiryDate.toString());
+            next.put(META_ARCHIVE_DATE, expiryDate.plusYears(7).toString());
+        } else {
+            next.remove(META_EXPIRY_DATE);
+            next.remove(META_ARCHIVE_DATE);
+        }
 
         if (approvalDate != null) {
             next.put(META_APPROVAL_DATE, approvalDate.atZone(ZoneOffset.UTC).toLocalDate().toString());
