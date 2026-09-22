@@ -94,6 +94,8 @@
           <li><a href="#getting-started">Getting Started</a></li>
           <li><a href="#function-panel">Function Panel Navigation</a></li>
           <li><a href="#document-management">Document Management</a></li>
+          <li><a href="#folder-guide">Folder Operations in Detail</a></li>
+          <li><a href="#document-guide">Document Operations in Detail</a></li>
           <li><a href="#knowledge-collaboration">Knowledge Collaboration</a></li>
           <li><a href="#dashboard">My Dashboard</a></li>
           <li><a href="#admin">System Administration</a></li>
@@ -129,16 +131,19 @@
         <h2>3. Document Management</h2>
         <h3>3.1 Folder operations</h3>
         <ul>
-          <li>Create folders and set group permissions (Read/Write/Delete).</li>
-          <li>Edit folder details and permission matrix when authorized.</li>
-          <li>Only folders with your effective permissions are visible and searchable.</li>
+          <li>Use the folder browser on the left side of the workspace. Select a folder to filter the document list to that folder.</li>
+          <li>Use <code>New folder</code> to create a root folder, or select a parent first and choose <code>Nest inside selected folder</code>.</li>
+          <li>Use <code>Edit folder</code> to rename a folder, move it to another parent, or change its metadata template.</li>
+          <li>Use <code>Delete folder</code> only when the folder has no documents and no child folders.</li>
+          <li>Only folders for which you have effective Read, Write, or Delete access appear in the folder tree.</li>
         </ul>
         <h3>3.2 Document operations</h3>
         <ul>
-          <li>Upload new documents to permitted folders.</li>
-          <li>Edit metadata and maintain document versions.</li>
-          <li>Open document details to preview content and copy selectable text.</li>
-          <li>Use row actions to create knowledge topics or find related topics.</li>
+          <li>Upload new documents to a folder where you have Write access.</li>
+          <li>Select a document to open its details, metadata, approval status, version history, and preview.</li>
+          <li>Use <code>Upload new version</code> to preserve the document identity while adding a revised file.</li>
+          <li>Use <code>Download</code> from the details or version history to retrieve the latest or a specific version.</li>
+          <li>Use <code>Archive</code> to remove a document from active work while retaining its history.</li>
         </ul>
         <h3>3.3 Sorting and filtering</h3>
         <ul>
@@ -147,8 +152,80 @@
         </ul>
       </section>
 
+      <section class="card" id="folder-guide">
+        <h2>4. Folder Operations in Detail</h2>
+        <h3>4.1 Create a root folder</h3>
+        <ol>
+          <li>Open <code>Document Management</code> and select the folder browser's <code>New folder</code> button.</li>
+          <li>Enter a folder name and leave <code>Nest inside selected folder</code> unchecked.</li>
+          <li>Optionally add metadata fields. Each field needs a unique key, a label, a type, and a required setting.</li>
+          <li>Administrators can assign Read, Write, and Delete permissions for each user group.</li>
+          <li>Select <code>Create folder</code>. The new folder appears in the tree.</li>
+        </ol>
+        <h3>4.2 Create a child folder</h3>
+        <ol>
+          <li>Select the intended parent folder before opening <code>New folder</code>.</li>
+          <li>Check <code>Nest inside selected folder</code>.</li>
+          <li>Check <code>Metadata template inherit from parent folder</code> if the child should follow future parent template changes.</li>
+          <li>Check <code>Folder permissions inherit from parent folder</code> if the child should follow future parent permission changes.</li>
+          <li>Inherited metadata and permissions are displayed for review and are locked while inheritance is enabled.</li>
+          <li>Save the folder. Uncheck an inheritance option later in <code>Edit folder</code> to make that aspect independent and editable.</li>
+        </ol>
+        <h3>4.3 Folder permissions</h3>
+        <ul>
+          <li><strong>Read:</strong> allows a user group to see and open content in the folder.</li>
+          <li><strong>Write:</strong> allows document uploads, updates, moves, and metadata changes permitted by the workflow.</li>
+          <li><strong>Delete:</strong> allows destructive document or folder actions where the operation is otherwise valid.</li>
+          <li>When a parent permission matrix changes, children marked as inherited receive the same group permissions recursively.</li>
+          <li>Children that are not inherited keep their own permission matrix.</li>
+          <li>Folder permission administration is available to authorized system or user administrators.</li>
+        </ul>
+        <h3>4.4 Metadata templates</h3>
+        <ul>
+          <li>A folder metadata template defines fields that uploaders must complete, such as dropdowns, dates, text, or numeric values.</li>
+          <li>Use a stable, unique field key because documents use that key to store values.</li>
+          <li>When template inheritance is enabled, adding, removing, or changing a parent field updates inherited descendants.</li>
+          <li>Uncheck inheritance in the child folder editor before adding child-specific fields.</li>
+        </ul>
+      </section>
+
+      <section class="card" id="document-guide">
+        <h2>5. Document Operations in Detail</h2>
+        <h3>5.1 Upload a document</h3>
+        <ol>
+          <li>Select a destination folder where you have Write access and choose <code>Upload</code>.</li>
+          <li>Select the file. PDF files can optionally run OCR, data extraction, or embedding after upload.</li>
+          <li>Complete the title, description, document date, and comma-separated tags. Tags are normalized automatically.</li>
+          <li>Complete every required field shown by the folder metadata template. Dropdown values may come from a configured code table.</li>
+          <li>Select reviewer, approver, or supervisor values when the workflow requires them.</li>
+          <li>Submit the upload and wait for the success notification. Background OCR or embedding may continue after the dialog closes.</li>
+        </ol>
+        <h3>5.2 Search and filter</h3>
+        <ul>
+          <li>Use <code>Filter keywords</code> above the document list for a quick search.</li>
+          <li>Use the filter controls for owner, category, status, tags, dates, document metadata, folder name, and folder metadata.</li>
+          <li>Use the folder tree to scope results to one folder. Clear the folder selection to search all accessible folders.</li>
+          <li>Use the sort menu to order by newest, oldest, title, size, or status.</li>
+          <li>Search results respect your effective folder permissions.</li>
+        </ul>
+        <h3>5.3 Edit metadata and versions</h3>
+        <ul>
+          <li>Open a document and choose <code>Edit</code> in the Metadata section when you have Write access.</li>
+          <li>Update title, description, category, tags, document date, or custom metadata, then save.</li>
+          <li>Use the Versions section to review file names, sizes, upload times, and historical versions.</li>
+          <li>Upload a new version instead of creating a duplicate document when the file represents a revision of the same record.</li>
+        </ul>
+        <h3>5.4 Approval and archive</h3>
+        <ul>
+          <li>Review approval history, assigned reviewer/approver, requested time, and decision status in the Approval section.</li>
+          <li>Approvers may approve or reject according to the workflow and may add notes or delegate where permitted.</li>
+          <li>Archived documents are retained for history but are removed from normal active work lists.</li>
+          <li>Restore or permanent deletion actions, when available, require the appropriate permission and role.</li>
+        </ul>
+      </section>
+
       <section class="card" id="knowledge-collaboration">
-        <h2>4. Knowledge Collaboration</h2>
+        <h2>6. Knowledge Collaboration</h2>
         <ol>
           <li>Create a topic with title, description, and tags.</li>
           <li>Join the topic to enable update/contribution/share/link/upload actions.</li>
@@ -160,7 +237,7 @@
       </section>
 
       <section class="card" id="dashboard">
-        <h2>5. My Dashboard</h2>
+        <h2>7. My Dashboard</h2>
         <ul>
           <li>Review KPI tiles for workload and status.</li>
           <li>Use the calendar view to inspect due items by day.</li>
@@ -169,7 +246,7 @@
       </section>
 
       <section class="card" id="admin">
-        <h2>6. System Administration</h2>
+        <h2>8. System Administration</h2>
         <ul>
           <li><strong>Retention Management:</strong> Configure retention rules and sweeps.</li>
           <li><strong>Reminder Management:</strong> Configure reminder offsets and trigger logic.</li>
@@ -179,7 +256,7 @@
       </section>
 
       <section class="card" id="auditing-reports">
-        <h2>7. System Auditing and Reports</h2>
+        <h2>9. System Auditing and Reports</h2>
         <ul>
           <li>Use <code>System Auditing</code> for traceability of user and document actions.</li>
           <li>Use <code>Reports</code> to generate operational and compliance outputs.</li>
@@ -187,7 +264,7 @@
       </section>
 
       <section class="card" id="tips">
-        <h2>8. Operational Tips and Troubleshooting</h2>
+        <h2>10. Operational Tips and Troubleshooting</h2>
         <ul>
           <li>If an action is unavailable, verify your role and folder permissions first.</li>
           <li>If document/topic lists look stale, refresh the page and retry the operation.</li>
