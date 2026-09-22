@@ -330,6 +330,10 @@ const initialState = {
   runEmbedding: false,
 }
 
+const normalizeUploadTags = (tags) => (Array.isArray(tags)
+  ? tags.map((tag) => String(tag).trim()).filter(Boolean)
+  : [])
+
 const normalizeApproverOptions = (data) => {
   if (!Array.isArray(data)) {
     return []
@@ -700,39 +704,6 @@ export default function UploadPanel({
       toast && toast('Pick a destination folder before uploading', { type: 'error' })
       return
     }
-    if (!form.reviewerId) {
-      setError('Select a reviewer before uploading')
-      toast && toast('Select a reviewer before uploading', { type: 'error' })
-      return
-    }
-    if (!form.approverId) {
-      setError('Select an approver before uploading')
-      toast && toast('Select an approver before uploading', { type: 'error' })
-      return
-    }
-    if (!form.supervisorId) {
-      setError('Select a supervisor before uploading')
-      toast && toast('Select a supervisor before uploading', { type: 'error' })
-      return
-    }
-    const normalizedReviewerId = String(form.reviewerId).trim()
-    if (!normalizedReviewerId) {
-      setError('Select a reviewer before uploading')
-      toast && toast('Select a reviewer before uploading', { type: 'error' })
-      return
-    }
-    const normalizedApproverId = String(form.approverId).trim()
-    if (!normalizedApproverId) {
-      setError('Select an approver before uploading')
-      toast && toast('Select an approver before uploading', { type: 'error' })
-      return
-    }
-    const normalizedSupervisorId = String(form.supervisorId).trim()
-    if (!normalizedSupervisorId) {
-      setError('Select a supervisor before uploading')
-      toast && toast('Select a supervisor before uploading', { type: 'error' })
-      return
-    }
     if (!currentOwner) {
       setError('Unable to detect the current logged-in user')
       toast && toast('Unable to detect the current logged-in user', { type: 'error' })
@@ -760,13 +731,13 @@ export default function UploadPanel({
       uploadMode: normalizedUploadMode,
       isAiFiling,
       owner: currentOwner,
-      reviewerId: normalizedReviewerId,
-      approverId: normalizedApproverId,
-      supervisorId: normalizedSupervisorId,
+      reviewerId: form.reviewerId || null,
+      approverId: form.approverId || null,
+      supervisorId: form.supervisorId || null,
       runOcr: Boolean((form.runOcr || form.runDataExtraction || form.runEmbedding) && fileLooksPdf(file)),
       runDataExtraction: Boolean(form.runDataExtraction && fileLooksPdf(file)),
       runEmbedding: Boolean(form.runEmbedding && fileLooksPdf(file)),
-      tags: form.tags,
+      tags: normalizeUploadTags(form.tags),
       category: selectedCategoryOption?.itemLabel || form.category || '',
       categoryCode: form.category || null,
       metadata: mergedMetadata,
@@ -1565,84 +1536,8 @@ export default function UploadPanel({
               <input type="date" required value={form.documentDate} onChange={(e) => handleChange('documentDate', e.target.value)} />
             </label>
             <label>
-              <span>Expiry date</span>
-              <input type="date" required value={form.expiryDate} onChange={(e) => handleChange('expiryDate', e.target.value)} />
-            </label>
-            <label>
               <span>Tags</span>
-              <input value={form.tags.join(', ')} onChange={(e) => handleChange('tags', e.target.value.split(','))} placeholder="policy, quarterly" />
-            </label>
-            <label>
-              <span>Reviewer</span>
-              {reviewerLoading ? (
-                <span className="pill pill--info">Loading reviewers…</span>
-              ) : reviewerOptions.length ? (
-                <select
-                  required
-                  value={form.reviewerId ?? ''}
-                  onChange={(e) => handleChange('reviewerId', e.target.value || null)}
-                  disabled={busy}
-                >
-                  <option value="" disabled>Select a reviewer</option>
-                  {reviewerOptions.map((option) => (
-                    <option key={option.id} value={option.id}>
-                      {option.displayName || option.username} · {option.username}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <span className="pill pill--warning">No eligible reviewers available</span>
-              )}
-              <small>Reviewer is used by BPMN workflow review steps.</small>
-              {reviewerError && <p className="feedback feedback--error">{reviewerError}</p>}
-            </label>
-            <label>
-              <span>Approver</span>
-              {approverLoading ? (
-                <span className="pill pill--info">Loading approvers…</span>
-              ) : approverOptions.length ? (
-                <select
-                  required
-                  value={form.approverId ?? ''}
-                  onChange={(e) => handleChange('approverId', e.target.value || null)}
-                  disabled={busy}
-                >
-                  <option value="" disabled>Select an approver</option>
-                  {approverOptions.map((option) => (
-                    <option key={option.id} value={option.id}>
-                      {option.displayName || option.username} · {option.username}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <span className="pill pill--warning">No eligible approvers available</span>
-              )}
-              <small>Select a teammate from your shared groups to review this upload.</small>
-              {approverError && <p className="feedback feedback--error">{approverError}</p>}
-            </label>
-            <label>
-              <span>Supervisor</span>
-              {supervisorLoading ? (
-                <span className="pill pill--info">Loading supervisors…</span>
-              ) : supervisorOptions.length ? (
-                <select
-                  required
-                  value={form.supervisorId ?? ''}
-                  onChange={(e) => handleChange('supervisorId', e.target.value || null)}
-                  disabled={busy}
-                >
-                  <option value="" disabled>Select a supervisor</option>
-                  {supervisorOptions.map((option) => (
-                    <option key={option.id} value={option.id}>
-                      {option.displayName || option.username} · {option.username}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <span className="pill pill--warning">No eligible supervisors available</span>
-              )}
-              <small>Supervisor manages retention and reminder follow-up tasks.</small>
-              {supervisorError && <p className="feedback feedback--error">{supervisorError}</p>}
+              <input value={form.tags.join(', ')} onChange={(e) => handleChange('tags', e.target.value.split(',').map((tag) => tag.trim()))} placeholder="policy, quarterly" />
             </label>
           </div>
 
@@ -1762,7 +1657,7 @@ export default function UploadPanel({
           <button
             type="submit"
             className="primary"
-            disabled={busy || reviewerLoading || approverLoading || supervisorLoading || !reviewerOptions.length || !approverOptions.length || !supervisorOptions.length}
+            disabled={busy}
             aria-label="Upload"
             title="Upload"
           >

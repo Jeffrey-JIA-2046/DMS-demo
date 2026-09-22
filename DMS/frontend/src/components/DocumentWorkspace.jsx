@@ -33,6 +33,7 @@ import {
 import DocumentFilters from './DocumentFilters'
 import DocumentList from './DocumentList'
 import DocumentDetails from './DocumentDetails'
+import FileViewerPreview from './FileViewerPreview'
 import UploadPanel from './UploadPanel'
 import FolderBrowser from './FolderBrowser'
 import ChatbotPanel from './ChatbotPanel'
@@ -478,6 +479,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 export default function DocumentWorkspace({ currentFunction = 'Document Management', onFindRelatedTopics = null, navigationContext = null }) {
   const { documentPermissions, role, setDocumentPermissionsOverride, currentUser, isAuthenticated } = useContext(AuthContext)
+  const canUseKnowledgeCollaboration = role === Roles.SYS_ADMIN
   const { toast } = useContext(AnnounceContext)
   const [filters, setFilters] = useState(buildDefaultFilters)
   const [pageState, setPageState] = useState(() => readPersistedPageState())
@@ -533,7 +535,7 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   const [ocrPreviewMode, setOcrPreviewMode] = useState('render')
   const [ocrPageIndex, setOcrPageIndex] = useState(0)
   const [ocrRefreshKey, setOcrRefreshKey] = useState(0)
-  const [pdfPreviewUrl, setPdfPreviewUrl] = useState('')
+  const [filePreviewData, setFilePreviewData] = useState(null)
   const [pdfPreviewLoading, setPdfPreviewLoading] = useState(false)
   const [pdfPreviewError, setPdfPreviewError] = useState('')
   // OCR workspace nav-tab: 'ocr' | 'extraction'
@@ -638,6 +640,11 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     const byType = selectedContentType.toLowerCase().includes('pdf')
     return byName || byType
   }, [selectedFileName, selectedContentType])
+  const selectedLooksFileViewer = useMemo(() => {
+    return selectedLooksPdf
+      || /\.(doc|docx|docm|dot|dotx|dotm|xls|xlsx|xlsm|xlt|xltx|ppt|pptx|pptm|ppsx|odt|ods|odp|rtf|tif|tiff)$/i.test(selectedFileName)
+      || /officedocument|msword|ms-excel|ms-powerpoint|tiff/i.test(selectedContentType)
+  }, [selectedLooksPdf, selectedFileName, selectedContentType])
   const selectedDocumentHasExtraction = Boolean(
     selectedDocument?.hasDataExtraction
       ?? selectedDocument?.has_data_extraction
@@ -815,11 +822,9 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
 
   useEffect(() => {
     let cancelled = false
-    let objectUrl = ''
-
     const loadPreview = async () => {
-      if (!selectedId || !selectedLooksPdf) {
-        setPdfPreviewUrl('')
+      if (!selectedId || !selectedLooksFileViewer) {
+        setFilePreviewData(null)
         setPdfPreviewError('')
         setPdfPreviewLoading(false)
         return
@@ -830,17 +835,16 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
       try {
         const response = await fetch(buildDownloadUrl(selectedId), { headers: { ...authHeaders() } })
         if (!response.ok) {
-          throw new Error(`Failed to load PDF preview (${response.status})`)
+          throw new Error(`Failed to load file preview (${response.status})`)
         }
-        const blob = await response.blob()
-        objectUrl = URL.createObjectURL(blob)
+        const fileData = await response.arrayBuffer()
         if (!cancelled) {
-          setPdfPreviewUrl(objectUrl)
+          setFilePreviewData(fileData)
         }
       } catch (err) {
         if (!cancelled) {
           setPdfPreviewError(err.message || 'Unable to load PDF preview')
-          setPdfPreviewUrl('')
+          setFilePreviewData(null)
         }
       } finally {
         if (!cancelled) {
@@ -853,11 +857,8 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
 
     return () => {
       cancelled = true
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl)
-      }
     }
-  }, [selectedId, selectedLooksPdf])
+  }, [selectedId, selectedLooksFileViewer, selectedFileName, selectedContentType])
 
   const canOverrideWriteForDocument = (documentId) => {
     if (!documentId || !approverUsername) {
@@ -1624,17 +1625,17 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
   const renderWorkspaceFilePreview = () => (
     <>
       <h4>File Preview</h4>
-      {pdfPreviewLoading && <p className="feedback">Loading PDF preview...</p>}
+      {pdfPreviewLoading && <p className="feedback">Loading file preview...</p>}
       {!pdfPreviewLoading && pdfPreviewError && <p className="feedback feedback--error">{pdfPreviewError}</p>}
-      {!pdfPreviewLoading && !pdfPreviewError && pdfPreviewUrl && (
-        <iframe
-          title="Selected PDF preview"
-          className="workspace-ocr-card__preview-frame"
-          src={pdfPreviewUrl}
+      {!pdfPreviewLoading && !pdfPreviewError && filePreviewData && (
+        <FileViewerPreview
+          data={filePreviewData}
+          fileName={selectedFileName}
+          className="workspace-file-viewer-preview"
         />
       )}
-      {!pdfPreviewLoading && !pdfPreviewError && !pdfPreviewUrl && (
-        <p className="feedback">No PDF preview available for this selection.</p>
+      {!pdfPreviewLoading && !pdfPreviewError && !filePreviewData && (
+        <p className="feedback">No file preview available for this selection.</p>
       )}
     </>
   )
@@ -2105,10 +2106,11 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     setFolderBusy(true)
     setFolderError('')
     try {
-      const { permissionEntries, ...folderPayload } = payload || {}
-      const folder = await createFolder(folderPayload)
+      const { permissionEntries, inheritPermissionsFromParent, ...folderPayload } = payload || {}
+      const folder = await createFolder({ ...folderPayload, inheritPermissionsFromParent })
       if (canManageFolderPermissions && Array.isArray(permissionEntries)) {
         await updateFolderPermissions(folder.id, {
+          preserveInheritance: Boolean(inheritPermissionsFromParent),
           entries: permissionEntries.map((entry) => ({
             groupId: entry.groupId,
             canRead: !!entry.canRead,
@@ -2137,10 +2139,11 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     setFolderBusy(true)
     setFolderError('')
     try {
-      const { permissionEntries, ...folderPayload } = payload || {}
+      const { permissionEntries, preservePermissionInheritance, ...folderPayload } = payload || {}
       const folder = await updateFolder(folderId, folderPayload)
       if (canManageFolderPermissions && Array.isArray(permissionEntries)) {
         await updateFolderPermissions(folder.id, {
+          preserveInheritance: Boolean(preservePermissionInheritance),
           entries: permissionEntries.map((entry) => ({
             groupId: entry.groupId,
             canRead: !!entry.canRead,
@@ -2550,7 +2553,10 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
     }
   }
 
-  const handleLoadPermissionTemplate = async () => {
+  const handleLoadPermissionTemplate = async (parentId) => {
+    if (parentId) {
+      return fetchFolderPermissions(parentId)
+    }
     return fetchFolderPermissionTemplate()
   }
 
@@ -2830,8 +2836,8 @@ export default function DocumentWorkspace({ currentFunction = 'Document Manageme
               onOcrSelected={handleOpenOcrWorkspace}
               canRunOcrOnSelected={!!selectedId && selectedLooksPdf}
               canUpload={documentPermissions?.write ?? false}
-              onCreateTopicFromDocument={handleCreateTopicFromDocument}
-              onFindRelatedTopics={handleFindRelatedTopicsFromDocument}
+              onCreateTopicFromDocument={canUseKnowledgeCollaboration ? handleCreateTopicFromDocument : null}
+              onFindRelatedTopics={canUseKnowledgeCollaboration ? handleFindRelatedTopicsFromDocument : null}
               isDocumentFavorite={(documentId) => isFavorite('DOCUMENT', documentId)}
               onToggleDocumentFavorite={(documentId) => handleFavoriteToggle('DOCUMENT', documentId)}
               onContextAction={async (documentId, action) => {

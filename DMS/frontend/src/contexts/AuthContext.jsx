@@ -1,5 +1,5 @@
 import React, { createContext, useState, useMemo, useEffect, useCallback } from 'react'
-import { authHeaders, getClientSessionId } from '../api/httpClient'
+import { authHeaders, getClientSessionId, redirectToLogin } from '../api/httpClient'
 
 export const Roles = Object.freeze({
   ROOT: 'Root administrator',
@@ -69,7 +69,7 @@ export function AuthProvider({ children }) {
     'System Administration': [Roles.ROOT, Roles.SYS_ADMIN].includes(role),
     'User Management': [Roles.ROOT, Roles.SYS_ADMIN, Roles.USER_ADMIN].includes(role),
     'Document Management': [Roles.ROOT, Roles.SYS_ADMIN, Roles.USER_ADMIN, Roles.DOC_ADMIN, Roles.DOC_VIEWER].includes(role),
-    'Knowledge Collaboration': [Roles.ROOT, Roles.SYS_ADMIN, Roles.USER_ADMIN, Roles.DOC_ADMIN, Roles.DOC_VIEWER].includes(role),
+    'Knowledge Collaboration': role === Roles.SYS_ADMIN,
     'System Auditing': [Roles.ROOT, Roles.SYS_ADMIN, Roles.USER_ADMIN].includes(role),
     'Reports': [Roles.ROOT, Roles.SYS_ADMIN, Roles.USER_ADMIN].includes(role),
   }), [role])
@@ -167,7 +167,21 @@ export function AuthProvider({ children }) {
     setAuthToken(null)
     setCurrentUser(null)
     setRole(defaultRole)
+    redirectToLogin()
   }
+
+  useEffect(() => {
+    const handleStorageChange = (event) => {
+      if (event.key === 'dms_auth' && event.newValue == null && authToken) {
+        setAuthToken(null)
+        setCurrentUser(null)
+        setRole(defaultRole)
+        redirectToLogin()
+      }
+    }
+    window.addEventListener('storage', handleStorageChange)
+    return () => window.removeEventListener('storage', handleStorageChange)
+  }, [authToken])
 
   useEffect(() => {
     const bootstrap = async () => {

@@ -65,7 +65,6 @@ export default function App() {
     const saved = localStorage.getItem('theme')
     return themeOptions.includes(saved) ? saved : 'light'
   })
-
   // Debug: log mounts/unmounts, unloads and selection changes to diagnose unexpected reloads
   useEffect(() => {
     console.debug('App mounted')

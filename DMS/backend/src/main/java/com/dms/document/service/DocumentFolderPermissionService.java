@@ -99,7 +99,9 @@ public class DocumentFolderPermissionService {
             }
             if (groups.isEmpty()) {
                 folder.getPermissions().clear();
+                folder.setPermissionsInherited(false);
                 DocumentFolder saved = folderRepository.save(folder);
+                propagateInheritedPermissions(saved);
                 return toResponse(saved, List.of());
             }
 
@@ -154,13 +156,51 @@ public class DocumentFolderPermissionService {
 
             folder.getPermissions().removeIf(permission -> !updatedGroupIds.contains(resolvePermissionGroupId(permission)));
 
+            if (!Boolean.TRUE.equals(request != null ? request.preserveInheritance() : null)) {
+                folder.setPermissionsInherited(false);
+            }
             DocumentFolder saved = folderRepository.save(folder);
+            propagateInheritedPermissions(saved);
             List<UserGroup> sortedGroups = groupIndex.values().stream()
                 .sorted(Comparator.comparing(UserGroup::getName, String.CASE_INSENSITIVE_ORDER))
                 .toList();
             return toResponse(saved, sortedGroups);
         } catch (java.io.IOException ex) {
             throw new RuntimeException("Failed to update folder permissions", ex);
+        }
+    }
+
+    private void propagateInheritedPermissions(DocumentFolder changedParent) throws java.io.IOException {
+        List<DocumentFolder> folders = folderRepository.findAll();
+        propagateInheritedPermissions(changedParent, folders);
+    }
+
+    private void propagateInheritedPermissions(DocumentFolder parent, List<DocumentFolder> folders) throws java.io.IOException {
+        for (DocumentFolder child : folders) {
+            String childParentId = child.getParentId();
+            if (!StringUtils.hasText(childParentId) && child.getParent() != null) {
+                childParentId = child.getParent().getId();
+            }
+            if (!child.isPermissionsInherited() || !parent.getId().equals(childParentId)) {
+                continue;
+            }
+            List<DocumentFolderPermission> inherited = new ArrayList<>();
+            if (parent.getPermissions() != null) {
+                for (DocumentFolderPermission source : parent.getPermissions()) {
+                    DocumentFolderPermission copy = new DocumentFolderPermission();
+                    copy.setFolder(child);
+                    copy.setGroup(source.getGroup());
+                    copy.setGroupId(source.getGroupId());
+                    copy.setGroupName(source.getGroupName());
+                    copy.setCanRead(source.isCanRead());
+                    copy.setCanWrite(source.isCanWrite());
+                    copy.setCanDelete(source.isCanDelete());
+                    inherited.add(copy);
+                }
+            }
+            child.setPermissions(inherited);
+            folderRepository.save(child);
+            propagateInheritedPermissions(child, folders);
         }
     }
 

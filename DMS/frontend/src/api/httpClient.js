@@ -72,7 +72,7 @@ export const handleJsonResponse = async (response) => {
       }
     }
     const message = body.message || body.error || body.detail || response.statusText || 'Request failed'
-    if (response.status === 401 && isSessionInvalidationMessage(message)) {
+    if (response.status === 401) {
       redirectToLogin()
     }
     const error = new Error(message)

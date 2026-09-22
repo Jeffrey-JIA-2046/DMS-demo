@@ -111,6 +111,9 @@ public class DocumentFolderService {
             DocumentFolder folder = new DocumentFolder();
             folder.setName(normalizedName);
             folder.setParent(parent);
+            folder.setParentId(parent != null ? parent.getId() : null);
+            folder.setMetadataTemplateInherited(Boolean.TRUE.equals(request.inheritMetadataTemplateFromParent()));
+            folder.setPermissionsInherited(Boolean.TRUE.equals(request.inheritPermissionsFromParent()));
             folder.setMetadataTemplate(resolveTemplateForCreate(request, parent));
 
             DocumentFolder saved = folderRepository.save(folder);
@@ -138,9 +141,15 @@ public class DocumentFolderService {
 
             folder.setName(normalizedName);
             folder.setParent(newParent);
-            folder.setMetadataTemplate(mapTemplate(request.metadataTemplate()));
+            folder.setParentId(newParent != null ? newParent.getId() : null);
+            boolean inheritMetadata = Boolean.TRUE.equals(request.inheritMetadataTemplateFromParent());
+            folder.setMetadataTemplateInherited(inheritMetadata);
+            folder.setMetadataTemplate(inheritMetadata
+                ? resolveTemplateForCreate(request, newParent)
+                : mapTemplate(request.metadataTemplate()));
 
             DocumentFolder saved = folderRepository.save(folder);
+            propagateInheritedTemplates(saved);
             return toTreeNode(saved, List.of());
         } catch (java.io.IOException ex) {
             throw new RuntimeException("Failed to update folder", ex);
@@ -238,7 +247,9 @@ public class DocumentFolderService {
             folder.getName(),
             folder.getParent() != null ? folder.getParent().getId() : null,
             children,
-            toMetadataDtos(folder.getMetadataTemplate())
+            toMetadataDtos(folder.getMetadataTemplate()),
+            folder.isPermissionsInherited(),
+            folder.isMetadataTemplateInherited()
         );
     }
 
@@ -299,6 +310,23 @@ public class DocumentFolderService {
             return copyTemplate(parent.getMetadataTemplate());
         }
         return mapTemplate(request.metadataTemplate());
+    }
+
+    private void propagateInheritedTemplates(DocumentFolder changedParent) throws java.io.IOException {
+        List<DocumentFolder> folders = folderRepository.findAll();
+        propagateInheritedTemplates(changedParent, folders);
+    }
+
+    private void propagateInheritedTemplates(DocumentFolder parent, List<DocumentFolder> folders) throws java.io.IOException {
+        for (DocumentFolder child : folders) {
+            if (!child.isMetadataTemplateInherited()
+                || !parent.getId().equals(child.getParentId())) {
+                continue;
+            }
+            child.setMetadataTemplate(copyTemplate(parent.getMetadataTemplate()));
+            folderRepository.save(child);
+            propagateInheritedTemplates(child, folders);
+        }
     }
 
     private List<FolderMetadataField> copyTemplate(List<FolderMetadataField> source) {

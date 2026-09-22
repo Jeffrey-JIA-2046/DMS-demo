@@ -7,6 +7,8 @@ public record DocumentFolderTreeNode(
     String name,
     String parentId,
     List<DocumentFolderTreeNode> children,
-    List<FolderMetadataFieldDto> metadataTemplate
+    List<FolderMetadataFieldDto> metadataTemplate,
+    boolean permissionsInherited,
+    boolean metadataTemplateInherited
 ) {
 }

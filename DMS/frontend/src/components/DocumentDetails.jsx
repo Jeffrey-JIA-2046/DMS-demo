@@ -8,6 +8,7 @@ import MetadataFieldInputs from './MetadataFieldInputs'
 import DocumentWorkflowPanel from './DocumentWorkflowPanel'
 import { describeMetadataField, normalizeMetadataValues, validateMetadataValues } from '../utils/metadataTemplate'
 import { fetchActiveCodeTableItems } from '../api/codeTable'
+import FileViewerPreview from './FileViewerPreview'
 
 GlobalWorkerOptions.workerSrc = pdfjsWorkerSrc
 // Debug: log the worker src to help diagnose reloads/HMR triggers
@@ -42,7 +43,7 @@ const formatMetadataDisplayValue = (field, rawValue, codeTableItems = {}) => {
 
 const MAX_PREVIEW_CHARS = 100000
 const MAX_PDF_PREVIEW_CHARS = 120000
-const SYSTEM_METADATA_KEYS = ['documentDate', 'approvalDate', 'expiryDate', 'archiveDate', 'reminderDate']
+const SYSTEM_METADATA_KEYS = ['documentDate', 'approvalDate', 'archiveDate', 'reminderDate']
 
 const STATUS_TONE = {
   DRAFT: 'warning',
@@ -64,6 +65,18 @@ const isImageContent = (type = '') => type.toLowerCase().startsWith('image/')
 
 const isImageFileName = (fileName = '') => /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(fileName)
 
+const isFileViewerVersion = (version) => {
+  const fileName = version?.fileName ?? ''
+  const contentType = (version?.contentType ?? '').toLowerCase()
+  return isPdfVersion(version)
+    || /\.(doc|docx|docm|dot|dotx|dotm|xls|xlsx|xlsm|xlt|xltx|ppt|pptx|pptm|ppsx|odt|ods|odp|rtf|tif|tiff)$/i.test(fileName)
+    || contentType.includes('officedocument')
+    || contentType.includes('msword')
+    || contentType.includes('ms-excel')
+    || contentType.includes('ms-powerpoint')
+    || contentType.includes('tiff')
+}
+
 const isPdfVersion = (version) => {
   const contentType = version?.contentType ?? ''
   const fileName = version?.fileName ?? ''
@@ -82,6 +95,7 @@ const createPreviewState = () => ({
   text: '',
   imageUrl: null,
   pdfData: null,
+  fileData: null,
   error: '',
   contentType: '',
   versionId: null,
@@ -234,7 +248,7 @@ export default function DocumentDetails({
     }
     if (approvalModal === 'approve') {
       if (!approvalDates.documentDate.trim() || !approvalDates.expiryDate.trim()) {
-        toast && toast('Document date and expiry date are required before approval', { type: 'error' })
+        toast && toast('Required document metadata is missing before approval', { type: 'error' })
         return
       }
     }
@@ -394,6 +408,7 @@ export default function DocumentDetails({
         text: '',
         imageUrl: null,
         pdfData: null,
+        fileData: null,
         error: '',
         contentType: '',
         versionId: latestVersion.id,
@@ -401,20 +416,21 @@ export default function DocumentDetails({
         truncated: false,
       })
       try {
-        if (isPdfVersion(latestVersion)) {
+        if (isFileViewerVersion(latestVersion)) {
           revokeImagePreviewUrl()
           const response = await fetch(downloadUrlBuilder(document.id, latestVersion.id), { signal: controller.signal, headers: { ...authHeaders() } })
           if (!response.ok) {
             throw new Error('Failed to load document content')
           }
           const contentType = response.headers.get('Content-Type') || latestVersion?.contentType || ''
-          const pdfBuffer = await response.arrayBuffer()
-          console.debug('[DocumentDetails] loaded pdf buffer, size=', pdfBuffer.byteLength)
+          const fileBuffer = await response.arrayBuffer()
+          console.debug('[DocumentDetails] loaded viewer buffer, size=', fileBuffer.byteLength)
           setPreviewState({
             status: 'ready',
-            mode: 'pdf',
+            mode: 'file',
             text: '',
-            pdfData: new Uint8Array(pdfBuffer),
+            pdfData: null,
+            fileData: fileBuffer,
             error: '',
             contentType,
             versionId: latestVersion.id,
@@ -440,6 +456,7 @@ export default function DocumentDetails({
             text: '',
             imageUrl,
             pdfData: null,
+            fileData: null,
             error: '',
             contentType,
             versionId: latestVersion.id,
@@ -475,6 +492,7 @@ export default function DocumentDetails({
             : (preview?.text || ''),
           imageUrl: null,
           pdfData: null,
+          fileData: null,
           error: '',
           contentType: preview?.contentType || latestVersion?.contentType || '',
           versionId: latestVersion.id,
@@ -552,7 +570,6 @@ export default function DocumentDetails({
   const systemMetadataLabels = {
     documentDate: 'Document Date',
     approvalDate: 'Approval Date',
-    expiryDate: 'Expiry Date',
     archiveDate: 'Archive Date',
     reminderDate: 'Reminder Date',
   }
@@ -629,7 +646,6 @@ export default function DocumentDetails({
     && typeof onResubmitApproval === 'function'
   const canPdfNavigate = previewState.status === 'ready' && previewState.mode === 'pdf' && pdfPager.status === 'ready' && !pdfPager.nativeViewer && pdfPager.pageCount > 1
   const documentDateValue = form.metadata?.documentDate ?? ''
-  const expiryDateValue = form.metadata?.expiryDate ?? ''
 
   useEffect(() => {
     const maxPage = pdfPager.pageCount || 1
@@ -1226,12 +1242,10 @@ export default function DocumentDetails({
                     <img src={previewState.imageUrl} alt={latestVersion?.fileName || 'Document image preview'} className="content-panel__image" />
                   </div>
                 )}
-                {previewState.status === 'ready' && previewState.mode === 'pdf' && previewState.pdfData && (
-                  <PdfPreview
-                    data={previewState.pdfData}
-                    requestedPage={requestedPdfPage}
-                    onPagerStateChange={setPdfPager}
-                    showTextPreview={showPdfTextPreview}
+                {previewState.status === 'ready' && previewState.mode === 'file' && previewState.fileData && (
+                  <FileViewerPreview
+                    data={previewState.fileData}
+                    fileName={latestVersion.fileName}
                   />
                 )}
                 {previewState.status === 'empty' && <p className="empty-state">No versions available for preview.</p>}
@@ -1286,16 +1300,6 @@ export default function DocumentDetails({
                       type="date"
                       value={documentDateValue}
                       onChange={(e) => handleMetadataValueChange('documentDate', e.target.value)}
-                      disabled={!canEditMetadata}
-                      required
-                    />
-                  </label>
-                  <label>
-                    <span>Expiry date</span>
-                    <input
-                      type="date"
-                      value={expiryDateValue}
-                      onChange={(e) => handleMetadataValueChange('expiryDate', e.target.value)}
                       disabled={!canEditMetadata}
                       required
                     />
@@ -1438,16 +1442,7 @@ export default function DocumentDetails({
                     required
                   />
                 </label>
-                <label>
-                  <span>Expiry date</span>
-                  <input
-                    type="date"
-                    value={approvalDates.expiryDate}
-                    onChange={(e) => setApprovalDates((prev) => ({ ...prev, expiryDate: e.target.value }))}
-                    required
-                  />
-                </label>
-                <small>These dates are missing from the document metadata and must be restored before approval.</small>
+                <small>The required document metadata must be restored before approval.</small>
               </>
             )}
             <label>

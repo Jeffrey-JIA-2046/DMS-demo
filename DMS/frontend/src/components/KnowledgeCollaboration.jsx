@@ -16,7 +16,7 @@ import {
   downloadKnowledgeChain,
 } from '../api/knowledge'
 import { listDocuments } from '../api/documents'
-import { AuthContext } from '../contexts/AuthContext'
+import { AuthContext, Roles } from '../contexts/AuthContext'
 
 const describeDocumentOption = (doc) => {
   if (!doc) {
@@ -71,7 +71,8 @@ const buildRelatedTopicQuery = (context) => {
 }
 
 export default function KnowledgeCollaboration({ navigationContext = null, onOpenLinkedDocument = null }) {
-  const { isAuthenticated, currentUser } = useContext(AuthContext)
+  const { isAuthenticated, currentUser, role } = useContext(AuthContext)
+  const canManageTopics = role === Roles.SYS_ADMIN
   const [filters, setFilters] = useState({ query: '', tags: '', starredOnly: false, joinedOnly: false })
   const [page, setPage] = useState(0)
   const [pageMeta, setPageMeta] = useState({ page: 0, size: 8, totalPages: 0, totalElements: 0 })
@@ -327,6 +328,7 @@ export default function KnowledgeCollaboration({ navigationContext = null, onOpe
 
   const handleCreateTopic = async (event) => {
     event.preventDefault()
+    if (!canManageTopics) return
     if (!createForm.title.trim()) {
       showBanner('Give the topic a title first.', 'error')
       return
@@ -650,15 +652,17 @@ export default function KnowledgeCollaboration({ navigationContext = null, onOpe
             </div>
           </form>
 
-          <div className="knowledge__create">
-            <div>
-              <p className="eyebrow">New topic</p>
-              <h3>Capture a knowledge stream</h3>
+          {canManageTopics && (
+            <div className="knowledge__create">
+              <div>
+                <p className="eyebrow">New topic</p>
+                <h3>Capture a knowledge stream</h3>
+              </div>
+              <button className="primary" onClick={() => setCreateModalOpen(true)}>
+                New topic
+              </button>
             </div>
-            <button className="primary" onClick={() => setCreateModalOpen(true)}>
-              New topic
-            </button>
-          </div>
+          )}
 
           {createModalOpen && (
             <div
@@ -853,24 +857,26 @@ export default function KnowledgeCollaboration({ navigationContext = null, onOpe
                   <button className="ghost" onClick={handleStarToggle} disabled={!canStar}>
                     {selectedTopic.starredByMe ? '★ Starred' : '☆ Star topic'}
                   </button>
-                  <button
-                    className="ghost"
-                    onClick={() => {
-                      setEditingTopicId(selectedTopic.id)
-                      setCreateForm({
-                        title: selectedTopic.title || '',
-                        description: selectedTopic.description || '',
-                        tags: (selectedTopic.tags || []).join(', '),
-                        linkDocumentId: '',
-                        linkNote: '',
-                        uploadFile: null,
-                        uploadDescription: '',
-                      })
-                      setCreateModalOpen(true)
-                    }}
-                  >
-                    Edit topic
-                  </button>
+                  {canManageTopics && (
+                    <button
+                      className="ghost"
+                      onClick={() => {
+                        setEditingTopicId(selectedTopic.id)
+                        setCreateForm({
+                          title: selectedTopic.title || '',
+                          description: selectedTopic.description || '',
+                          tags: (selectedTopic.tags || []).join(', '),
+                          linkDocumentId: '',
+                          linkNote: '',
+                          uploadFile: null,
+                          uploadDescription: '',
+                        })
+                        setCreateModalOpen(true)
+                      }}
+                    >
+                      Edit topic
+                    </button>
+                  )}
                   {canJoin && (
                     <button className="primary" onClick={handleJoin}>
                       Join topic

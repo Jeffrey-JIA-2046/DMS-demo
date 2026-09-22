@@ -47,6 +47,20 @@ public class DocumentFolderRepository extends BaseOpenSearchRepository<DocumentF
     public void ensureSchema() {
         if (dataSource == null) return;
         try (Connection conn = dataSource.getConnection()) {
+            try (ResultSet cols = conn.getMetaData().getColumns(null, null, "document_folders", "metadata_template_inherited")) {
+                if (!cols.next()) {
+                    try (Statement st = conn.createStatement()) {
+                        st.execute("ALTER TABLE document_folders ADD COLUMN metadata_template_inherited BOOLEAN NOT NULL DEFAULT FALSE");
+                    }
+                }
+            }
+            try (ResultSet cols = conn.getMetaData().getColumns(null, null, "document_folders", "permissions_inherited")) {
+                if (!cols.next()) {
+                    try (Statement st = conn.createStatement()) {
+                        st.execute("ALTER TABLE document_folders ADD COLUMN permissions_inherited BOOLEAN NOT NULL DEFAULT FALSE");
+                    }
+                }
+            }
             // Add code_table_code column to folder_metadata_fields if not yet present
             try (ResultSet cols = conn.getMetaData().getColumns(null, null, "folder_metadata_fields", "code_table_code")) {
                 if (!cols.next()) {
@@ -73,7 +87,7 @@ public class DocumentFolderRepository extends BaseOpenSearchRepository<DocumentF
 
         try (Connection conn = dataSource.getConnection()) {
             Map<String, DocumentFolder> byId = new HashMap<>();
-            try (PreparedStatement ps = conn.prepareStatement("SELECT id, name, parent_id FROM document_folders");
+            try (PreparedStatement ps = conn.prepareStatement("SELECT id, name, parent_id, metadata_template_inherited, permissions_inherited FROM document_folders");
                  ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     DocumentFolder folder = new DocumentFolder();
@@ -83,6 +97,8 @@ public class DocumentFolderRepository extends BaseOpenSearchRepository<DocumentF
                     if (!rs.wasNull()) {
                         folder.setParentId(String.valueOf(parentId));
                     }
+                    folder.setMetadataTemplateInherited(rs.getBoolean("metadata_template_inherited"));
+                    folder.setPermissionsInherited(rs.getBoolean("permissions_inherited"));
                     byId.put(folder.getId(), folder);
                 }
             }
@@ -177,7 +193,7 @@ public class DocumentFolderRepository extends BaseOpenSearchRepository<DocumentF
 
             if (id == null) {
                 try (PreparedStatement ps = conn.prepareStatement(
-                    "INSERT INTO document_folders(name, parent_id) VALUES (?, ?)",
+                    "INSERT INTO document_folders(name, parent_id, metadata_template_inherited, permissions_inherited) VALUES (?, ?, ?, ?)",
                     Statement.RETURN_GENERATED_KEYS)) {
                     ps.setString(1, entity.getName());
                     if (parentId == null) {
@@ -185,6 +201,8 @@ public class DocumentFolderRepository extends BaseOpenSearchRepository<DocumentF
                     } else {
                         ps.setLong(2, parentId);
                     }
+                    ps.setBoolean(3, entity.isMetadataTemplateInherited());
+                    ps.setBoolean(4, entity.isPermissionsInherited());
                     ps.executeUpdate();
                     try (ResultSet keys = ps.getGeneratedKeys()) {
                         if (keys.next()) {
@@ -195,14 +213,16 @@ public class DocumentFolderRepository extends BaseOpenSearchRepository<DocumentF
                 }
             } else {
                 try (PreparedStatement ps = conn.prepareStatement(
-                    "UPDATE document_folders SET name=?, parent_id=? WHERE id=?")) {
+                    "UPDATE document_folders SET name=?, parent_id=?, metadata_template_inherited=?, permissions_inherited=? WHERE id=?")) {
                     ps.setString(1, entity.getName());
                     if (parentId == null) {
                         ps.setNull(2, java.sql.Types.BIGINT);
                     } else {
                         ps.setLong(2, parentId);
                     }
-                    ps.setLong(3, id);
+                    ps.setBoolean(3, entity.isMetadataTemplateInherited());
+                    ps.setBoolean(4, entity.isPermissionsInherited());
+                    ps.setLong(5, id);
                     ps.executeUpdate();
                 }
             }

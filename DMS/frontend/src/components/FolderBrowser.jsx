@@ -70,6 +70,8 @@ export default function FolderBrowser({
   const [name, setName] = useState('')
   const [nestUnderSelection, setNestUnderSelection] = useState(false)
   const [inheritMetadataTemplate, setInheritMetadataTemplate] = useState(false)
+  const [inheritFolderPermissions, setInheritFolderPermissions] = useState(false)
+  const [editingPermissionsInherited, setEditingPermissionsInherited] = useState(false)
   const [templateFields, setTemplateFields] = useState([])
   const [templateError, setTemplateError] = useState('')
   const [editingFolder, setEditingFolder] = useState(null)
@@ -95,6 +97,8 @@ export default function FolderBrowser({
       setName('')
       setNestUnderSelection(false)
       setInheritMetadataTemplate(false)
+      setInheritFolderPermissions(false)
+      setEditingPermissionsInherited(false)
       setEditParentId(null)
       setModalPermissions([])
       setPermissionsLoading(false)
@@ -110,15 +114,19 @@ export default function FolderBrowser({
       }
       setPermissionsLoading(true)
       try {
-        if (modalMode === 'edit' && editingFolder?.id && typeof onLoadFolderPermissions === 'function') {
-          const data = await onLoadFolderPermissions(editingFolder.id)
+        if (modalMode === 'edit' && editingFolder?.id) {
+          const data = editingPermissionsInherited && editParentId && typeof onLoadPermissionTemplate === 'function'
+            ? await onLoadPermissionTemplate(editParentId)
+            : await onLoadFolderPermissions(editingFolder.id)
           if (!cancelled) {
             setModalPermissions(Array.isArray(data?.permissions) ? data.permissions : [])
           }
           return
         }
         if (modalMode === 'create' && typeof onLoadPermissionTemplate === 'function') {
-          const data = await onLoadPermissionTemplate()
+          const parentId = nestUnderSelection && selectedId ? selectedId : null
+          const permissionSourceId = inheritFolderPermissions ? parentId : null
+          const data = await onLoadPermissionTemplate(permissionSourceId)
           if (!cancelled) {
             setModalPermissions(Array.isArray(data?.permissions) ? data.permissions : [])
           }
@@ -144,7 +152,7 @@ export default function FolderBrowser({
     return () => {
       cancelled = true
     }
-  }, [isModalOpen, canManagePermissions, modalMode, editingFolder?.id, onLoadFolderPermissions, onLoadPermissionTemplate])
+  }, [isModalOpen, canManagePermissions, editParentId, editingPermissionsInherited, inheritFolderPermissions, modalMode, editingFolder?.id, nestUnderSelection, onLoadFolderPermissions, onLoadPermissionTemplate, selectedId])
 
   const flatFolderList = useMemo(() => flattenFolders(nodes), [nodes])
 
@@ -186,12 +194,14 @@ export default function FolderBrowser({
         : nestUnderSelection && selectedId
           ? selectedId
           : null
-    const shouldInheritTemplate = modalMode !== 'edit' && inheritMetadataTemplate && Boolean(parentId)
+    const shouldInheritTemplate = inheritMetadataTemplate && Boolean(parentId)
     const payload = {
       name: name.trim(),
       parentId,
       metadataTemplate: shouldInheritTemplate ? [] : normalized,
       inheritMetadataTemplateFromParent: shouldInheritTemplate,
+      inheritPermissionsFromParent: inheritFolderPermissions && Boolean(parentId),
+      preservePermissionInheritance: modalMode === 'edit' && editingPermissionsInherited,
       permissionEntries: canManagePermissions ? modalPermissions : undefined,
     }
     try {
@@ -215,6 +225,8 @@ export default function FolderBrowser({
     setName('')
     setNestUnderSelection(Boolean(selectedId))
     setInheritMetadataTemplate(Boolean(selectedId))
+    setInheritFolderPermissions(false)
+    setEditingPermissionsInherited(false)
     setEditParentId(null)
     setModalMode('create')
   }
@@ -232,6 +244,9 @@ export default function FolderBrowser({
     setTemplateFields(selectedTemplate.map((field) => ({ ...field })))
     setTemplateError('')
     setEditParentId(selectedFolder.parentId ?? null)
+    setInheritMetadataTemplate(Boolean(selectedFolder.metadataTemplateInherited))
+    setInheritFolderPermissions(Boolean(selectedFolder.permissionsInherited))
+    setEditingPermissionsInherited(Boolean(selectedFolder.permissionsInherited))
     setModalMode('edit')
   }
 
@@ -356,23 +371,47 @@ export default function FolderBrowser({
                 <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Q1 Reports" />
               </label>
               {modalMode === 'edit' ? (
-                <label>
-                  <span>Parent folder</span>
-                  <select
-                    value={editParentId ?? ''}
-                    onChange={(event) => {
-                      const nextValue = event.target.value
-                      setEditParentId(nextValue ? Number(nextValue) : null)
-                    }}
-                  >
-                    <option value="">Library root</option>
-                    {editParentOptions.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <>
+                  <label>
+                    <span>Parent folder</span>
+                    <select
+                      value={editParentId ?? ''}
+                      onChange={(event) => {
+                        const nextValue = event.target.value
+                        setEditParentId(nextValue ? Number(nextValue) : null)
+                        if (!nextValue) {
+                          setInheritMetadataTemplate(false)
+                          setInheritFolderPermissions(false)
+                        }
+                      }}
+                    >
+                      <option value="">Library root</option>
+                      {editParentOptions.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={inheritMetadataTemplate}
+                      onChange={(event) => setInheritMetadataTemplate(event.target.checked)}
+                      disabled={!editParentId}
+                    />
+                    <span>Metadata template inherit from parent folder</span>
+                  </label>
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={inheritFolderPermissions}
+                      onChange={(event) => setInheritFolderPermissions(event.target.checked)}
+                      disabled={!editParentId}
+                    />
+                    <span>Folder permissions inherit from parent folder</span>
+                  </label>
+                </>
               ) : (
                 <>
                   <label className="checkbox">
@@ -384,6 +423,7 @@ export default function FolderBrowser({
                         setNestUnderSelection(checked)
                         if (!checked) {
                           setInheritMetadataTemplate(false)
+                          setInheritFolderPermissions(false)
                         }
                       }}
                       disabled={!selectedId}
@@ -399,6 +439,15 @@ export default function FolderBrowser({
                     />
                     <span>Metadata template inherit from parent folder</span>
                   </label>
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={inheritFolderPermissions}
+                      onChange={(e) => setInheritFolderPermissions(e.target.checked)}
+                      disabled={!selectedId || !nestUnderSelection}
+                    />
+                    <span>Folder permissions inherit from parent folder</span>
+                  </label>
                 </>
               )}
               <MetadataTemplateBuilder
@@ -407,7 +456,9 @@ export default function FolderBrowser({
                   setTemplateFields(next)
                   setTemplateError('')
                 }}
-                disabled={busy || (modalMode !== 'edit' && inheritMetadataTemplate && nestUnderSelection && Boolean(selectedId))}
+                disabled={busy || (modalMode === 'edit'
+                  ? inheritMetadataTemplate && Boolean(editParentId)
+                  : inheritMetadataTemplate && nestUnderSelection && Boolean(selectedId))}
                 error={templateError}
               />
               {canManagePermissions && (
@@ -439,7 +490,7 @@ export default function FolderBrowser({
                                   type="checkbox"
                                   checked={entry[item.key]}
                                   onChange={(event) => handleModalPermissionToggle(entry.groupId, item.key, event.target.checked)}
-                                  disabled={busy}
+                                  disabled={busy || (modalMode === 'create' && inheritFolderPermissions) || (modalMode === 'edit' && inheritFolderPermissions)}
                                   aria-label={`${item.label} permission for ${entry.groupName}`}
                                 />
                               </label>

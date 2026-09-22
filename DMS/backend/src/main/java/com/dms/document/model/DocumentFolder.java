@@ -21,6 +21,12 @@ public class DocumentFolder {
     @JsonProperty("metadata_template")
     private List<FolderMetadataField> metadataTemplate = new ArrayList<>();
 
+    @JsonProperty("metadata_template_inherited")
+    private boolean metadataTemplateInherited;
+
+    @JsonProperty("permissions_inherited")
+    private boolean permissionsInherited;
+
     private List<DocumentFolderPermission> permissions = new ArrayList<>();
 
     public String getId() {
@@ -61,6 +67,22 @@ public class DocumentFolder {
 
     public void setMetadataTemplate(List<FolderMetadataField> metadataTemplate) {
         this.metadataTemplate = metadataTemplate;
+    }
+
+    public boolean isMetadataTemplateInherited() {
+        return metadataTemplateInherited;
+    }
+
+    public void setMetadataTemplateInherited(boolean metadataTemplateInherited) {
+        this.metadataTemplateInherited = metadataTemplateInherited;
+    }
+
+    public boolean isPermissionsInherited() {
+        return permissionsInherited;
+    }
+
+    public void setPermissionsInherited(boolean permissionsInherited) {
+        this.permissionsInherited = permissionsInherited;
     }
 
     public List<DocumentFolderPermission> getPermissions() {

@@ -10,6 +10,7 @@ public record DocumentFolderRequest(
     @NotBlank @Size(max = 120) String name,
     String parentId,
     @Valid @Size(max = 25) List<FolderMetadataFieldRequest> metadataTemplate,
-    Boolean inheritMetadataTemplateFromParent
+    Boolean inheritMetadataTemplateFromParent,
+    Boolean inheritPermissionsFromParent
 ) {
 }

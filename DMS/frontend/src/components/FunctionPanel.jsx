@@ -1,4 +1,4 @@
-import React, { useContext } from 'react'
+import React, { useContext, useEffect } from 'react'
 import { AuthContext } from '../contexts/AuthContext'
 
 const FUNCTIONS = [
@@ -11,7 +11,14 @@ const FUNCTIONS = [
 ]
 
 export default function FunctionPanel({ selected, onSelect }) {
-  const { role, functionsAccess } = useContext(AuthContext)
+  const { functionsAccess } = useContext(AuthContext)
+  const availableFunctions = FUNCTIONS.filter((fn) => functionsAccess[fn])
+
+  useEffect(() => {
+    if (!functionsAccess[selected] && availableFunctions.length && onSelect) {
+      onSelect(availableFunctions[0])
+    }
+  }, [availableFunctions, functionsAccess, onSelect, selected])
 
   const ICONS = {
     'My Dashboard': '🏠',
@@ -30,8 +37,7 @@ export default function FunctionPanel({ selected, onSelect }) {
       </div>
 
       <nav className="function-panel__nav">
-        {FUNCTIONS.map((fn) => {
-          const enabled = !!functionsAccess[fn]
+        {availableFunctions.map((fn) => {
           return (
             <button
               type="button"
@@ -40,17 +46,14 @@ export default function FunctionPanel({ selected, onSelect }) {
                onClick={(e) => {
                  e.preventDefault()
                  e.stopPropagation()
-                 // guard and propagate selection
-                 if (enabled && onSelect) {
+                 if (onSelect) {
                    console.debug('FunctionPanel: selecting', fn)
                    onSelect(fn)
                  }
                }}
-               disabled={!enabled}
             >
               <span className="function-icon" aria-hidden="true">{ICONS[fn] || '⚙️'}</span>
               <span>{fn}</span>
-              {!enabled && <small className="function-panel__disabled">No access</small>}
             </button>
           )
         })}
