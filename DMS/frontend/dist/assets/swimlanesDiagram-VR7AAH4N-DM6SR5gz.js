@@ -1,8 +1,0 @@
-import{c as r,s as o}from"./flowDiagram-HODETNUW-D9H4g69z.js";import{_ as m}from"./mermaid.core-Xm_VjEdU.js";import"./transform-Dmxhnzuu.js";import"./chunk-5VM5RSS4-DJiGvaLt.js";import"./chunk-XXDRQBXY-_CcNVm69.js";import"./chunk-POPQ4Y6H-DeA1drx5.js";import"./chunk-F27PBJKO-7Qw401gp.js";import"./file-viewer-text-CfAGdp0C.js";import"./file-viewer-archive-BNgibNeG.js";import"./channel-CuY02m6Q.js";import"./file-viewer-preset-all-Cl1PwI6y.js";import"./file-viewer-cad-mr4_pmlp.js";import"./file-viewer-chm-DETzARma.js";import"./file-viewer-data-AglbBccc.js";import"./file-viewer-drawing-Br0NmXK1.js";import"./file-viewer-mindmap-Dpc-Sop9.js";import"./file-viewer-ebook-o2Izh2d1.js";import"./file-viewer-eda-D-8BY2oe.js";import"./file-viewer-email-CdS9T_YU.js";import"./file-viewer-geo-vvf--s11.js";import"./file-viewer-hangul-Bvlxm7Wr.js";import"./file-viewer-iwork-BQQaTJdo.js";import"./file-viewer-image-DfzIJ9zN.js";import"./file-viewer-media-Co8PeII2.js";import"./file-viewer-ofd-DCdfU1ui.js";import"./file-viewer-pdf-Bz9M4O-K.js";import"./file-viewer-presentation-LgYe2HR5.js";import"./file-viewer-presentation-ppt-3JdzpMCk.js";import"./file-viewer-presentation-pptx-CjY1hOlO.js";import"./file-viewer-spreadsheet-Dl87g74_.js";import"./file-viewer-typst-CxfYiUql.js";import"./file-viewer-word-BOkcjdNh.js";import"./file-viewer-wordperfect-D_yJLHb7.js";import"./rough.esm-BCKZ66Jd.js";var i=m(t=>`${o(t)}
-  .swimlane.cluster rect {
-    stroke: ${t.clusterBorder} !important;
-  }
-  [data-look="neo"].cluster rect {
-    filter: none;
-  }
-`,"getStyles"),p=i,K=r({defaultLayout:"swimlane",styles:p});export{K as diagram};

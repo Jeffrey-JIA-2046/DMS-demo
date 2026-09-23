@@ -26,7 +26,6 @@ export default function MetadataFieldInputs({ template = [], values = {}, errors
                   {field.label}
                   {field.required && <span className="metadata-input__required">*</span>}
                 </span>
-                <small className="metadata-input__type">DROPDOWN</small>
               </div>
               <select
                 value={value}
@@ -52,7 +51,6 @@ export default function MetadataFieldInputs({ template = [], values = {}, errors
                 {field.label}
                 {field.required && <span className="metadata-input__required">*</span>}
               </span>
-              <small className="metadata-input__type">{field.type}</small>
             </div>
             <input
               type={inputType}

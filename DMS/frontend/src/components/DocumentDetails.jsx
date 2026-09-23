@@ -372,6 +372,9 @@ export default function DocumentDetails({
   useEffect(() => {
     console.debug('[DocumentDetails] preview effect trigger', { activeTab, documentId: document?.id, previewReloadKey, lastRequestedVersion: lastRequestedVersionRef.current })
     if (activeTab !== 'content' || !document) {
+      if (activeTab !== 'content') {
+        lastRequestedVersionRef.current = null
+      }
       console.debug('[DocumentDetails] preview effect early return (no document or not content tab)', { activeTab, documentId: document?.id })
       return
     }
@@ -894,24 +897,6 @@ export default function DocumentDetails({
               </div>
             </dl>
             <div className="details-subtabs" role="tablist" aria-label="Document detail sections">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeDetailsSection === 'requirements'}
-                className={`details-subtabs__btn ${activeDetailsSection === 'requirements' ? 'is-active' : ''}`}
-                onClick={() => setActiveDetailsSection('requirements')}
-              >
-                Requirements
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeDetailsSection === 'approval'}
-                className={`details-subtabs__btn ${activeDetailsSection === 'approval' ? 'is-active' : ''}`}
-                onClick={() => setActiveDetailsSection('approval')}
-              >
-                Approval
-              </button>
               <button
                 type="button"
                 role="tab"
